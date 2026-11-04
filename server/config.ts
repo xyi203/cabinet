@@ -90,6 +90,8 @@ export const PATHS = {
 	/** 旧版记忆文件，启动时导入一次 */
 	memory: path.join(DATA_DIR, "memory", "MEMORY.md"),
 	stickers: path.join(DATA_DIR, "stickers"),
+	/** 消息里的截图：起草时下载到这里，把路径给 agent 用 read 查看 */
+	images: path.join(DATA_DIR, "images"),
 	agents: path.join(CONFIG_DIR, "agents.json"),
 	system: path.join(CONFIG_DIR, "system.md"),
 	draftRules: path.join(CONFIG_DIR, "draft.md"),

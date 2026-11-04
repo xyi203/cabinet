@@ -3,8 +3,7 @@ import { changed } from "../bus.ts";
 import { PATHS } from "../config.ts";
 import { deleteKv, listKv, setKv } from "../db/index.ts";
 import type { MeegoCard } from "../db/schema.ts";
-import type { ImageContent } from "@earendil-works/pi-ai";
-import { downloadImage, imageKeys } from "../lark/bot.ts";
+import { imageKeys, saveImage } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import { glabRepo, loadAgents, mrBrief, resolveCwd, route, sessionKey } from "../agent/router.ts";
 import { meegoContext } from "../meego.ts";
@@ -107,20 +106,20 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], attempt?: string) {
 					? `\n\n要预审的 MR：项目 \`${info.mrProject}\`，iid \`${info.mrIid}\`，glab 的 -R 参数用 \`${glabRepo(info.mrProject!)}\`。\nMR 概要（glab mr view）：\n${await mrBrief(info)}`
 					: "";
 				const prompt = `[代回复草稿] ${where}，来自 ${source.senderName}\n\n${ctx}${extra}\n\n${hint}\n\n请按草稿规则起草 Yi 的回复。`;
-				// 截图常常就是问题本身：把要回复的那几条消息里的图片一起给模型；chat 只回表情，不用看
-				let images = name === "chat" ? [] : await draftImages(msgs);
+				// 截图常常就是问题本身：存到本地，把路径给 agent 用 read 查看；chat 没有工具、只回表情，不用看
+				const withImages = async (p: string) => (name === "chat" ? p : `${p}${await imageHint(msgs)}`);
+				let fullPrompt = await withImages(prompt);
 				const run = (suffix = "") =>
 					runPi({
 						cwd: resolveCwd(agent, info),
 						sessionId: sid,
 						requestId: `draft:${source.replyTo}${attempt ? `:${attempt}` : ""}${suffix}`,
-						prompt,
+						prompt: fullPrompt,
 						extraSystem: [PATHS.draftRules],
 						label,
 						agent,
 						agentName: name,
 						chatId: chat.chat_id,
-						images,
 						memory: {
 							// 只有 @ 的消息意思在前文里，召回也带上最后一段前文
 							query: `${source.text}\n${(source.context ?? "").slice(-300)}`,
@@ -138,7 +137,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], attempt?: string) {
 					info = { rule: `${info.rule}（chat 输出文字，改派 ${next}）` };
 					sid = sessionKey(name, agent, chat.chat_id, info);
 					Object.assign(source, { agent: name, session: sid, route: info.rule });
-					images = await draftImages(msgs);
+					fullPrompt = await withImages(prompt);
 					({ text: draft, usage, sessionId } = await run(`:${next}`));
 				}
 				source.session = sessionId;
@@ -180,10 +179,12 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], attempt?: string) {
 
 const MAX_IMAGES = 4;
 
-async function draftImages(msgs: Message[]): Promise<ImageContent[]> {
+/** 把要回复的那几条消息里的图片存到本地，返回附在提示后面的路径清单 */
+async function imageHint(msgs: Message[]): Promise<string> {
 	const wanted = msgs.flatMap((m) => imageKeys(m.content).map((key) => ({ id: m.message_id, key }))).slice(-MAX_IMAGES);
-	const got = await Promise.all(wanted.map(({ id, key }) => downloadImage(id, key)));
-	return got.filter((x) => x !== undefined).map((x) => ({ type: "image", ...x }));
+	const saved = await Promise.all(wanted.map(async ({ id, key }) => [key, await saveImage(id, key, PATHS.images)] as const));
+	const lines = saved.filter(([, file]) => file).map(([key, file]) => `- [图片 ${key}]：${file}`);
+	return lines.length ? `\n\n消息里的图片已存到本地，先用 read 工具打开看清内容再回复：\n${lines.join("\n")}` : "";
 }
 
 /** 启动时接回上次进程没起草完的消息 */

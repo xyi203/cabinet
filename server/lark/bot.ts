@@ -3,7 +3,8 @@
 // - 用户身份（Yi 的 user token）：轮询 Yi 的私聊和 @Yi、以 Yi 的名义发出确认过的草稿。
 //   令牌由看板上的「授权飞书」走 OAuth 授权码流程拿到，refresh_token 存在 SQLite，到期前自动刷新。
 import * as lark from "@larksuiteoapi/node-sdk";
-import { createReadStream } from "node:fs";
+import { createReadStream, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { FEISHU_APP_ID, FEISHU_APP_SECRET, OAUTH_REDIRECT } from "../config.ts";
 import { getKv, setKv } from "../db/index.ts";
 import { log, now } from "../util.ts";
@@ -128,23 +129,24 @@ export const postContent = (md: string) => JSON.stringify({ zh_cn: { content: [[
 
 const replaceMentions = (text: string, mentions: Mention[]) => mentions.reduce((t, m) => t.split(m.key).join(`@${m.name}`), text);
 
-// 图片带上 image_key，起草时按 key 下载给模型看（见 messageImages）
+// 图片带上 image_key，起草时按 key 下载到本地（见 saveImage）
 const imageTag = (key?: string) => (key ? `[图片 ${key}]` : "[图片]");
 
 /** 消息里引用的图片 key：自己渲染的 `[图片 img_xxx]`，以及飞书正文里原样带出的 `![Image](img_xxx)` */
 export const imageKeys = (text: string) => [...new Set(text.match(/\bimg_v\d+_[\w-]+/g) ?? [])];
 
-const IMAGE_MAX_BYTES = 3_500_000; // 模型侧单图上限约 5MB（base64 后），留余量
-
-function sniffMime(b: Buffer): string | undefined {
-	if (b[0] === 0x89 && b[1] === 0x50) return "image/png";
-	if (b[0] === 0xff && b[1] === 0xd8) return "image/jpeg";
-	if (b.subarray(0, 3).toString() === "GIF") return "image/gif";
-	if (b.subarray(0, 4).toString() === "RIFF" && b.subarray(8, 12).toString() === "WEBP") return "image/webp";
+function imageExt(b: Buffer): string | undefined {
+	if (b[0] === 0x89 && b[1] === 0x50) return ".png";
+	if (b[0] === 0xff && b[1] === 0xd8) return ".jpg";
+	if (b.subarray(0, 3).toString() === "GIF") return ".gif";
+	if (b.subarray(0, 4).toString() === "RIFF" && b.subarray(8, 12).toString() === "WEBP") return ".webp";
 }
 
-/** 下载消息里的图片给模型看。机器人不在 Yi 的大多数会话里：先 user 后 bot；失败或太大就跳过 */
-export async function downloadImage(messageId: string, key: string): Promise<{ data: string; mimeType: string } | undefined> {
+/** 把消息里的图片存到本地，返回文件路径；已下载过的直接复用。机器人不在 Yi 的大多数会话里：先 user 后 bot */
+export async function saveImage(messageId: string, key: string, dir: string): Promise<string | undefined> {
+	mkdirSync(dir, { recursive: true });
+	const cached = readdirSync(dir).find((f) => f.startsWith(`${key}.`));
+	if (cached) return path.join(dir, cached);
 	const buf = await tryIdentities(
 		async (as) => {
 			const res = await client().im.v1.messageResource.get(
@@ -158,9 +160,11 @@ export async function downloadImage(messageId: string, key: string): Promise<{ d
 		["user", "bot"],
 		"下载图片",
 	);
-	if (!buf || buf.length > IMAGE_MAX_BYTES) return;
-	const mimeType = sniffMime(buf);
-	return mimeType ? { data: buf.toString("base64"), mimeType } : undefined;
+	const ext = buf && imageExt(buf);
+	if (!ext) return;
+	const file = path.join(dir, `${key}${ext}`);
+	writeFileSync(file, buf);
+	return file;
 }
 
 /** 消息 content 转成给人和模型看的文字。text/post 里的 @_user_1 换成 @名字；卡片渲染成 Markdown */
