@@ -7,7 +7,8 @@
 // - 任务先记进 kv，进程重启后接着做
 import { and, asc, eq } from "drizzle-orm";
 import { MEMORY, OWNER_OPEN_ID } from "../config.ts";
-import { complete, conversationLog } from "../agent/driver.ts";
+import { conversationLog } from "../agent/driver.ts";
+import { complete } from "../agent/models.ts";
 import { db, deleteKv, listKv, schema, setKv } from "../db/index.ts";
 import type { Evidence } from "../db/schema.ts";
 import { log } from "../util.ts";

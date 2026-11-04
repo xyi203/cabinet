@@ -5,7 +5,7 @@ const { splitNote, parseDraftBody, ownerReplyCovers, ownerRepliedIn, onlyMention
 const { parseMeegoCard, meegoMention, plainComment } = await import("../server/meego.ts");
 const { messageText } = await import("../server/lark/bot.ts");
 const { stripMentions } = await import("../server/qa.ts");
-const { fastRoute, sessionKey } = await import("../server/hub.ts");
+const { fastRoute, sessionKey } = await import("../server/agent/router.ts");
 
 test("草稿拆出评审报告和备注", () => {
 	assert.deepEqual(splitNote("看过了\n【评审报告】❌ 有问题\n【备注】别承诺"), { body: "看过了", note: "别承诺", report: "❌ 有问题" });

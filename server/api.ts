@@ -15,7 +15,8 @@ import { lastPoll } from "./poller.ts";
 import { conversationTranscript } from "./agent/driver.ts";
 import { modelOptions } from "./agent/models.ts";
 import { closeTask, devDiff, discardDev, dispatch, getDevTask, listRepos, messageDev, pushDev, stopDev } from "./dev.ts";
-import { dashboardState, retryTask, sessionLog } from "./tasks.ts";
+import { retryTask } from "./retry.ts";
+import { dashboardState, sessionLog } from "./tasks.ts";
 import { search } from "./memory/recall.ts";
 import {
 	type Classification,

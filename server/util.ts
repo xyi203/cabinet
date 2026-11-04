@@ -85,11 +85,3 @@ export function exec(cmd: string, args: string[], opts: ExecOptions = {}): Promi
 		p.stdin.end(opts.stdin ?? "");
 	});
 }
-
-export function parseJson<T = any>(text: string): T | string {
-	try {
-		return JSON.parse(text) as T;
-	} catch {
-		return text;
-	}
-}

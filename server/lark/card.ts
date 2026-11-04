@@ -1,6 +1,6 @@
 // 交互卡片（raw_card_content）渲染成 Markdown，格式与 lark-cli 一致：<card title="…">正文</card>。
 // 卡片里 @ 的是发卡应用自己的 open_id，要经 json_attachment.at_users 的 mention_key 换成本应用的 open_id。
-import type { Mention } from "./bot.ts";
+import type { Mention } from "./types.ts";
 
 export function renderCard(raw: any, mentions: Mention[]): string {
 	let card: any;

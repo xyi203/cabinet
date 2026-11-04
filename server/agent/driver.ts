@@ -3,7 +3,7 @@
 // - 提交带 requestId（如飞书消息 id），重启后同一条消息再来时接回原来那次运行，不会重复起草
 // - 守卫用 ToolTask 的 beforeTool 钩子；每个 conversation 的策略同时存进 kv，重启恢复的运行也受约束
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
-import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	AssistantEntry,
 	type Conversation,
@@ -29,31 +29,13 @@ import { type RecallScope, recallBlock } from "../memory/recall.ts";
 import { getKv, setKv } from "../db/index.ts";
 import { openTursoDurable } from "../db/turso.ts";
 import type { Usage } from "../db/schema.ts";
-import { Guard } from "../guard.ts";
+import { Guard } from "./guard.ts";
 import { QUOTA_RE, log, now } from "../util.ts";
-import { models, resolveModel } from "./models.ts";
+import { models, resolveModel, textOf } from "./models.ts";
+import type { AgentConfig } from "./router.ts";
 import { findTool, grepTool, lsTool, memoryTool } from "./tools.ts";
 
 const ctx = BACKGROUND_CONTEXT;
-
-export interface AgentConfig {
-	desc?: string;
-	match?: { links?: string[] };
-	model?: string;
-	/** 主模型额度不足时换用，未配置时用 PI_FALLBACK_MODEL */
-	fallbackModel?: string;
-	thinking?: string;
-	tools?: string[];
-	skills?: string[];
-	bash?: string[];
-	cwd?: "default" | "repo_of_mr";
-	session?: "chat" | "mr" | "none";
-	prompt?: string;
-	/** 允许执行的构建/测试命令前缀（开发任务），只能在 worktree 里执行 */
-	commands?: string[];
-	/** 只能手动指派，不参与分诊 */
-	manual?: boolean;
-}
 
 export interface RunOptions {
 	cwd: string;
@@ -132,14 +114,6 @@ function policyOf(convId: string) {
 	}
 	return p;
 }
-
-const textOf = (content: unknown): string =>
-	Array.isArray(content)
-		? content
-				.filter((c: any) => c?.type === "text")
-				.map((c: any) => c.text)
-				.join("\n")
-		: String(content ?? "");
 
 const readText = (file: string) => (existsSync(file) ? readFileSync(file, "utf8").trim() : "");
 
@@ -361,17 +335,6 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 		running.delete(key);
 		emit({ type: "run_end", runId: key, ok, t: now() });
 	}
-}
-
-/** 分诊这类一问一答：不需要工具和会话，直接调模型 */
-export async function complete(spec: string, systemPrompt: string, prompt: string): Promise<string> {
-	const m = models();
-	const ref = resolveModel(spec);
-	const model = m.getModel(ref.provider, ref.modelId)!;
-	const messages: Message[] = [{ role: "user", content: prompt, timestamp: Date.now() }];
-	const res = await m.complete(model, { systemPrompt, messages });
-	if (res.stopReason === "error") throw new Error(res.errorMessage ?? "模型调用失败");
-	return textOf(res.content);
 }
 
 export interface Step {

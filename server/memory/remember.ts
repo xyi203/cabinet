@@ -2,7 +2,7 @@
 // 约定同样要过 basis 校验：表达长期意图的原话片段必须逐字出现在 Yi 这句话里，否则记成线索。
 import { existsSync, readFileSync } from "node:fs";
 import { MEMORY, PATHS } from "../config.ts";
-import { complete } from "../agent/driver.ts";
+import { complete } from "../agent/models.ts";
 import { getKv, setKv } from "../db/index.ts";
 import type { Evidence } from "../db/schema.ts";
 import { log } from "../util.ts";

@@ -351,8 +351,3 @@ export function vectorStatus() {
 	const pending = pendingVectors(100_000).length;
 	return { model: MEMORY.embedModel, total, pending, backoff, retryIn: backoff || undefined };
 }
-
-/** 测试用：等后台补齐跑完 */
-export async function vectorsIdle() {
-	for (let job = vectorJob; job; job = vectorJob) await job;
-}

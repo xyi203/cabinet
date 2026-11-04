@@ -1,8 +1,10 @@
 // @机器人 的问答：一个 @ 开一个话题，主消息的 message_id 就是会话 key，话题内后续消息的 root_id 指回它，
 // 所以 key = root_id ?? message_id，话题和 pi 会话一一对应。Yi 私聊机器人时还能处理草稿指令。
 import { BOT_OPEN_ID, CHATS, COMMON_EMOJI, DEFAULT_CWD, OWNER_NAME, OWNER_OPEN_ID, THREAD_CONTEXT_N } from "./config.ts";
-import { type Action, DraftError, type Kind, LIVE, applyDraftAction, listStickers, locks, pickDraft, sem } from "./drafts.ts";
-import { type BotEvent, LarkError, quotedMessage, react, replyAsBot, threadContext, unreact } from "./lark/bot.ts";
+import { type Action, DraftError, type Kind, LIVE, applyDraftAction, listStickers, pickDraft } from "./drafts.ts";
+import { locks, sem } from "./agent/slots.ts";
+import { LarkError, quotedMessage, react, replyAsBot, threadContext, unreact } from "./lark/bot.ts";
+import type { BotEvent } from "./lark/types.ts";
 import { record } from "./records.ts";
 import { runPi } from "./agent/driver.ts";
 import { closeTask, devTaskOfDm, discardDev, messageDev, pushDev, stopDev } from "./dev.ts";

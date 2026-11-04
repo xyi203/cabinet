@@ -8,6 +8,7 @@ import { FEISHU_APP_ID, FEISHU_APP_SECRET, OAUTH_REDIRECT } from "../config.ts";
 import { getKv, setKv } from "../db/index.ts";
 import { log, now } from "../util.ts";
 import { cardUserIds, renderCard } from "./card.ts";
+import type { BotEvent, Chat, Mention, Message, UserTarget } from "./types.ts";
 
 let _client: lark.Client | undefined;
 const client = () =>
@@ -125,29 +126,6 @@ const asUser = async () => lark.withUserAccessToken(await userToken());
 /** Markdown 包成 post 消息的 md 节点，<at user_id="ou_xxx"></at> 在 md 里同样生效 */
 export const postContent = (md: string) => JSON.stringify({ zh_cn: { content: [[{ tag: "md", text: md }]] } });
 
-export interface Mention {
-	key: string;
-	id: string;
-	name: string;
-}
-
-export interface Message {
-	message_id: string;
-	content: string;
-	/** 毫秒 */
-	create_time: number;
-	message_position: number;
-	parent_id?: string;
-	root_id?: string;
-	thread_id?: string;
-	deleted?: boolean;
-	mentions: Mention[];
-	sender: { id: string; name: string; sender_type: string };
-	meego?: unknown;
-	/** 卡片消息里 @ 到的人：名字 -> 飞书 user_id */
-	userIds?: Record<string, string>;
-}
-
 const replaceMentions = (text: string, mentions: Mention[]) => mentions.reduce((t, m) => t.split(m.key).join(`@${m.name}`), text);
 
 /** 消息 content 转成给人和模型看的文字。text/post 里的 @_user_1 换成 @名字；卡片渲染成 Markdown */
@@ -224,13 +202,6 @@ function toMessage(item: any): Message {
 		},
 		userIds,
 	};
-}
-
-export interface Chat {
-	chat_id: string;
-	chat_mode: string; // p2p / group / topic；飞书项目通知归为 meego
-	name: string;
-	p2p_target_type?: string;
 }
 
 export async function listChats(pageSize: number): Promise<Chat[]> {
@@ -313,11 +284,6 @@ export const threadContext = async (threadId: string, n: number) =>
 		).toReversed(),
 	);
 
-export const recentChatContext = async (chatId: string, n = 10) =>
-	formatMessages(
-		((await tryIdentities((as) => listMessages({ chatId }, { order: "desc", pageSize: n, as }), ["user"], "读取会话")) ?? []).toReversed(),
-	);
-
 export const quotedMessage = async (messageId: string) => {
 	const m = await tryIdentities((as) => getMessage(messageId, as), ["bot", "user"], "读取引用消息");
 	return m ? formatMessages([m]) : "";
@@ -366,8 +332,6 @@ export async function unreact(messageId: string, reactionId?: string) {
 
 // ---------- 以 Yi 身份发出：只在 Yi 确认草稿之后调用 ----------
 
-export type UserTarget = { chatId: string } | { replyTo: string; inThread: boolean };
-
 async function sendAsUser(target: UserTarget, msgType: string, content: string, uuid: string) {
 	const auth = await asUser();
 	const res = await (
@@ -406,19 +370,6 @@ export async function reactAsUser(messageId: string, emoji: string) {
 }
 
 // ---------- 事件 ----------
-
-export interface BotEvent {
-	messageId: string;
-	chatId: string;
-	chatType: string; // p2p / group
-	senderType: string;
-	senderId: string;
-	rootId?: string;
-	parentId?: string;
-	threadId?: string;
-	content: string;
-	mentions: Mention[];
-}
 
 export function toBotEvent(data: any): BotEvent {
 	const m = data.message;

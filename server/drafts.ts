@@ -8,7 +8,6 @@ import { COMMON_EMOJI, EMOJI_ALIASES, EMOJI_TYPES, OWNER_OPEN_ID, PATHS } from "
 import { db, deleteKv, listKv, schema, setKv } from "./db/index.ts";
 import type { Draft, MeegoCard, Usage } from "./db/schema.ts";
 import {
-	type Message,
 	formatMessages,
 	getMessage,
 	listMessages,
@@ -18,16 +17,15 @@ import {
 	sendToUserAsBot,
 	react,
 } from "./lark/bot.ts";
-import { loadAgents, mrBrief, resolveCwd, route, sessionKey } from "./hub.ts";
+import type { Message } from "./lark/types.ts";
+import { loadAgents, mrBrief, resolveCwd, route, sessionKey } from "./agent/router.ts";
 import { meegoContext, meegoYiReplied, sendMeegoComment } from "./meego.ts";
 import { record } from "./records.ts";
 import { runPi } from "./agent/driver.ts";
 import { enqueueMemory } from "./memory/extract.ts";
-import { KeyedLock, Semaphore, isStopping, log, now } from "./util.ts";
-import { MAX_CONCURRENCY, DEFAULT_CWD } from "./config.ts";
-
-export const sem = new Semaphore(MAX_CONCURRENCY);
-export const locks = new KeyedLock();
+import { isStopping, log, now } from "./util.ts";
+import { DEFAULT_CWD } from "./config.ts";
+import { locks, sem } from "./agent/slots.ts";
 
 export class DraftError extends Error {}
 

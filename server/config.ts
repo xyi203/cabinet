@@ -21,8 +21,6 @@ export const BOT_OPEN_ID = env("BOT_OPEN_ID");
 export const OWNER_OPEN_ID = env("OWNER_OPEN_ID");
 export const OWNER_NAME = env("OWNER_NAME", "主人");
 
-// 用户身份（以 Yi 的名义读消息、发消息）走 lark-cli：它管着 Yi 的 OAuth 令牌和刷新
-export const LARK_CLI = expand(env("LARK_CLI", "lark-cli"));
 export const MEEGLE_BIN = expand(env("MEEGLE_BIN", "meegle"));
 export const GLAB_BIN = expand(env("GLAB_BIN", "glab"));
 

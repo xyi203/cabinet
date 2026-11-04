@@ -1,9 +1,29 @@
 // 任务中台：事件 -> agent。先走确定的程序规则（Fast Path），判不了再让便宜模型分诊（Slow Path）。
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { DEFAULT_CWD, GLAB_BIN, PATHS } from "./config.ts";
-import { type AgentConfig, complete } from "./agent/driver.ts";
-import { exec, log } from "./util.ts";
+import { DEFAULT_CWD, GLAB_BIN, PATHS } from "../config.ts";
+import { exec, log } from "../util.ts";
+import { complete } from "./models.ts";
+
+/** config/agents.json 里一个 agent 的配置 */
+export interface AgentConfig {
+	desc?: string;
+	match?: { links?: string[] };
+	model?: string;
+	/** 主模型额度不足时换用，未配置时用 PI_FALLBACK_MODEL */
+	fallbackModel?: string;
+	thinking?: string;
+	tools?: string[];
+	skills?: string[];
+	bash?: string[];
+	cwd?: "default" | "repo_of_mr";
+	session?: "chat" | "mr" | "none";
+	prompt?: string;
+	/** 允许执行的构建/测试命令前缀（开发任务），只能在 worktree 里执行 */
+	commands?: string[];
+	/** 只能手动指派，不参与分诊 */
+	manual?: boolean;
+}
 
 export interface RouterConfig {
 	model?: string;

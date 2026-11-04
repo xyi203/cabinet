@@ -14,15 +14,21 @@ Yi 的飞书助理。名字取自内阁「票拟批红」：消息先由它审�
 ```
 server/          后端（Node 直接跑 TypeScript）
   main.ts        入口：HTTP、飞书长连接、轮询
-  lark/          飞书 node-sdk：机器人身份 + 用户身份 OAuth、消息与卡片解析
-  hub.ts         任务中台：规则分派 + 模型分诊
-  agent/         agent 驱动（pi-durable）：模型目录、只读工具、守卫钩子、会话与执行日志
-  guard.ts       agent 工具白名单（只读文件、只读命令）
+  lark/          飞书 node-sdk：机器人身份 + 用户身份 OAuth、消息与卡片解析；types.ts 是共用的消息/事件类型
+  agent/         agent 驱动（pi-durable）
+    driver.ts    Harness、会话、守卫钩子、runPi、执行日志
+    models.ts    模型目录、一问一答的 complete
+    router.ts    任务中台：agents.json、规则分派 + 模型分诊
+    guard.ts     工具白名单（只读文件、只读命令，dev 只能写自己的 worktree）
+    tools.ts     只读工具 grep / find / ls / memory
+    slots.ts     运行并发：全局信号量 + 按会话排队
   drafts.ts      草稿：起草、推送、发 / 改 / 不发 / 完成
   poller.ts      轮询私聊、@Yi、飞书项目通知
   meego.ts       飞书项目（meegle CLI）
   qa.ts          @机器人问答与私聊里的草稿指令
-  tasks.ts       任务模型、执行日志、重试
+  dev.ts         agent 任务（dev 在独立 worktree 改代码）
+  tasks.ts       看板的任务模型、执行日志
+  retry.ts       失败任务重试
   api.ts         看板接口、SSE、托管前端构建产物
   memory/        长期记忆：存取与生命周期、召回（关键词 + 向量）、自动提取、「记住」
   db/            Drizzle + Turso（turso.ts：drizzle 与 durable 存储的 Turso 适配）

@@ -1,6 +1,14 @@
 // 模型目录：沿用 pi 的 ~/.pi/agent/models.json（magpie 网关），转成 pi-ai 的 Provider。
 // 只支持 openai-completions：目前配置里只有这一种；遇到别的直接报错，不静默跳过。
-import { type Api, createModels, createProvider, getSupportedThinkingLevels, type Model, type MutableModels } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	createModels,
+	createProvider,
+	getSupportedThinkingLevels,
+	type Message,
+	type Model,
+	type MutableModels,
+} from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -75,4 +83,24 @@ export function modelOptions(): ModelOption[] {
 	return models()
 		.getModels()
 		.map((m) => ({ id: m.id, name: m.name ?? m.id, levels: m.reasoning ? getSupportedThinkingLevels(m as Model<Api>) : ["off"] }));
+}
+
+/** 模型消息内容里的文字部分 */
+export const textOf = (content: unknown): string =>
+	Array.isArray(content)
+		? content
+				.filter((c: any) => c?.type === "text")
+				.map((c: any) => c.text)
+				.join("\n")
+		: String(content ?? "");
+
+/** 分诊这类一问一答：不需要工具和会话，直接调模型 */
+export async function complete(spec: string, systemPrompt: string, prompt: string): Promise<string> {
+	const m = models();
+	const ref = resolveModel(spec);
+	const model = m.getModel(ref.provider, ref.modelId)!;
+	const messages: Message[] = [{ role: "user", content: prompt, timestamp: Date.now() }];
+	const res = await m.complete(model, { systemPrompt, messages });
+	if (res.stopReason === "error") throw new Error(res.errorMessage ?? "模型调用失败");
+	return textOf(res.content);
 }

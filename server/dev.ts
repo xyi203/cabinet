@@ -11,8 +11,9 @@ import { DATA_DIR, DEFAULT_CWD, GLAB_BIN, OWNER_OPEN_ID, PORT } from "./config.t
 import { db, deleteKv, getKv, listKv, schema, setKv } from "./db/index.ts";
 import { sendToUserAsBot } from "./lark/bot.ts";
 import type { DevTask } from "./db/schema.ts";
-import { DraftError, getDraft, sem } from "./drafts.ts";
-import { loadAgents } from "./hub.ts";
+import { DraftError, getDraft } from "./drafts.ts";
+import { sem } from "./agent/slots.ts";
+import { loadAgents } from "./agent/router.ts";
 import { exec, isStopping, log, now } from "./util.ts";
 
 const WORKTREES = path.join(DATA_DIR, "worktrees");

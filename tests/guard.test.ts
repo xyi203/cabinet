@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { Guard, tokenize } from "../server/guard.ts";
+import { Guard, tokenize } from "../server/agent/guard.ts";
 
 const root = mkdtempSync(path.join(tmpdir(), "cabinet-guard-"));
 const repo = path.join(root, "repo");
