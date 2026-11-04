@@ -16,7 +16,7 @@ import { DEFAULT_CWD } from "../config.ts";
 import { locks, sem } from "../agent/slots.ts";
 import { gatherContext } from "./context.ts";
 import { describeReply, draftLabel, type Kind, resolveEmoji, resolveSticker, stickerHint } from "./format.ts";
-import { claim, DraftError, getDraft, LIVE, pushDraft, setStatus } from "./store.ts";
+import { claim, DraftError, getDraft, isQuiet, LIVE, pushDraft, setStatus } from "./store.ts";
 
 async function sendDraft(d: Draft) {
 	const uuid = `d-${d.id}`.slice(0, 50);
@@ -64,7 +64,7 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 			const toSend = arg ? { ...d, kind, draft: arg } : d;
 			await sendDraft(toSend);
 			setStatus(id, "sent", arg ? { kind, draft: arg } : {});
-			void react(id, "DONE");
+			if (!isQuiet(id)) void react(id, "DONE");
 			record({ kind: "draft", status: "sent", dm: id, chatId: d.chatId, source: d.replyTo, answer: toSend.draft });
 			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: "sent" });
 		} else if (action === "revise") {

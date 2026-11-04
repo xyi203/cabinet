@@ -3,15 +3,17 @@ import { changed } from "../bus.ts";
 import { PATHS } from "../config.ts";
 import { deleteKv, listKv, setKv } from "../db/index.ts";
 import type { MeegoCard } from "../db/schema.ts";
+import type { ImageContent } from "@earendil-works/pi-ai";
+import { downloadImage, imageKeys } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
-import { loadAgents, mrBrief, resolveCwd, route, sessionKey } from "../agent/router.ts";
+import { glabRepo, loadAgents, mrBrief, resolveCwd, route, sessionKey } from "../agent/router.ts";
 import { meegoContext } from "../meego.ts";
 import { record } from "../records.ts";
 import { runPi } from "../agent/driver.ts";
 import { isStopping, log, now } from "../util.ts";
 import { locks, sem } from "../agent/slots.ts";
 import { contextBlock, gatherContext } from "./context.ts";
-import { draftLabel, stickerHint } from "./format.ts";
+import { draftLabel, isAckOnly, stickerHint } from "./format.ts";
 import { yiReplied } from "./replied.ts";
 import { type ChatRef, inflight, pushDraft, type Source } from "./store.ts";
 
@@ -83,9 +85,9 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], attempt?: string) {
 					source.context = related;
 					ctx = contextBlock(recent, related, source.text);
 				}
-				const [name, info] = await route(source);
-				const agent = loadAgents().agents[name] ?? {};
-				const sid = sessionKey(name, agent, chat.chat_id, info);
+				let [name, info] = await route(source);
+				let agent = loadAgents().agents[name] ?? {};
+				let sid = sessionKey(name, agent, chat.chat_id, info);
 				Object.assign(source, { agent: name, session: sid, route: info.rule });
 				log("分派", chat.chat_id, "->", name, info.rule);
 				let where: string;
@@ -102,29 +104,43 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], attempt?: string) {
 					hint = stickerHint();
 				}
 				const extra = info.mrIid
-					? `\n\n要预审的 MR：项目 \`${info.mrProject}\`，iid \`${info.mrIid}\`。\nMR 概要（glab mr view）：\n${await mrBrief(info)}`
+					? `\n\n要预审的 MR：项目 \`${info.mrProject}\`，iid \`${info.mrIid}\`，glab 的 -R 参数用 \`${glabRepo(info.mrProject!)}\`。\nMR 概要（glab mr view）：\n${await mrBrief(info)}`
 					: "";
 				const prompt = `[代回复草稿] ${where}，来自 ${source.senderName}\n\n${ctx}${extra}\n\n${hint}\n\n请按草稿规则起草 Yi 的回复。`;
-				const {
-					text: draft,
-					usage,
-					sessionId,
-				} = await runPi({
-					cwd: resolveCwd(agent, info),
-					sessionId: sid,
-					requestId: `draft:${source.replyTo}${attempt ? `:${attempt}` : ""}`,
-					prompt,
-					extraSystem: [PATHS.draftRules],
-					label,
-					agent,
-					agentName: name,
-					chatId: chat.chat_id,
-					memory: {
-						// 只有 @ 的消息意思在前文里，召回也带上最后一段前文
-						query: `${source.text}\n${(source.context ?? "").slice(-300)}`,
-						scope: { personId: chat.chat_mode === "meego" ? undefined : source.senderId, chatId: chat.chat_id },
-					},
-				});
+				// 截图常常就是问题本身：把要回复的那几条消息里的图片一起给模型；chat 只回表情，不用看
+				let images = name === "chat" ? [] : await draftImages(msgs);
+				const run = (suffix = "") =>
+					runPi({
+						cwd: resolveCwd(agent, info),
+						sessionId: sid,
+						requestId: `draft:${source.replyTo}${attempt ? `:${attempt}` : ""}${suffix}`,
+						prompt,
+						extraSystem: [PATHS.draftRules],
+						label,
+						agent,
+						agentName: name,
+						chatId: chat.chat_id,
+						images,
+						memory: {
+							// 只有 @ 的消息意思在前文里，召回也带上最后一段前文
+							query: `${source.text}\n${(source.context ?? "").slice(-300)}`,
+							scope: { personId: chat.chat_mode === "meego" ? undefined : source.senderId, chatId: chat.chat_id },
+						},
+					});
+				let { text: draft, usage, sessionId } = await run();
+				// chat 用的是便宜模型、不查任何资料，写出文字就可能编事实（替 Yi 确认店铺、猜原因）：只收表情和「无需回复」，否则交给兜底 agent 重写
+				if (name === "chat" && !isAckOnly(draft)) {
+					const { router, agents } = loadAgents();
+					const next = router.fallback && agents[router.fallback] ? router.fallback : "general";
+					log("chat 输出了文字，改派", next, chat.chat_id);
+					name = next;
+					agent = agents[next] ?? {};
+					info = { rule: `${info.rule}（chat 输出文字，改派 ${next}）` };
+					sid = sessionKey(name, agent, chat.chat_id, info);
+					Object.assign(source, { agent: name, session: sid, route: info.rule });
+					images = await draftImages(msgs);
+					({ text: draft, usage, sessionId } = await run(`:${next}`));
+				}
 				source.session = sessionId;
 				const dm = await pushDraft(source, draft);
 				record({
@@ -160,6 +176,14 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], attempt?: string) {
 			}
 		}),
 	);
+}
+
+const MAX_IMAGES = 4;
+
+async function draftImages(msgs: Message[]): Promise<ImageContent[]> {
+	const wanted = msgs.flatMap((m) => imageKeys(m.content).map((key) => ({ id: m.message_id, key }))).slice(-MAX_IMAGES);
+	const got = await Promise.all(wanted.map(({ id, key }) => downloadImage(id, key)));
+	return got.filter((x) => x !== undefined).map((x) => ({ type: "image", ...x }));
 }
 
 /** 启动时接回上次进程没起草完的消息 */

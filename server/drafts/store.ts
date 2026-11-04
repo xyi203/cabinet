@@ -12,6 +12,10 @@ export class DraftError extends Error {}
 
 export const LIVE = ["pending", "noreply"];
 
+/** 表情、建议不回复这类草稿不私聊打扰 Yi，只上看板；没有私聊消息，id 用这个前缀加原消息 id */
+export const QUIET_PREFIX = "quiet_";
+export const isQuiet = (id: string) => id.startsWith(QUIET_PREFIX);
+
 export interface ChatRef {
 	chat_id: string;
 	chat_mode: string; // p2p / group / topic / meego
@@ -92,7 +96,12 @@ export async function pushDraft(source: Source, draft: string, replaces?: string
 		if (note) parts.push(`备注（不会发出）：${note}`);
 		parts.push("回复本条：`发` / `改 <意见>` / `表情 <类型>` / `表情包 <名字>` / `完成` / `不发`");
 	}
-	const dmId = await sendToUserAsBot(OWNER_OPEN_ID, parts.join("\n\n"));
+	// Yi 主动要求改写的结果总要私聊回给他
+	const quiet = !replaces && (noReply || kind === "reaction");
+	// 带时间后缀：同一条消息改写后又是表情时 id 不能撞上被替换的那条
+	const dmId = quiet
+		? `${QUIET_PREFIX}${source.replyTo}_${Date.now().toString(36)}`
+		: await sendToUserAsBot(OWNER_OPEN_ID, parts.join("\n\n"));
 	db().transaction((tx) => {
 		if (replaces) tx.update(schema.drafts).set({ status: "replaced" }).where(eq(schema.drafts.id, replaces)).run();
 		tx.insert(schema.drafts)
@@ -114,7 +123,7 @@ export async function pushDraft(source: Source, draft: string, replaces?: string
 	return dmId;
 }
 
-/** 引用了哪条草稿就操作哪条；没引用时只认最近 30 分钟内最新的一条 */
+/** 引用了哪条草稿就操作哪条；没引用时只认最近 30 分钟内最新的一条私聊过的草稿（看板专属的 Yi 在私聊里看不到，不能被「发」误选） */
 export function pickDraft(parent: string | undefined, statuses: string[]): Draft | undefined {
 	if (parent) {
 		const d = getDraft(parent);
@@ -125,7 +134,7 @@ export function pickDraft(parent: string | undefined, statuses: string[]): Draft
 		.from(schema.drafts)
 		.where(inArray(schema.drafts.status, statuses))
 		.orderBy(desc(schema.drafts.created))
-		.limit(1)
+		.limit(20)
 		.all()
-		.find((d) => now() - d.created < 1800);
+		.find((d) => !isQuiet(d.id) && now() - d.created < 1800);
 }

@@ -16,14 +16,14 @@
 		"desc": "问题咨询：线上报错、数据不对、配置、某个现象的原因，或请 Yi 帮忙看/排查某个问题，需要查数据库、日志或代码",
 		"model": "claude/claude-opus-5-5",
 		"thinking": "high",
-		"skills": ["archery", "sls", "superset", "log-diagnosis"],
-		"bash": ["git", "meegle", "archery", "sls", "superset"],
+		"skills": ["archery", "sls", "superset", "log-diagnosis", "lark-doc"],
+		"bash": ["git", "meegle", "archery", "sls", "superset", "lark-cli"],
 		"cwd": "default",
 		"session": "chat",
 		"prompt": "agents/ask.md"
 	},
 	"chat": {
-		"desc": "简单回应：确认收到、致谢、寒暄、问在不在，且不需要 Yi 后续去查、去看或去做任何事",
+		"desc": "简单回应：对方只是确认收到、致谢、通知一声，回个表情就够；任何问句（包括「是指？」「是 xx 吗」这类追问）、要 Yi 确认事实或表态的都不归这里",
 		"model": "codex/gpt-6-luna",
 		"thinking": "minimal",
 		"tools": [],
@@ -33,9 +33,12 @@
 	"general": {
 		"desc": "其他需要 Yi 回复的事：协调、排期、方案讨论等，可能需要看一下代码",
 		"model": "claude/claude-opus-5-5",
-		"bash": ["git", "meegle"],
+		"thinking": "medium",
+		"skills": ["lark-doc"],
+		"bash": ["git", "meegle", "lark-cli"],
 		"cwd": "default",
-		"session": "chat"
+		"session": "chat",
+		"prompt": "agents/general.md"
 	},
 	"dev": {
 		"desc": "（手动指派）按需求在独立 worktree 里改代码、跑测试、本地提交，推送前由 Yi 审核",

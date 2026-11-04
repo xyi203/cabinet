@@ -119,3 +119,12 @@ test("开发任务：只能写自己的 worktree，git 只放本地写操作", (
 	no("go run main.go");
 	no("go test ./... ; rm -rf /");
 });
+
+test("lark-cli 只放行读文档", () => {
+	const gl = guard(["lark-cli"]);
+	allow("lark-cli docs +fetch --doc https://x.feishu.cn/docx/abc --doc-format markdown", gl);
+	deny("lark-cli docs +update --doc abc", gl);
+	deny("lark-cli im +messages-send --chat-id oc_1 --text hi", gl);
+	deny("lark-cli docs +fetch --doc abc --as bot", gl);
+	deny("lark-cli docs +fetch --doc abc", g);
+});

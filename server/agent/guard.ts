@@ -8,7 +8,7 @@ import path from "node:path";
 export interface GuardPolicy {
 	/** 允许读的目录（不存在的会被丢弃） */
 	roots: string[];
-	/** 放行的命令族：git / glab / meegle / archery / superset / sls / git-local */
+	/** 放行的命令族：git / glab / meegle / lark-cli / archery / superset / sls / git-local */
 	bash: string[];
 	skillsDir: string;
 	/** 允许 edit / write 的目录：只有开发任务有，是它自己的 worktree */
@@ -42,6 +42,10 @@ const meegleReadOnly = new Set([
 
 // glab 用的是 Yi 的 GitLab 账号：只看不改。api 只允许 GET，带字段参数会被 glab 自动改成 POST
 const glabReadOnly = new Set(["mr view", "mr diff", "mr list", "mr notes", "repo view", "ci view", "ci status"]);
+
+// lark-cli 用的是 Yi 的飞书账号：只放行读文档正文，其他子命令（发消息、改文档、导出落盘）一律不放
+const larkReadOnly = new Set(["docs +fetch"]);
+const larkBannedArg = /^(--output|-o$|--as$|--as=)/;
 
 interface ScriptRule {
 	argv0: string[];
@@ -225,6 +229,11 @@ export class Guard {
 			// meegle 用的是 Yi 的账号，写操作（评论、建单、流转）只由 cabinet 在 Yi 确认后执行
 			const sub = `${args[1]} ${args[2]}`;
 			return meegleReadOnly.has(sub) && !args.includes("--params") ? undefined : `不允许的 meegle 命令: ${sub}`;
+		}
+		if (args[0] === "lark-cli" && this.enabled.has("lark-cli")) {
+			const sub = `${args[1]} ${args[2]}`;
+			if (!larkReadOnly.has(sub)) return `不允许的 lark-cli 命令: ${sub}`;
+			return args.some((a) => larkBannedArg.test(a)) ? "lark-cli 不允许这个参数" : undefined;
 		}
 		for (const [name, rule] of Object.entries(this.scripts)) {
 			if (!this.enabled.has(name)) continue;

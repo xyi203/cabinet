@@ -122,3 +122,17 @@ test("飞书项目评论的 @ 用卡片里的 user_id", () => {
 test("评论上下文去掉 mention 标记", () => {
 	assert.equal(plainComment('@向懿<!-- mention:{"blockId":"x","id":"lark_user_id_1"} --> 能加吗'), "@向懿 能加吗");
 });
+
+test("只有表情或无需回复才算 chat 的合法输出；正文去掉「草稿：」前缀", async () => {
+	const { isAckOnly } = await import("../server/drafts/format.ts");
+	assert.equal(isAckOnly("【表情】THUMBSUP"), true);
+	assert.equal(isAckOnly("【无需回复】只是通知"), true);
+	assert.equal(isAckOnly("是的，2392762 店铺。"), false);
+	assert.equal(splitNote("草稿：\n\n我看下\n【备注】缺报错").body, "我看下");
+});
+
+test("图片消息带出 image_key，正文里的 ![Image](key) 也能取到", async () => {
+	const { imageKeys } = await import("../server/lark/bot.ts");
+	assert.equal(messageText("image", JSON.stringify({ image_key: "img_v3_02_ab-c" })), "[图片 img_v3_02_ab-c]");
+	assert.deepEqual(imageKeys("![Image](img_v3_02174_7d1c68b7-338c) @a [图片 img_v3_02_x]"), ["img_v3_02174_7d1c68b7-338c", "img_v3_02_x"]);
+});

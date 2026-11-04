@@ -38,7 +38,10 @@ export function loadAgents(): { agents: Record<string, AgentConfig>; router: Rou
 	return { agents, router };
 }
 
+export const GITLAB_HOST = "gitlab.shoplazza.site";
 export const MR_RE = /https?:\/\/gitlab\.shoplazza\.site\/([\w./-]+?)\/-\/merge_requests\/(\d+)/;
+/** glab 的默认 host 是 gitlab.com，-R 只写项目路径会去 gitlab.com 查而 404：一律带上 host */
+export const glabRepo = (project: string) => `${GITLAB_HOST}/${project}`;
 
 export interface RouteInfo {
 	rule: string;
@@ -108,7 +111,7 @@ export function sessionKey(name: string, agent: AgentConfig, chatId: string, inf
 /** CR 的冷启动上下文：MR 标题、描述和改动规模，diff 由 agent 自己按需拉（Inline & Spill） */
 export async function mrBrief(info: RouteInfo): Promise<string> {
 	try {
-		return (await exec(GLAB_BIN, ["mr", "view", info.mrIid!, "-R", info.mrProject!], { timeout: 30 })).slice(0, 3000);
+		return (await exec(GLAB_BIN, ["mr", "view", info.mrIid!, "-R", glabRepo(info.mrProject!)], { timeout: 30 })).slice(0, 3000);
 	} catch (e) {
 		log("读取 MR 失败", info, e);
 		return "";

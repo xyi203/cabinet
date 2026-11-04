@@ -42,3 +42,12 @@ test("没引用时「发」只挑最近的待确认草稿", () => {
 	assert.equal(pickDraft(undefined, ["pending", "noreply"])!.id, "om_d2");
 	assert.equal(pickDraft("om_d1", ["pending"])!.id, "om_d1");
 });
+
+test("没引用时不会挑中只在看板上的表情草稿", () => {
+	db()
+		.insert(schema.drafts)
+		.values({ ...base, id: "quiet_om_x_1", status: "noreply", created: base.created + 2 })
+		.run();
+	assert.equal(pickDraft(undefined, ["pending", "noreply"])!.id, "om_d2");
+	assert.equal(pickDraft("quiet_om_x_1", ["noreply"])!.id, "quiet_om_x_1");
+});

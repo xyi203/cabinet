@@ -18,7 +18,8 @@ export function splitNote(draft: string): { body: string; note: string; report: 
 	let report: string;
 	[body, report] = partition(body, REPORT_MARK);
 	if (note.includes(REPORT_MARK)) [note, report] = partition(note, REPORT_MARK); // 模型把备注写在报告前面时
-	return { body: body.trim(), note: note.trim(), report: report.trim() };
+	// 模型偶尔在正文前写「草稿：」，发出去就露馅了
+	return { body: body.trim().replace(/^草稿[:：]\s*/, ""), note: note.trim(), report: report.trim() };
 }
 
 function partition(s: string, mark: string): [string, string] {
@@ -64,6 +65,12 @@ export function parseDraftBody(body: string): { kind: Kind; content: string } {
 		if (sticker) return { kind: "sticker", content: sticker };
 	}
 	return { kind: "text", content: body };
+}
+
+/** 草稿正文只是一个表情 / 表情包，或建议不回复 */
+export function isAckOnly(draft: string): boolean {
+	const { body } = splitNote(draft);
+	return body.startsWith(NO_REPLY_MARK) || parseDraftBody(body).kind !== "text";
 }
 
 export const describeReply = (kind: string, content: string) =>

@@ -3,7 +3,7 @@
 // - 提交带 requestId（如飞书消息 id），重启后同一条消息再来时接回原来那次运行，不会重复起草
 // - 守卫用 ToolTask 的 beforeTool 钩子；每个 conversation 的策略同时存进 kv，重启恢复的运行也受约束
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import {
 	AssistantEntry,
 	type Conversation,
@@ -54,6 +54,8 @@ export interface RunOptions {
 	writeRoots?: string[];
 	/** 按这段文字召回长期记忆，带在这一轮的输入里；不给就不带 */
 	memory?: { query: string; scope: RecallScope };
+	/** 随输入一起给模型看的图片（消息里的截图） */
+	images?: ImageContent[];
 }
 
 export interface RunResult {
@@ -303,7 +305,8 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 		);
 		const before = await usageNow(h, conv.id);
 		const memory = opts.memory ? await recallBlock(opts.memory.query, opts.memory.scope) : "";
-		const content = memory ? `${memory}\n\n---\n\n${opts.prompt}` : opts.prompt;
+		const input = memory ? `${memory}\n\n---\n\n${opts.prompt}` : opts.prompt;
+		const content = opts.images?.length ? [{ type: "text" as const, text: input }, ...opts.images] : input;
 		let settled = await waitSettled(await conv.submit({ type: "input", content, requestId: opts.requestId }, ctx), conv);
 		// 额度/限流这类错误换模型也能跑：同一会话里换成备用模型接着做，前面已经查到的内容不丢
 		const fallback = agent.fallbackModel ?? PI_FALLBACK_MODEL;
