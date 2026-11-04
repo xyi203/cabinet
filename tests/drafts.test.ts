@@ -3,7 +3,8 @@ import { test } from "node:test";
 const { openDb, useDb, schema } = await import("../server/db/index.ts");
 useDb(openDb(":memory:"));
 const { db } = await import("../server/db/index.ts");
-const { applyDraftAction, DraftError, getDraft, pickDraft } = await import("../server/drafts.ts");
+const { applyDraftAction } = await import("../server/drafts/actions.ts");
+const { DraftError, getDraft, pickDraft } = await import("../server/drafts/store.ts");
 
 const base = {
 	chatId: "oc_1",

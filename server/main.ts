@@ -4,7 +4,7 @@ import { CHATS, DRAFT_ENABLED, PATHS, PI_MODEL, missingConfig } from "./config.t
 import { closeHarness, harness } from "./agent/driver.ts";
 import { db } from "./db/index.ts";
 import { resumePendingDev } from "./dev.ts";
-import { resumePendingDrafts } from "./drafts.ts";
+import { resumePendingDrafts } from "./drafts/make.ts";
 import { startEvents } from "./lark/bot.ts";
 import { markHandled, pollForever, stopPolling } from "./poller.ts";
 import { onBotEvent, resumePendingQa } from "./qa.ts";

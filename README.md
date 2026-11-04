@@ -22,7 +22,13 @@ server/          后端（Node 直接跑 TypeScript）
     guard.ts     工具白名单（只读文件、只读命令，dev 只能写自己的 worktree）
     tools.ts     只读工具 grep / find / ls / memory
     slots.ts     运行并发：全局信号量 + 按会话排队
-  drafts.ts      草稿：起草、推送、发 / 改 / 不发 / 完成
+  drafts/        代回复草稿
+    format.ts    草稿文本：备注 / 评审报告拆分、表情与表情包识别、标签
+    store.ts     草稿表：状态原子切换、推送给 Yi、挑出要操作的那条、起草中的消息
+    replied.ts   Yi 是否已亲自回复，作废草稿
+    context.ts   起草前补齐上下文
+    make.ts      起草流程与重启接回
+    actions.ts   发 / 改 / 不发 / 完成（以 Yi 身份发出的唯一入口）
   poller.ts      轮询私聊、@Yi、飞书项目通知
   meego.ts       飞书项目（meegle CLI）
   qa.ts          @机器人问答与私聊里的草稿指令

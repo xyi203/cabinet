@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 process.env.OWNER_OPEN_ID = "ou_owner";
-const { splitNote, parseDraftBody, ownerReplyCovers, ownerRepliedIn, onlyMentions } = await import("../server/drafts.ts");
+const { splitNote, parseDraftBody } = await import("../server/drafts/format.ts");
+const { ownerReplyCovers, ownerRepliedIn } = await import("../server/drafts/replied.ts");
+const { onlyMentions } = await import("../server/drafts/context.ts");
 const { parseMeegoCard, meegoMention, plainComment } = await import("../server/meego.ts");
 const { messageText } = await import("../server/lark/bot.ts");
 const { stripMentions } = await import("../server/qa.ts");
