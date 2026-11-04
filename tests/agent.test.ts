@@ -101,3 +101,57 @@ test("记忆：约定拼进这一轮的输入，agent 能用 memory 工具查", 
 	assert.equal(tool?.error, false);
 	assert.match(tool?.result ?? "", /记忆查询结果[\s\S]*排期问题/);
 });
+
+test("跑到一半进程退出：重启后挂回原来那次提交，不重新配置、不重新提交", async () => {
+	const { hasRun } = await import("../server/agent/driver.ts");
+	let entered!: () => void;
+	const inFlight = new Promise<void>((r) => (entered = r));
+	// 第一次调模型时一直不返回，模拟进程在模型调用中途退出
+	faux.setResponses([
+		(_context, options) => {
+			entered();
+			// 关 harness 时请求被中断：和进程退出时模型请求断掉一样
+			return new Promise((_, reject) => options?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+		},
+	]);
+	const first = runPi({ cwd: work, sessionId: "t-crash", requestId: "req-crash", prompt: "查一下", agent: { model: "faux-1", tools: [] } });
+	first.catch(() => {});
+	await inFlight;
+	assert.ok(hasRun("req-crash"));
+	await closeHarness();
+
+	// 重启：durable 自己把没跑完的那一轮接着跑；这次提交用了不存在的模型和别的提示——要是重新配置或重新提交就会露馅
+	faux.setResponses([fauxAssistantMessage("接回后的回答")]);
+	const res = await runPi({
+		cwd: work,
+		sessionId: "t-crash",
+		requestId: "req-crash",
+		prompt: "完全不同的提示",
+		agent: { model: "no-such-model", tools: [] },
+	});
+	assert.equal(res.text, "接回后的回答");
+	const items = await conversationTranscript("t-crash");
+	const users = items.filter((i) => i.kind === "user");
+	assert.equal(users.length, 1);
+	assert.match(users[0].text ?? "", /查一下/);
+	assert.doesNotMatch(users[0].text ?? "", /完全不同/);
+});
+
+test("跑完了但结果还没处理就退出：接回直接拿原来的答案，不再调模型", async () => {
+	faux.setResponses([fauxAssistantMessage("第一次的答案")]);
+	await runPi({ cwd: work, sessionId: "t-done", requestId: "req-done", prompt: "问", agent: { model: "faux-1", tools: [] } });
+	await closeHarness();
+	const calls = faux.state.callCount;
+	const res = await runPi({
+		cwd: work,
+		sessionId: "t-done",
+		requestId: "req-done",
+		prompt: "问",
+		agent: { model: "no-such-model", tools: [] },
+	});
+	assert.equal(res.text, "第一次的答案");
+	assert.equal(faux.state.callCount, calls);
+	const { forgetRun, hasRun } = await import("../server/agent/driver.ts");
+	forgetRun("req-done");
+	assert.equal(hasRun("req-done"), false);
+});

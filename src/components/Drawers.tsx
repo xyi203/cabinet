@@ -169,11 +169,11 @@ export function TaskDrawer({ task: t, draft, onClose }: { task: Task; draft?: Dr
 	const [busy, setBusy] = useState(false);
 	const [msg, setMsg] = useState<Msg>(null);
 	const answer = t.answer ?? (draft ? describeDraft(draft) : "");
-	async function retry() {
+	async function retry(action: "retry" | "dismiss" = "retry") {
 		setBusy(true);
 		try {
-			await post(`/api/tasks/${t.id}/retry`);
-			setMsg({ text: "已重新提交，稍后会出现在「进行中」" });
+			await post(`/api/tasks/${t.id}/${action}`);
+			setMsg({ text: action === "retry" ? "已重新提交，稍后会出现在「进行中」" : "已忽略，不再算失败" });
 			qc.invalidateQueries({ queryKey: ["state"] });
 			setTimeout(onClose, 1200);
 		} catch (e) {
@@ -186,10 +186,17 @@ export function TaskDrawer({ task: t, draft, onClose }: { task: Task; draft?: Dr
 			title={`${t.type === "draft" ? "草稿" : "问答"} · ${t.label}`}
 			onClose={onClose}
 			actions={
-				t.retryable ? (
-					<button className="btn primary" disabled={busy} onClick={retry}>
-						重试
-					</button>
+				t.status === "blocked" ? (
+					<>
+						{t.retryable && (
+							<button className="btn primary" disabled={busy} onClick={() => retry()}>
+								重试
+							</button>
+						)}
+						<button className="btn" disabled={busy} onClick={() => retry("dismiss")}>
+							忽略
+						</button>
+					</>
 				) : undefined
 			}
 		>

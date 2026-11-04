@@ -1,0 +1,212 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+process.env.OWNER_OPEN_ID = "ou_yi";
+const { openDb, useDb, schema } = await import("../server/db/index.ts");
+useDb(openDb(":memory:"));
+const { db } = await import("../server/db/index.ts");
+const { draftCard, editable, parseCardAction, sendText, CardInputError, INPUT_MAX } = await import("../server/drafts/card.ts");
+const { onDraftCardAction } = await import("../server/drafts/actions.ts");
+const { getDraft } = await import("../server/drafts/store.ts");
+
+const base = {
+	id: "om_card",
+	chatId: "oc_1",
+	chatMode: "group",
+	chatName: "订单组",
+	replyTo: "om_src",
+	threadId: null,
+	senderId: "ou_a",
+	senderName: "张三",
+	text: "这个接口为什么 500 了",
+	context: "张三：刚上线的版本",
+	meego: null,
+	agent: "ask",
+	session: null,
+	route: null,
+	kind: "text",
+	draft: "我看一下日志",
+	note: "",
+	report: "",
+	status: "pending",
+	created: 1,
+};
+
+/** 卡片里所有的组件，按 tag 摊平 */
+function walk(card: any): any[] {
+	const out: any[] = [];
+	const visit = (n: any) => {
+		if (!n || typeof n !== "object") return;
+		if (Array.isArray(n)) return n.forEach(visit);
+		if (n.tag) out.push(n);
+		for (const k of ["elements", "columns", "body"]) visit(n[k]);
+	};
+	visit(card.body);
+	return out;
+}
+
+test("待确认的草稿是一张表单，草稿预填在输入框里", () => {
+	const els = walk(draftCard(base as any));
+	const form = els.find((e) => e.tag === "form");
+	assert.ok(form);
+	const input = els.find((e) => e.tag === "input" && e.name === "text");
+	assert.equal(input.default_value, "我看一下日志");
+	const buttons = els.filter((e) => e.tag === "button").map((e) => e.name);
+	assert.deepEqual(buttons.slice(0, 4), ["send", "discard", "complete", "revise"]);
+	assert.ok(buttons.every((n) => els.find((e) => e.name === n && e.tag === "button").form_action_type === "submit"));
+	// 对方的原话用 plain_text，不当 markdown 渲染
+	const src = els.find((e) => e.tag === "div" && e.text.content === base.text);
+	assert.equal(src.text.tag, "plain_text");
+});
+
+test("处理完的草稿没有按钮", () => {
+	for (const status of ["sent", "discarded", "completed", "expired", "replaced", "sending", "revising"]) {
+		const els = walk(draftCard({ ...base, status } as any));
+		assert.equal(els.filter((e) => e.tag === "button" || e.tag === "form").length, 0, status);
+	}
+});
+
+test("超过输入框上限的草稿不给编辑框，原样发", () => {
+	const long = { ...base, draft: "长".repeat(INPUT_MAX + 1) };
+	assert.equal(editable(long as any), false);
+	assert.equal(
+		walk(draftCard(long as any)).find((e) => e.tag === "input" && e.name === "text"),
+		undefined,
+	);
+	assert.equal(sendText(long as any, undefined), "");
+});
+
+test("超长内容截断后卡片不超过 30KB", () => {
+	const huge = "很".repeat(20000);
+	const d = { ...base, text: huge, context: huge, report: huge, note: huge, draft: huge };
+	assert.ok(Buffer.byteLength(JSON.stringify(draftCard(d as any))) < 28 * 1024);
+});
+
+test("发送时：没改原样发，改了发新的，清空了报错", () => {
+	assert.equal(sendText(base as any, "我看一下日志"), "");
+	assert.equal(sendText(base as any, " 我看一下日志 \n"), "");
+	assert.equal(sendText(base as any, "我看一下"), "我看一下");
+	assert.throws(() => sendText(base as any, ""), CardInputError);
+	// 飞书不回传空输入框：可编辑的卡片缺这一项就是被清空了，不能当原样发
+	assert.throws(() => sendText(base as any, undefined), CardInputError);
+	// 表情草稿：留空发表情，写了字发文字
+	const emoji = { ...base, kind: "reaction", draft: "THUMBSUP" };
+	assert.equal(sendText(emoji as any, undefined), "");
+	assert.equal(sendText(emoji as any, "好的"), "好的");
+});
+
+test("解析摊平后的 card.action.trigger", () => {
+	const ev = parseCardAction({
+		operator: { open_id: "ou_yi" },
+		context: { open_message_id: "om_card", open_chat_id: "oc_dm" },
+		action: { tag: "button", name: "send", value: { a: "send" }, form_value: { text: "改过的", opinion: "", emoji: 1 } },
+	});
+	assert.deepEqual(ev, {
+		operatorId: "ou_yi",
+		messageId: "om_card",
+		name: "send",
+		form: { text: "改过的", opinion: "" },
+		value: { a: "send" },
+	});
+	assert.equal(parseCardAction({ operator: {} }), undefined);
+});
+
+const click = (name: string, operator = "ou_yi", form: Record<string, string> = {}) =>
+	onDraftCardAction({
+		operator: { open_id: operator },
+		context: { open_message_id: "om_card" },
+		action: { name, value: { a: name }, form_value: form },
+	}) as Promise<any>;
+
+test("只有 Yi 能点草稿卡片", async () => {
+	db().insert(schema.drafts).values(base).run();
+	const r = await click("discard", "ou_other");
+	assert.equal(r.toast.type, "error");
+	assert.equal(getDraft("om_card")!.status, "pending");
+});
+
+test("点「不发」：草稿结束，回调直接带回结果卡片", async () => {
+	const r = await click("discard");
+	assert.equal(r.toast.type, "success");
+	assert.equal(getDraft("om_card")!.status, "discarded");
+	assert.equal(walk(r.card.data).filter((e) => e.tag === "button").length, 0);
+	// 已经处理过的草稿再点，报错并带回当前状态的卡片
+	const again = await click("send", "ou_yi", { text: "x" });
+	assert.equal(again.toast.type, "error");
+	assert.equal(getDraft("om_card")!.status, "discarded");
+});
+
+test("没选表情就点「回表情」只提示，不动草稿", async () => {
+	db()
+		.insert(schema.drafts)
+		.values({ ...base, id: "om_card2" })
+		.run();
+	const r = await onDraftCardAction({
+		operator: { open_id: "ou_yi" },
+		context: { open_message_id: "om_card2" },
+		action: { name: "emoji", form_value: {} },
+	});
+	assert.equal((r as any).toast.type, "error");
+	assert.equal(getDraft("om_card2")!.status, "pending");
+});
+
+const { devCard } = await import("../server/devcard.ts");
+const { failureCard } = await import("../server/drafts/card.ts");
+const { onCardAction } = await import("../server/cards.ts");
+
+const task = {
+	id: "dev-1",
+	agent: "dev",
+	repo: "/code/order",
+	branch: "feature/x",
+	title: "加筛选",
+	status: "review",
+	mrUrl: null,
+} as any;
+const buttonsOf = (card: object) =>
+	walk(card)
+		.filter((e) => e.tag === "button")
+		.map((e) => e.behaviors?.[0]?.value?.a ?? e.name);
+
+test("agent 任务卡片：按状态给操作，只有最新一张带按钮", () => {
+	const round = { what: "第 1 轮完成", body: "改好了" };
+	assert.deepEqual(buttonsOf(devCard(task, round)), ["say", "push", "discard"]);
+	assert.deepEqual(buttonsOf(devCard({ ...task, status: "running" }, round)), ["say", "stop"]);
+	assert.deepEqual(buttonsOf(devCard({ ...task, status: "pushing" }, round)), []);
+	assert.deepEqual(buttonsOf(devCard({ ...task, status: "pushed", mrUrl: "https://x/merge_requests/1" }, round)), [
+		"say",
+		"push",
+		"complete",
+		"discard",
+	]);
+	assert.deepEqual(buttonsOf(devCard({ ...task, agent: "alert", title: "告警 · 订单群 · 3 条" }, round)), ["say", "complete"]);
+	assert.deepEqual(buttonsOf(devCard(task, round, false)), []);
+	for (const status of ["done", "discarded"]) assert.deepEqual(buttonsOf(devCard({ ...task, status }, round)), []);
+});
+
+test("起草失败卡片：重试 / 忽略，处理过后没有按钮", () => {
+	const f = { taskId: "fail-om_x", where: "私聊 · 张三", text: "在吗", error: "pi 超时" };
+	assert.deepEqual(buttonsOf(failureCard(f)), ["retry", "ignore"]);
+	assert.deepEqual(buttonsOf(failureCard(f, "retrying")), []);
+	assert.deepEqual(buttonsOf(failureCard(f, "dismissed")), []);
+});
+
+test("卡片回调只认 Yi，按 value.k 分给任务和失败提醒", async () => {
+	const other = await onCardAction({
+		operator: { open_id: "ou_x" },
+		context: { open_message_id: "om_any" },
+		action: { value: { k: "dev", a: "push", t: "dev-1" } },
+	});
+	assert.equal((other as any).toast.type, "error");
+	const missing = await onCardAction({
+		operator: { open_id: "ou_yi" },
+		context: { open_message_id: "om_any" },
+		action: { value: { k: "fail", a: "ignore", t: "fail-none" } },
+	});
+	assert.match((missing as any).toast.content, /找不到/);
+	const noTask = await onCardAction({
+		operator: { open_id: "ou_yi" },
+		context: { open_message_id: "om_any" },
+		action: { value: { k: "dev", a: "complete", t: "dev-none" } },
+	});
+	assert.match((noTask as any).toast.content, /任务不存在/);
+});

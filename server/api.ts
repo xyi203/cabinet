@@ -10,6 +10,8 @@ import { pathToFileURL } from "node:url";
 import { type LiveEvent, bus, changed } from "./bus.ts";
 import { COMMON_EMOJI, DEV_ORIGIN, OAUTH_REDIRECT, PATHS, PORT } from "./config.ts";
 import { applyDraftAction } from "./drafts/actions.ts";
+import { lineage, recentLineage } from "./pipeline.ts";
+import { deleteSchedule, listSchedules, runNow, saveSchedule } from "./schedules.ts";
 import { type Kind, listStickers, resolveSticker } from "./drafts/format.ts";
 import { DraftError, getDraft, LIVE } from "./drafts/store.ts";
 import { LarkError, authorizeUrl, exchangeCode, userAuthStatus } from "./lark/bot.ts";
@@ -17,7 +19,7 @@ import { lastPoll } from "./poller.ts";
 import { conversationTranscript } from "./agent/driver.ts";
 import { modelOptions } from "./agent/models.ts";
 import { closeTask, devDiff, discardDev, dispatch, getDevTask, listRepos, messageDev, pushDev, stopDev } from "./dev.ts";
-import { retryTask } from "./retry.ts";
+import { dismissTask, retryTask } from "./retry.ts";
 import { dashboardState, sessionLog } from "./tasks.ts";
 import { search } from "./memory/recall.ts";
 import {
@@ -119,6 +121,13 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			return send(res, 200, { steps: await sessionLog(url.searchParams.get("session") ?? undefined, num("start"), num("end")) });
 		}
 		if (p === "/api/repos") return send(res, 200, { repos: listRepos() });
+		if (p === "/api/schedules") return send(res, 200, { items: listSchedules() });
+		// 四段模型：最近的 trigger 分派给了谁、产出了什么、结果如何；带 id 时只看这一条
+		if (p === "/api/pipeline") {
+			const id = url.searchParams.get("id");
+			if (id) return send(res, 200, { item: lineage(id) ?? null });
+			return send(res, 200, { items: recentLineage(Number(url.searchParams.get("limit")) || 200) });
+		}
 		if (p === "/api/models") return send(res, 200, { models: modelOptions() });
 		const transcript = /^\/api\/dev\/(dev-\d+)\/transcript$/.exec(p);
 		if (transcript) {
@@ -161,10 +170,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		oauthStates.set(state, Date.now());
 		return send(res, 200, { url: authorizeUrl(state) });
 	}
-	const retry = /^\/api\/tasks\/([\w-]+)\/retry$/.exec(p);
+	const retry = /^\/api\/tasks\/([\w-]+)\/(retry|dismiss)$/.exec(p);
 	if (retry) {
 		try {
-			retryTask(retry[1]);
+			if (retry[2] === "retry") retryTask(retry[1]);
+			else dismissTask(retry[1]);
 			return send(res, 202, { ok: true });
 		} catch (e) {
 			return send(res, 409, { error: (e as Error).message });
@@ -183,6 +193,31 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		} catch (e) {
 			if (e instanceof MemoryError) return send(res, 409, { error: e.message });
 			throw e;
+		}
+	}
+	// 定时任务：新建 / 修改、立即运行、删除
+	const schedM = /^\/api\/schedules(?:\/(cron-\d+)\/(run|delete))?$/.exec(p);
+	if (schedM) {
+		try {
+			if (!schedM[1])
+				return send(res, 200, {
+					ok: true,
+					item: saveSchedule({
+						id: body.id ? String(body.id) : undefined,
+						name: String(body.name ?? ""),
+						cron: String(body.cron ?? ""),
+						agent: String(body.agent ?? ""),
+						prompt: String(body.prompt ?? ""),
+						enabled: body.enabled === undefined ? undefined : Boolean(body.enabled),
+					}),
+				});
+			if (schedM[2] === "run") return send(res, 200, { ok: true, task: await runNow(schedM[1]) });
+			deleteSchedule(schedM[1]);
+			return send(res, 200, { ok: true });
+		} catch (e) {
+			if (e instanceof DraftError) return send(res, 409, { error: e.message });
+			log("定时任务操作失败", p, e);
+			return send(res, 500, { error: String((e as Error).message).slice(0, 300) });
 		}
 	}
 	// 开发任务：指派、继续修改、推送建 MR、放弃

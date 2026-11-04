@@ -128,3 +128,20 @@ test("lark-cli 只放行读文档", () => {
 	deny("lark-cli docs +fetch --doc abc --as bot", gl);
 	deny("lark-cli docs +fetch --doc abc", g);
 });
+
+test("告警 agent 的 grafana / oncall：只放查询，不放改配置", () => {
+	const ga = guard(["grafana", "oncall"]);
+	allow("scripts/grafana alerts", ga);
+	allow("scripts/grafana query --expr 'rate(http_requests_total[5m])' --from now-1h --to now", ga);
+	allow("scripts/oncall analyze --card-text '告警 A'", ga);
+	deny("scripts/grafana config set --name x --url y --cookie z", ga);
+	deny("scripts/oncall aggregate --file a.ndjson", ga);
+	// 没给这个 agent 的 skill 不放
+	deny("scripts/grafana alerts", guard(["archery"]));
+});
+
+test("lookup 只给允许的会话：群里问答的会话拦下", () => {
+	assert.ok(guard([]).check("lookup", { id: "lark:om_x" }, repo));
+	const allowed = new Guard({ roots: [repo], bash: [], skillsDir: skills, lookup: true });
+	assert.equal(allowed.check("lookup", { id: "lark:om_x" }, repo), undefined);
+});

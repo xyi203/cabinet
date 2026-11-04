@@ -4,6 +4,7 @@ import { type AgentStat, type DevTask, type State, createAgentTask, fetchRepos }
 import { AGENT_NAME, ago, money } from "../lib/format";
 import { type Msg, MsgLine } from "./Drawer";
 import { ModelPicker } from "./ModelPicker";
+import { Schedules } from "./Schedules";
 
 // agent 任务按「需要谁动」分四列
 const COLS: Array<{ name: string; match: (t: DevTask) => boolean }> = [
@@ -145,6 +146,7 @@ export function AgentBoard({ state, onOpen }: { state: State; onOpen: (id: strin
 					＋ 新建任务
 				</button>
 			</div>
+			<Schedules agents={state.agents} onOpen={onOpen} />
 			{creating && (
 				<NewTask
 					agents={state.agents}

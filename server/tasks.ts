@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { PATHS } from "./config.ts";
 import { db, schema } from "./db/index.ts";
-import type { Draft, RecordRow } from "./db/schema.ts";
+import type { DevTask, Draft, RecordRow } from "./db/schema.ts";
 import { draftLabel } from "./drafts/format.ts";
 import { inflight } from "./drafts/store.ts";
 import { PI_MODEL, PI_THINKING } from "./config.ts";
@@ -12,8 +12,11 @@ import { devTasksList } from "./dev.ts";
 import { loadAgents } from "./agent/router.ts";
 import { recentRecords } from "./records.ts";
 import { conversationLog, running } from "./agent/driver.ts";
+import { listMemories, type Memory } from "./memory/store.ts";
+import { ALERT_AGENT } from "./config.ts";
 import { now } from "./util.ts";
-import { desc } from "drizzle-orm";
+import { type Issue, watchdogIssues } from "./watchdog.ts";
+import { count, desc, gte } from "drizzle-orm";
 
 const DRAFT_TASK_STATUS: Record<string, string> = {
 	pending: "in_review",
@@ -124,7 +127,7 @@ export function buildTasks(drafts: Draft[], records: RecordRow[]): Task[] {
 	for (const r of records) {
 		const key = r.source;
 		if (!key) continue;
-		if (["replied", "drafted", "skipped"].includes(r.status)) settled.add(key);
+		if (["replied", "drafted", "skipped", "dismissed"].includes(r.status)) settled.add(key);
 		else if (r.status === "failed" && !settled.has(key) && !inflight.has(key) && recent(r.ts)) {
 			settled.add(key); // 同一来源只保留最新一次失败
 			tasks.push({
@@ -214,6 +217,20 @@ export function buildTasks(drafts: Draft[], records: RecordRow[]): Task[] {
 	return tasks.toSorted((a, b) => b.created - a.created);
 }
 
+function todayTriggers(since: number): number {
+	return db().select({ n: count() }).from(schema.triggers).where(gte(schema.triggers.at, since)).get()?.n ?? 0;
+}
+
+function todayOutcomes(since: number): Record<string, number> {
+	const rows = db()
+		.select({ outcome: schema.results.outcome, n: count() })
+		.from(schema.results)
+		.where(gte(schema.results.at, since))
+		.groupBy(schema.results.outcome)
+		.all();
+	return Object.fromEntries(rows.map((r) => [r.outcome, r.n]));
+}
+
 /** 每个 agent：配置、正在跑什么、今天跑了多少、花了多少 */
 function agentStats(records: RecordRow[], today: string) {
 	const isToday = (ts: number) => new Date(ts * 1000).toLocaleDateString("sv-SE") === today;
@@ -237,23 +254,105 @@ function agentStats(records: RecordRow[], today: string) {
 	});
 }
 
+/**
+ * 待你处理：需要 Yi 判断的事汇成一张表。
+ * now：有人在等（待确认的草稿、起草失败、告警结论）；soon：agent 任务待看或失败；later：建议不回的草稿、有争议的记忆。
+ * 推送规则（docs/pipeline.md）：now 和 soon 都已经私聊过，这里是汇总；有争议的记忆只在这里，不推送。
+ */
+export interface InboxItem {
+	kind: "draft" | "failure" | "dev" | "memory" | "watch";
+	/** 打开用：草稿 id、看板任务 id、agent 任务 id、记忆 id */
+	ref: string;
+	level: "now" | "soon" | "later";
+	why: string;
+	title: string;
+	label: string;
+	at: number;
+}
+
+const LEVEL = { now: 0, soon: 1, later: 2 };
+
+export function buildInbox(drafts: Draft[], tasks: Task[], devTasks: DevTask[], contested: Memory[], issues: Issue[] = []): InboxItem[] {
+	const items: InboxItem[] = issues.map((i) => ({
+		kind: "watch",
+		ref: i.key,
+		level: "now",
+		why: i.title,
+		title: i.detail,
+		label: "Watchdog",
+		at: now(),
+	}));
+	for (const d of drafts) {
+		if (d.status !== "pending" && d.status !== "noreply") continue;
+		items.push({
+			kind: "draft",
+			ref: d.id,
+			level: d.status === "pending" ? "now" : "later",
+			why: d.status === "pending" ? "草稿待确认" : "建议不回，确认一下",
+			title: d.text,
+			label: draftLabel(d),
+			at: d.created,
+		});
+	}
+	for (const t of tasks) {
+		if (t.status !== "blocked") continue;
+		items.push({
+			kind: "failure",
+			ref: t.id,
+			level: t.type === "draft" ? "now" : "soon",
+			why: `${t.type === "draft" ? "起草失败" : "问答失败"}：${(t.error ?? "").slice(0, 80)}`,
+			title: t.title,
+			label: t.label,
+			at: t.created,
+		});
+	}
+	for (const t of devTasks) {
+		if (t.status !== "review" && t.status !== "failed") continue;
+		const alert = t.agent === ALERT_AGENT;
+		items.push({
+			kind: "dev",
+			ref: t.id,
+			level: alert && t.status === "review" ? "now" : "soon",
+			why: t.status === "failed" ? "agent 任务失败" : alert ? "告警结论待看" : t.agent === "dev" ? "开发任务待审核" : "agent 任务待看",
+			title: t.title,
+			label: t.agent,
+			at: t.updated,
+		});
+	}
+	for (const m of contested)
+		items.push({
+			kind: "memory",
+			ref: String(m.id),
+			level: "later",
+			why: "记忆有冲突，等你裁定",
+			title: m.content,
+			label: m.kind,
+			at: m.updated,
+		});
+	return items.toSorted((a, b) => LEVEL[a.level] - LEVEL[b.level] || b.at - a.at);
+}
+
 export function dashboardState() {
 	const drafts = db().select().from(schema.drafts).orderBy(desc(schema.drafts.created)).limit(300).all();
 	const records = recentRecords(1000);
+	const tasks = buildTasks(drafts, records);
 	const today = new Date().toLocaleDateString("sv-SE");
 	const todays = records.filter((r) => new Date(r.ts * 1000).toLocaleDateString("sv-SE") === today);
 	const usage = { input: 0, output: 0, cacheRead: 0, cost: 0 };
 	for (const r of todays) for (const k of Object.keys(usage) as Array<keyof typeof usage>) usage[k] += (r.usage as any)?.[k] ?? 0;
-	const count = (...st: string[]) => todays.filter((r) => st.includes(r.status)).length;
+	const countRecords = (...st: string[]) => todays.filter((r) => st.includes(r.status)).length;
+	// 进来多少、结果如何按四段模型的表算：trigger 是今天进来的事件，result 是今天走完的 action
+	const dayStart = new Date(`${today}T00:00:00`).getTime() / 1000;
+	const outcomes = todayOutcomes(dayStart);
 	return {
 		now: now(),
 		stats: {
-			requests: count("replied", "failed", "drafted"),
-			replied: count("replied"),
-			drafted: count("drafted"),
-			sent: count("sent"),
-			discarded: count("discarded"),
-			failed: count("failed"),
+			requests: todayTriggers(dayStart),
+			replied: outcomes.replied ?? 0,
+			drafted: countRecords("drafted"),
+			sent: outcomes.sent ?? 0,
+			discarded: outcomes.discarded ?? 0,
+			failed: outcomes.failed ?? 0,
 			usage,
 			pending: drafts.filter((d) => d.status === "pending" || d.status === "noreply").length,
 		},
@@ -265,7 +364,8 @@ export function dashboardState() {
 			.toSorted((a, b) => b.created - a.created)
 			.slice(0, 100),
 		records: records.slice(0, 300),
-		tasks: buildTasks(drafts, records),
+		tasks,
+		inbox: buildInbox(drafts, tasks, devTasksList(), listMemories(["contested"]), watchdogIssues()),
 	};
 }
 

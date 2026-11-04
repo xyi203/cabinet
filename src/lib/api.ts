@@ -109,6 +109,17 @@ export interface Task {
 	dev?: string;
 }
 
+/** 待你处理：服务端按急缓排好（server/tasks.ts buildInbox） */
+export interface InboxItem {
+	kind: "draft" | "failure" | "dev" | "memory" | "watch";
+	ref: string;
+	level: "now" | "soon" | "later";
+	why: string;
+	title: string;
+	label: string;
+	at: number;
+}
+
 export interface State {
 	now: number;
 	stats: {
@@ -128,6 +139,7 @@ export interface State {
 	agents: AgentStat[];
 	records: RecordRow[];
 	tasks: Task[];
+	inbox: InboxItem[];
 	auth: { authorized: boolean; refreshExpiresAt?: number };
 	pollSince: number | null;
 }
@@ -256,3 +268,20 @@ export interface ModelOption {
 }
 
 export const fetchModels = () => getJson<{ models: ModelOption[] }>("/api/models").then((d) => d.models);
+
+export interface Schedule {
+	id: string;
+	name: string;
+	cron: string;
+	agent: string;
+	prompt: string;
+	enabled: boolean;
+	nextRun: number | null;
+	lastRun: number | null;
+	lastTask: string | null;
+}
+export const fetchSchedules = () => getJson<{ items: Schedule[] }>("/api/schedules").then((d) => d.items);
+export const saveSchedule = (s: Partial<Schedule> & Pick<Schedule, "name" | "cron" | "agent" | "prompt">) =>
+	post<{ item: Schedule }>("/api/schedules", s).then((d) => d.item);
+export const runSchedule = (id: string) => post<{ task: string }>(`/api/schedules/${id}/run`).then((d) => d.task);
+export const deleteSchedule = (id: string) => post(`/api/schedules/${id}/delete`);

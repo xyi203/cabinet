@@ -15,7 +15,7 @@ export const STATUS: Record<string, string> = {
 	revising: "改写中",
 	skipped: "已亲自回复",
 };
-export const AGENT_NAME: Record<string, string> = { cr: "CR", ask: "咨询", chat: "简单回应", general: "通用", dev: "开发" };
+export const AGENT_NAME: Record<string, string> = { cr: "CR", ask: "咨询", chat: "简单回应", general: "通用", dev: "开发", alert: "告警" };
 export const GLYPH: Record<string, string> = {
 	THUMBSUP: "👍",
 	OK: "👌",

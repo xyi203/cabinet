@@ -1,17 +1,26 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
 import { AgentBoard } from "../components/AgentBoard";
 import { Board } from "../components/Board";
 import { DevDrawer } from "../components/DevDrawer";
 import { DraftDrawer, TaskDrawer } from "../components/Drawers";
+import { Inbox } from "../components/Inbox";
 import { DraftList, RecordList } from "../components/Lists";
 import { MemoryBoard } from "../components/MemoryBoard";
-import { type DevTask, type Draft, type Task, fetchState, post } from "../lib/api";
+import { type DevTask, type Draft, type InboxItem, type Task, fetchState, post } from "../lib/api";
 import { isLive, money } from "../lib/format";
 import { useLiveUpdates } from "../lib/live";
 
-const TITLES = { tasks: "我的任务", agents: "Agent", todo: "待办", drafts: "草稿", qa: "对话", failed: "失败", memory: "记忆" } as const;
+const TITLES = {
+	tasks: "我的任务",
+	agents: "Agent",
+	todo: "待你处理",
+	drafts: "草稿",
+	qa: "对话",
+	failed: "失败",
+	memory: "记忆",
+} as const;
 type View = keyof typeof TITLES;
 
 // 当前视图放在地址栏（?view=todo），刷新和收藏都能回到原处
@@ -44,6 +53,22 @@ function Dashboard() {
 		setOpen(d && isLive(d) ? { draft: d, task: t } : { task: t, draft: d });
 	};
 	const openDraft = (d: Draft) => setOpen({ draft: d, task: state?.tasks.find((t) => t.draft === d.id) });
+	const navigate = useNavigate();
+	const openInbox = (it: InboxItem) => {
+		if (it.kind === "watch") return;
+		if (it.kind === "dev") return setOpen({ dev: it.ref });
+		if (it.kind === "memory") return void navigate({ to: "/", search: { view: "memory" } });
+		if (it.kind === "draft") {
+			const d = state?.drafts.find((x) => x.id === it.ref);
+			if (d) openDraft(d);
+			return;
+		}
+		const t = state?.tasks.find((x) => x.id === it.ref);
+		if (t) openTask(t);
+	};
+	// 后端还没重启到带 inbox 的版本时按空处理
+	const inbox = state?.inbox ?? [];
+	const inboxNow = inbox.filter((it) => it.level === "now").length;
 
 	const s = state?.stats;
 	const attn = state?.tasks.filter((t) => t.status === "in_review" || t.status === "blocked").length ?? 0;
@@ -63,7 +88,7 @@ function Dashboard() {
 					badge={state?.devTasks.filter((t) => t.status === "running" || t.status === "review").length ?? 0}
 					hot={state?.devTasks.some((t) => t.status === "review") ?? false}
 				/>
-				<Nav current={view} v="todo" badge={s?.pending ?? 0} hot={(s?.pending ?? 0) > 0} />
+				<Nav current={view} v="todo" badge={inbox.length} hot={inboxNow > 0} />
 				<div className="group">会话与消息</div>
 				<Nav current={view} v="drafts" />
 				<Nav current={view} v="qa" />
@@ -91,7 +116,7 @@ function Dashboard() {
 				{state && !state.auth.authorized && <AuthBanner />}
 				{state && view === "tasks" && <Board state={state} onOpen={openTask} />}
 				{state && view === "agents" && <AgentBoard state={state} onOpen={(id) => setOpen({ dev: id })} />}
-				{state && view === "todo" && <DraftList drafts={state.drafts.filter(isLive)} onOpen={openDraft} />}
+				{state && view === "todo" && <Inbox items={inbox} now={state.now} onOpen={openInbox} />}
 				{state && view === "drafts" && <DraftList drafts={state.drafts} onOpen={openDraft} />}
 				{state && view === "qa" && <RecordList records={state.records.filter((r) => r.kind !== "draft")} />}
 				{state && view === "failed" && <RecordList records={state.records.filter((r) => r.status === "failed")} />}

@@ -11,6 +11,8 @@ export interface GuardPolicy {
 	/** 放行的命令族：git / glab / meegle / lark-cli / archery / superset / sls / git-local */
 	bash: string[];
 	skillsDir: string;
+	/** 这个会话能不能用 lookup（链式召回）：群里问答的会话不能 */
+	lookup?: boolean;
 	/** 允许 edit / write 的目录：只有开发任务有，是它自己的 worktree */
 	writeRoots?: string[];
 	/** 允许执行的构建/测试命令前缀，例如 "go test"；只能在 writeRoots 里执行 */
@@ -67,6 +69,13 @@ function scriptRules(skillsDir: string): Record<string, ScriptRule> {
 			deny: ["auth"],
 		},
 		sls: { argv0: ["python3", path.join(skillsDir, "sls/scripts/sls_query.py")], allow: ["query", "check", "logstores"], deny: [] },
+		grafana: {
+			argv0: [path.join(skillsDir, "grafana/scripts/grafana")],
+			allow: ["alerts", "datasources", "search", "dashboard", "panel", "query"],
+			deny: ["config"],
+		},
+		// analyze 读 Grafana 的状态历史算真实持续时长；aggregate 要读本地导出文件，告警分析用不上
+		oncall: { argv0: [path.join(skillsDir, "oncall/scripts/oncall")], allow: ["analyze"], deny: ["aggregate"] },
 	};
 }
 
@@ -119,6 +128,7 @@ export class Guard {
 	readonly scripts: Record<string, ScriptRule>;
 	readonly writeRoots: string[];
 	readonly commands: string[][];
+	readonly lookup: boolean;
 
 	constructor(policy: GuardPolicy) {
 		// 根目录不存在时直接丢弃，不能让守卫构造失败
@@ -127,6 +137,7 @@ export class Guard {
 		this.commands = (policy.commands ?? []).map((c) => c.trim().split(/\s+/));
 		this.enabled = new Set(policy.bash);
 		this.scripts = scriptRules(policy.skillsDir);
+		this.lookup = Boolean(policy.lookup);
 	}
 
 	resolveInside(cwd: string, p: string | undefined, roots = this.roots): string | undefined {
@@ -261,6 +272,9 @@ export class Guard {
 			case "memory":
 				// 只读，只查 cabinet 自己的记忆库
 				return undefined;
+			case "lookup":
+				// 只读，但能看到私聊和草稿：只给结果先经 Yi 过目的会话
+				return this.lookup ? undefined : "这个会话不能用 lookup";
 			case "bash":
 				input.command = this.normalizeScriptPath(String(input.command ?? ""));
 				return this.checkBash(String(input.command), cwd);

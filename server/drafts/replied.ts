@@ -7,6 +7,7 @@ import type { MeegoCard } from "../db/schema.ts";
 import { listMessages } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import { meegoYiReplied } from "../meego.ts";
+import { settle } from "../pipeline.ts";
 import { enqueueMemory } from "../memory/extract.ts";
 import { log } from "../util.ts";
 import { type ChatRef, claim, LIVE } from "./store.ts";
@@ -62,6 +63,7 @@ export function expireDrafts(chat: ChatRef, m: Message) {
 		const src = [{ message_id: d.replyTo, thread_id: d.threadId ?? undefined, sender: { id: d.senderId, name: "", sender_type: "user" } }];
 		if (ownerReplyCovers(chat.chat_mode, m, src) && claim(d.id, LIVE, "expired")) {
 			log("草稿作废：Yi 已亲自回复", d.id);
+			settle({ actionKind: "draft", actionId: d.id, routeId: d.routeId, outcome: "expired", effect: "internal", ref: m.message_id });
 			// Yi 没用草稿、自己回的那句，是最直接的口吻样本
 			enqueueMemory({
 				type: "draft",
@@ -84,6 +86,7 @@ export async function expireMeegoDrafts() {
 		if (d.meego && (await meegoYiReplied(d.meego)) && claim(d.id, LIVE, "expired")) {
 			changed();
 			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: "expired" });
+			settle({ actionKind: "draft", actionId: d.id, routeId: d.routeId, outcome: "expired", effect: "internal" });
 			log("飞书项目草稿作废：Yi 已亲自评论", d.id);
 		}
 	}

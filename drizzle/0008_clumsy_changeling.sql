@@ -1,0 +1,1 @@
+ALTER TABLE `routes` ADD `info` text DEFAULT '{}' NOT NULL;

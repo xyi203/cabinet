@@ -2,10 +2,11 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { changed } from "../bus.ts";
 import { OWNER_OPEN_ID } from "../config.ts";
-import { db, schema } from "../db/index.ts";
+import { db, getKv, schema, setKv } from "../db/index.ts";
 import type { Draft, MeegoCard } from "../db/schema.ts";
-import { sendToUserAsBot } from "../lark/bot.ts";
-import { now } from "../util.ts";
+import { queuePatch, sendCardToUserAsBot, sendToUserAsBot } from "../lark/bot.ts";
+import { log, now } from "../util.ts";
+import { draftCard, where } from "./card.ts";
 import { describeReply, type Kind, NO_REPLY_MARK, parseDraftBody, splitNote } from "./format.ts";
 
 export class DraftError extends Error {}
@@ -36,6 +37,7 @@ export interface Source {
 	agent?: string | null;
 	session?: string | null;
 	route?: string | null;
+	routeId?: number | null;
 }
 
 /** 起草中的消息：草稿推送完才记为已处理，进程中途退出时重启还能补上；起草期间下一轮轮询靠它去重 */
@@ -59,6 +61,7 @@ export function setStatus(id: string, status: string, extra: Partial<Draft> = {}
 		.where(eq(schema.drafts.id, id))
 		.run();
 	changed();
+	syncCard(id);
 }
 
 /** 原子地把草稿从可处理状态改成 to；飞书里回「发」和看板点发送同时到达时只有一个能拿到 */
@@ -68,7 +71,23 @@ export function claim(id: string, from: string[], to: string): boolean {
 		.set({ status: to })
 		.where(and(eq(schema.drafts.id, id), inArray(schema.drafts.status, from)))
 		.run();
-	return r.changes === 1;
+	if (r.changes !== 1) return false;
+	syncCard(id);
+	return true;
+}
+
+const cardKey = (id: string) => `draftcard:${id}`;
+
+/**
+ * 按草稿当前的状态重画它的卡片。状态在哪里变的都一样（卡片按钮、私聊指令、看板、Yi 亲自回复）。
+ * 早于卡片的草稿是富文本消息，不更新。notice 是卡片顶上的一行提示（比如发送失败的原因）。
+ */
+export function syncCard(id: string, notice = "") {
+	if (!getKv(cardKey(id), false)) return;
+	queuePatch(id, () => {
+		const d = getDraft(id);
+		return d && draftCard(d, notice);
+	});
 }
 
 const quote = (t: string) =>
@@ -77,13 +96,9 @@ const quote = (t: string) =>
 		.map((l) => `> ${l}`)
 		.join("\n");
 
-export async function pushDraft(source: Source, draft: string, replaces?: string): Promise<string> {
-	const { body: rawBody, note, report } = splitNote(draft);
-	const noReply = rawBody.startsWith(NO_REPLY_MARK);
-	const { kind, content: body } = noReply ? { kind: "text" as Kind, content: rawBody } : parseDraftBody(rawBody);
-	const where =
-		source.chatMode === "p2p" ? "私聊" : source.chatMode === "meego" ? `飞书项目「${source.chatName}」@你` : `群「${source.chatName}」@你`;
-	const parts = [`**${where}** · ${source.senderName}`];
+/** 卡片发不出去时的退路：原来的富文本草稿，靠引用回复「发 / 改 / 不发」处理 */
+function draftText(source: Source, kind: Kind, body: string, note: string, report: string, noReply: boolean) {
+	const parts = [`**${where(source)}**`];
 	if (source.chatMode === "meego" && source.meego) parts.push(source.meego.url);
 	// 只看 @ 那一条常常不知道在说什么：私聊草稿里带上相关前文的最后几行
 	else if (source.context) parts.push(`前文：\n${quote(source.context.slice(-500))}`);
@@ -96,29 +111,52 @@ export async function pushDraft(source: Source, draft: string, replaces?: string
 		if (note) parts.push(`备注（不会发出）：${note}`);
 		parts.push("回复本条：`发` / `改 <意见>` / `表情 <类型>` / `表情包 <名字>` / `完成` / `不发`");
 	}
-	// Yi 主动要求改写的结果总要私聊回给他
-	const quiet = !replaces && (noReply || kind === "reaction");
+	return parts.join("\n\n");
+}
+
+/** 把草稿私聊给 Yi（一张可以直接操作的卡片），草稿 id 就是这条私聊的消息 id；replaces 是被改写掉的上一版 */
+export async function pushDraft(source: Source, draft: string, replaces?: string): Promise<string> {
+	const { body: rawBody, note, report } = splitNote(draft);
+	const noReply = rawBody.startsWith(NO_REPLY_MARK);
+	const { kind, content: body } = noReply ? { kind: "text" as Kind, content: rawBody } : parseDraftBody(rawBody);
+	const row = {
+		...source,
+		threadId: source.threadId ?? null,
+		meego: source.meego ?? null,
+		kind,
+		draft: body,
+		note,
+		report,
+		status: noReply ? "noreply" : "pending",
+		created: now(),
+	};
+	// 表情回复的草稿不私聊打扰 Yi，只上看板（「待你处理」）；Yi 主动要求改写的结果总要私聊回给他。
+	// 建议不回复的照样私聊：Yi 要确认一下是不是真的不用回
+	const quiet = !replaces && kind === "reaction";
+	let dmId: string;
+	let isCard = !quiet;
 	// 带时间后缀：同一条消息改写后又是表情时 id 不能撞上被替换的那条
-	const dmId = quiet
-		? `${QUIET_PREFIX}${source.replyTo}_${Date.now().toString(36)}`
-		: await sendToUserAsBot(OWNER_OPEN_ID, parts.join("\n\n"));
+	if (quiet) dmId = `${QUIET_PREFIX}${source.replyTo}_${Date.now().toString(36)}`;
+	else
+		try {
+			dmId = await sendCardToUserAsBot(
+				OWNER_OPEN_ID,
+				draftCard({ id: "", context: "", agent: null, session: null, route: null, ...row } as Draft),
+			);
+		} catch (e) {
+			// 卡片被平台拒了（结构不对、超长）也不能丢草稿：退回富文本
+			log("草稿卡片发送失败，改发文字", e);
+			isCard = false;
+			dmId = await sendToUserAsBot(OWNER_OPEN_ID, draftText(source, kind, body, note, report, noReply));
+		}
 	db().transaction((tx) => {
 		if (replaces) tx.update(schema.drafts).set({ status: "replaced" }).where(eq(schema.drafts.id, replaces)).run();
 		tx.insert(schema.drafts)
-			.values({
-				id: dmId,
-				...source,
-				threadId: source.threadId ?? null,
-				meego: source.meego ?? null,
-				kind,
-				draft: body,
-				note,
-				report,
-				status: noReply ? "noreply" : "pending",
-				created: now(),
-			})
+			.values({ id: dmId, ...row })
 			.run();
 	});
+	if (isCard) setKv(cardKey(dmId), true);
+	if (replaces) syncCard(replaces);
 	changed();
 	return dmId;
 }

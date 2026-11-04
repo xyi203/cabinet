@@ -37,14 +37,14 @@ import {
 	SKILLS_DIR,
 } from "../config.ts";
 import { type RecallScope, recallBlock } from "../memory/recall.ts";
-import { getKv, setKv } from "../db/index.ts";
+import { deleteKv, getKv, listKv, setKv } from "../db/index.ts";
 import { openTursoDurable } from "../db/turso.ts";
 import type { Usage } from "../db/schema.ts";
 import { Guard } from "./guard.ts";
 import { QUOTA_RE, log, now } from "../util.ts";
 import { models, resolveModel, textOf } from "./models.ts";
 import type { AgentConfig } from "./router.ts";
-import { findTool, grepTool, lsTool, memoryTool } from "./tools.ts";
+import { findTool, grepTool, lookupTool, lsTool, memoryTool } from "./tools.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -63,6 +63,8 @@ export interface RunOptions {
 	agentName?: string;
 	/** 允许写的目录（开发任务的 worktree） */
 	writeRoots?: string[];
+	/** 给链式召回工具 lookup：只有结果先经 Yi 过目的运行才给（起草、改写、agent 任务），群里的问答不给 */
+	lookup?: boolean;
 	/** 按这段文字召回长期记忆，带在这一轮的输入里；不给就不带 */
 	memory?: { query: string; scope: RecallScope };
 }
@@ -72,6 +74,32 @@ export interface RunResult {
 	usage: Usage;
 	/** 实际使用的会话 key，执行日志按它查 */
 	sessionId: string;
+}
+
+/**
+ * 一次提交的接回凭据：第一次提交后记在 kv 的 run:<requestId>。重启后同一个 requestId 再来时直接挂回这次提交，
+ * 不重新配置（会把已经换上的备用模型改回去）、不重新召回、不重新提交；before 是提交前的用量，花费按它算全。
+ * 调用方处理完结果后用 forgetRun 清掉；清掉之后再来，durable 仍按 requestId 认出原来的提交（只是要重新准备一遍）。
+ */
+interface RunRecord {
+	key: string;
+	/** 提交所在的 durable 会话：接回时用它，不按 key 重新找（key 闲置太久会换新会话） */
+	convId: number;
+	submissionId: string;
+	/** 换成备用模型后的 continue 提交：它没有 requestId，只能靠这里接回 */
+	continueId?: string;
+	before: Usage;
+	at: number;
+}
+const runKey = (requestId: string) => `run:${requestId}`;
+
+/** 这个 requestId 上次提交过、还能接回 */
+export const hasRun = (requestId: string) => getKv<RunRecord | null>(runKey(requestId), null) !== null;
+export const forgetRun = (requestId: string) => deleteKv(runKey(requestId));
+
+/** 启动时清掉很久以前的接回凭据（调用方没来得及清的） */
+export function pruneRuns(maxAge = 3 * 86400) {
+	for (const { key, value } of listKv<RunRecord>("run:")) if (now() - value.at > maxAge) deleteKv(key);
 }
 
 export interface RunningInfo {
@@ -108,6 +136,7 @@ const TOOLS = {
 	edit: createEditTool(),
 	write: createWriteTool(),
 	memory: memoryTool,
+	lookup: lookupTool,
 };
 type ToolName = keyof typeof TOOLS;
 const DEFAULT_TOOLS: ToolName[] = ["read", "grep", "find", "ls", "bash", "memory"];
@@ -121,10 +150,11 @@ interface StoredPolicy {
 	runId: string;
 	writeRoots?: string[];
 	commands?: string[];
+	lookup?: boolean;
 }
 
 const guardOf = (p: StoredPolicy) =>
-	new Guard({ roots: p.roots, bash: p.bash, skillsDir: SKILLS_DIR, writeRoots: p.writeRoots, commands: p.commands });
+	new Guard({ roots: p.roots, bash: p.bash, skillsDir: SKILLS_DIR, writeRoots: p.writeRoots, commands: p.commands, lookup: p.lookup });
 const policies = new Map<string, { guard: Guard; cwd: string; runId: string }>();
 
 function policyOf(convId: string) {
@@ -291,7 +321,9 @@ async function waitSettled(submission: { wait(c: typeof ctx): Promise<any> }, co
 
 export async function runPi(opts: RunOptions): Promise<RunResult> {
 	const agent = opts.agent ?? {};
-	const toolNames = (agent.tools ?? DEFAULT_TOOLS).filter((t): t is ToolName => t in TOOLS);
+	const base = (agent.tools ?? DEFAULT_TOOLS).filter((t): t is ToolName => t in TOOLS && t !== "lookup");
+	// agent 显式配成不带工具（tools: []）的不加
+	const toolNames: ToolName[] = opts.lookup && base.length ? [...base, "lookup"] : base;
 	// 不复用会话的 agent 也要按 requestId 固定 key：durable 在同一个 conversation 里认 requestId，重启后才接得回
 	const key = opts.sessionId || (opts.requestId ? `once-${opts.requestId}` : `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
 	const info: RunningInfo = { label: opts.label ?? "", started: now(), chatId: opts.chatId, agent: opts.agentName, sessionId: key };
@@ -300,52 +332,74 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 	let ok = false;
 	try {
 		const h = await harness();
-		const conv = await conversationFor(key);
-		const skills = toolNames.includes("read") ? (agent.skills ?? []) : [];
-		// agent 用到的 skill 目录也要能读，否则连 SKILL.md 都打不开
-		const roots = [...READ_ROOTS, PATHS.images, ...skills.map((s) => path.join(SKILLS_DIR, s))];
-		const policy: StoredPolicy = {
-			roots,
-			bash: agent.bash ?? ["git"],
-			cwd: opts.cwd,
-			runId: key,
-			writeRoots: opts.writeRoots,
-			commands: opts.writeRoots ? agent.commands : undefined,
-		};
-		setKv(`conv-policy:${String(conv.id)}`, policy);
-		policies.set(String(conv.id), { guard: guardOf(policy), cwd: opts.cwd, runId: key });
-		const instructions = [
-			agent.prompt ? readText(path.join(CONFIG_DIR, agent.prompt)) : "",
-			...(opts.extraSystem ?? []).map(readText),
-			skillsHint(skills),
-		]
-			.filter(Boolean)
-			.join("\n\n");
 		const spec = agent.model ?? PI_MODEL;
-		await conv.configure(
-			{
-				model: resolveModel(spec),
-				thinkingLevel: (agent.thinking ?? PI_THINKING) as any,
-				tools: toolNames.map((t) => TOOLS[t]),
-				cwd: opts.cwd,
-				instructions,
-			},
-			ctx,
-		);
-		const before = await usageNow(h, conv.id);
-		const memory = opts.memory ? await recallBlock(opts.memory.query, opts.memory.scope) : "";
-		const content = memory ? `${memory}\n\n---\n\n${opts.prompt}` : opts.prompt;
-		let settled = await waitSettled(await conv.submit({ type: "input", content, requestId: opts.requestId }, ctx), conv);
-		// 额度/限流这类错误换模型也能跑：同一会话里换成备用模型接着做，前面已经查到的内容不丢
 		const fallback = agent.fallbackModel ?? PI_FALLBACK_MODEL;
-		if (settled.status === "unanswered" && fallback && fallback !== spec) {
+		// 重启接回：上次已经提交过，直接挂回那次提交，不重新配置、不重新召回、不重新提交（见 RunRecord）
+		const rec = opts.requestId ? getKv<RunRecord | null>(runKey(opts.requestId), null) : null;
+		const resumed = rec?.key === key ? await h.submission((rec.continueId ?? rec.submissionId) as any, ctx) : undefined;
+		const recConv = resumed && rec?.convId ? await h.conversation(rec.convId as any, ctx) : undefined;
+		const conv = recConv ?? (await conversationFor(key));
+		let submission: NonNullable<typeof resumed>;
+		let record: RunRecord;
+		if (resumed && rec) {
+			log("接回运行", key, opts.requestId, rec.continueId ? "（备用模型那一段）" : "");
+			submission = resumed;
+			record = rec;
+		} else {
+			const skills = toolNames.includes("read") ? (agent.skills ?? []) : [];
+			// agent 用到的 skill 目录也要能读，否则连 SKILL.md 都打不开
+			// 消息里的截图存在 PATHS.images，agent 用 read 打开
+			const roots = [...READ_ROOTS, PATHS.images, ...skills.map((s) => path.join(SKILLS_DIR, s))];
+			const policy: StoredPolicy = {
+				roots,
+				bash: agent.bash ?? ["git"],
+				cwd: opts.cwd,
+				runId: key,
+				writeRoots: opts.writeRoots,
+				commands: opts.writeRoots ? agent.commands : undefined,
+				lookup: toolNames.includes("lookup"),
+			};
+			setKv(`conv-policy:${String(conv.id)}`, policy);
+			policies.set(String(conv.id), { guard: guardOf(policy), cwd: opts.cwd, runId: key });
+			const instructions = [
+				agent.prompt ? readText(path.join(CONFIG_DIR, agent.prompt)) : "",
+				...(opts.extraSystem ?? []).map(readText),
+				skillsHint(skills),
+			]
+				.filter(Boolean)
+				.join("\n\n");
+			await conv.configure(
+				{
+					model: resolveModel(spec),
+					thinkingLevel: (agent.thinking ?? PI_THINKING) as any,
+					tools: toolNames.map((t) => TOOLS[t]),
+					cwd: opts.cwd,
+					instructions,
+				},
+				ctx,
+			);
+			const before = await usageNow(h, conv.id);
+			const memory = opts.memory ? await recallBlock(opts.memory.query, opts.memory.scope) : "";
+			const content = memory ? `${memory}\n\n---\n\n${opts.prompt}` : opts.prompt;
+			submission = await conv.submit({ type: "input", content, requestId: opts.requestId }, ctx);
+			record = { key, convId: Number(conv.id), submissionId: String(submission.id), before, at: now() };
+			if (opts.requestId) setKv(runKey(opts.requestId), record);
+		}
+		let settled = await waitSettled(submission, conv);
+		// 额度/限流这类错误换模型也能跑：同一会话里换成备用模型接着做，前面已经查到的内容不丢。已经换过的不再换
+		if (settled.status === "unanswered" && !record.continueId && fallback && fallback !== spec) {
 			const failure = (await h.snapshot(LiveDoc, conv.id, ctx))?.runFailure as any;
 			if (QUOTA_RE.test(String(failure?.detail ?? ""))) {
 				log(`模型 ${spec} 不可用（${String(failure.detail).slice(0, 80)}），换用 ${fallback}`, opts.label ?? "");
 				await conv.configure({ model: resolveModel(fallback) }, ctx);
-				settled = await waitSettled(await conv.submit({ type: "continue" }, ctx), conv);
+				const cont = await conv.submit({ type: "continue" }, ctx);
+				// continue 没有 requestId：记下它的 ID，这一段里重启也接得回
+				record = { ...record, continueId: String(cont.id) };
+				if (opts.requestId) setKv(runKey(opts.requestId), record);
+				settled = await waitSettled(cont, conv);
 			}
 		}
+		const before = record.before;
 		if (settled.status !== "done" || (settled.type !== "input" && settled.type !== "continue")) {
 			const failure = (await h.snapshot(LiveDoc, conv.id, ctx))?.runFailure as any;
 			throw new Error(`pi 失败 ${settled.reason ?? settled.status} ${failure?.detail ?? ""}`.trim());

@@ -7,8 +7,9 @@ import { DraftError, LIVE, pickDraft } from "./drafts/store.ts";
 import { locks, sem } from "./agent/slots.ts";
 import { LarkError, quotedMessage, react, replyAsBot, threadContext, unreact } from "./lark/bot.ts";
 import type { BotEvent } from "./lark/types.ts";
+import { decide, openRoute, receive, settle } from "./pipeline.ts";
 import { record } from "./records.ts";
-import { runPi } from "./agent/driver.ts";
+import { forgetRun, runPi } from "./agent/driver.ts";
 import { closeTask, devTaskOfDm, discardDev, messageDev, pushDev, stopDev } from "./dev.ts";
 import { deleteKv, listKv, setKv } from "./db/index.ts";
 import { enqueueMemory } from "./memory/extract.ts";
@@ -63,8 +64,9 @@ async function buildPrompt(ev: BotEvent, text: string) {
 	return parts.join("\n\n");
 }
 
-async function remember(ev: BotEvent, text: string) {
+async function remember(ev: BotEvent, text: string, tid: string) {
 	const content = text.replace(/^记住[:：,，\s]*/, "").trim();
+	const routeId = decide([tid], { rule: "记住", actionKind: "remember", actionId: ev.messageId });
 	if (ev.senderId !== OWNER_OPEN_ID) return void (await reply(ev, `写入记忆需要${OWNER_NAME}确认，可以请${OWNER_NAME}来说「记住 …」。`));
 	if (!content) return void (await reply(ev, "要记住什么？用法：记住 xxx"));
 	// 只有 Yi 能写；正文就是他的原话，模型只帮着分类，群里的提示词注入写不进长期记忆
@@ -72,10 +74,14 @@ async function remember(ev: BotEvent, text: string) {
 	try {
 		m = await rememberStatement(content, ev.messageId);
 	} catch (e) {
-		if (e instanceof MemoryError) return void (await reply(ev, `没记下：${e.message}。`));
+		if (e instanceof MemoryError) {
+			settle({ actionKind: "remember", actionId: ev.messageId, routeId, outcome: "failed", effect: "internal", detail: e.message });
+			return void (await reply(ev, `没记下：${e.message}。`));
+		}
 		throw e;
 	}
 	await react(ev.messageId, "DONE");
+	settle({ actionKind: "remember", actionId: ev.messageId, routeId, outcome: "remembered", effect: "internal", ref: `memory:${m.id}` });
 	if (m.application === "convention") await reply(ev, `记成长期约定 #${m.id}，适用：${m.appliesWhen}。不对的话在看板「记忆」里改。`);
 	record({ kind: "qa", status: "remembered", source: ev.messageId, chatId: ev.chatId, question: content, label: "记忆" });
 }
@@ -83,7 +89,7 @@ async function remember(ev: BotEvent, text: string) {
 const DRAFT_CMD = /^(发|不发|改|表情包|表情|完成|已处理)(?:$|[\s:：,，]+([\s\S]*))/;
 
 /** Yi 私聊机器人的草稿指令；返回 false 表示不是指令，当普通问题处理 */
-async function draftCommand(ev: BotEvent, text: string): Promise<boolean> {
+async function draftCommand(ev: BotEvent, text: string, tid: string): Promise<boolean> {
 	const m = DRAFT_CMD.exec(text);
 	if (!m) return false;
 	const cmd = m[1];
@@ -95,6 +101,7 @@ async function draftCommand(ev: BotEvent, text: string): Promise<boolean> {
 		await reply(ev, "没有待处理的草稿。");
 		return true;
 	}
+	decide([tid], { rule: `草稿指令：${cmd}`, actionKind: "command", actionId: d.id });
 	if (cmd === "改" && !opinion) {
 		await reply(ev, "怎么改？用法：改 <意见>");
 		return true;
@@ -155,19 +162,36 @@ async function devReply(ev: BotEvent, id: string, text: string) {
 export async function handle(ev: BotEvent, attempt?: string) {
 	const text = stripMentions(ev);
 	if (!text) return;
-	if (text.startsWith("记住")) return remember(ev, text);
+	// 发给机器人的消息就是 trigger：accept() 已经做过程序规则（只认 Yi 的私聊、配置的群里 @机器人）
+	const key = ev.rootId ?? ev.messageId;
+	const tid = receive({
+		channel: "bot",
+		externalId: ev.messageId,
+		thread: `bot:${ev.chatId}#${key}`,
+		actorId: ev.senderId,
+		owner: ev.senderId === OWNER_OPEN_ID,
+		text,
+	});
+	if (text.startsWith("记住")) return remember(ev, text, tid);
 	if (ev.chatType === "p2p" && ev.senderId === OWNER_OPEN_ID) {
 		// 引用了开发任务的通知：这条就是发给 dev agent 的
 		const devId = devTaskOfDm(ev.parentId ?? ev.rootId);
-		if (devId) return devReply(ev, devId, text);
-		if (await draftCommand(ev, text)) return;
+		if (devId) {
+			decide([tid], { rule: "回复 agent 任务", actionKind: "command", actionId: devId });
+			return devReply(ev, devId, text);
+		}
+		if (await draftCommand(ev, text, tid)) return;
 	}
-	const key = ev.rootId ?? ev.messageId;
 	const cwd = CHATS[ev.chatId] ?? DEFAULT_CWD;
 	const label = ev.chatType === "p2p" ? "私聊机器人" : `群 ${ev.chatId.slice(-6)}`;
 	const started = now();
+	// 重启接回、手动重试之外的重复到达沿用同一次分派
+	const routeId =
+		openRoute([tid], "qa")?.id ??
+		decide([tid], { agent: "qa", rule: "@机器人问答", session: key, actionKind: "qa", actionId: ev.messageId });
 	const rid = await react(ev.messageId, "OnIt");
 	const pendingKey = `pending:qa:${ev.messageId}`;
+	const requestId = `qa:${ev.messageId}${attempt ? `:${attempt}` : ""}`;
 	setKv(pendingKey, { ev, attempt });
 	let interrupted = false;
 	await locks.run(key, () =>
@@ -176,12 +200,13 @@ export async function handle(ev: BotEvent, attempt?: string) {
 				const { text: answer, usage } = await runPi({
 					cwd,
 					sessionId: key,
-					requestId: `qa:${ev.messageId}${attempt ? `:${attempt}` : ""}`,
+					requestId,
 					prompt: await buildPrompt(ev, text),
 					label,
 					memory: { query: text, scope: { personId: ev.senderId === OWNER_OPEN_ID ? undefined : ev.senderId, chatId: ev.chatId } },
 				});
 				await reply(ev, answer);
+				settle({ actionKind: "qa", actionId: ev.messageId, routeId, outcome: "replied", effect: "bot" });
 				await unreact(ev.messageId, rid);
 				await react(ev.messageId, "DONE");
 				record({
@@ -216,6 +241,14 @@ export async function handle(ev: BotEvent, attempt?: string) {
 				}
 				// 失败只记日志、打叉，不把报错原文发进群
 				log("处理失败", ev.messageId, e);
+				settle({
+					actionKind: "qa",
+					actionId: ev.messageId,
+					routeId,
+					outcome: "failed",
+					effect: "internal",
+					detail: String((e as Error).message),
+				});
 				await unreact(ev.messageId, rid);
 				await react(ev.messageId, "CrossMark");
 				record({
@@ -231,7 +264,10 @@ export async function handle(ev: BotEvent, attempt?: string) {
 					retry: ev,
 				});
 			} finally {
-				if (!interrupted) deleteKv(pendingKey);
+				if (!interrupted) {
+					deleteKv(pendingKey);
+					forgetRun(requestId);
+				}
 			}
 		}),
 	);

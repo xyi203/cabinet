@@ -348,6 +348,50 @@ export async function sendToUserAsBot(openId: string, md: string): Promise<strin
 	return id;
 }
 
+/** 机器人私聊发一张卡片（JSON 2.0），返回消息 id；之后用 patchCard 原地更新 */
+export async function sendCardToUserAsBot(openId: string, card: object): Promise<string> {
+	let res;
+	try {
+		res = await client().im.v1.message.create({
+			params: { receive_id_type: "open_id" },
+			data: { receive_id: openId, msg_type: "interactive", content: JSON.stringify(card) },
+		});
+	} catch (e) {
+		throw larkError(e, "发送卡片");
+	}
+	const id = check(res, "发送卡片").message_id;
+	if (!id) throw new Error("发送卡片后拿不到 message_id");
+	return id;
+}
+
+/** 更新已发出的卡片：只能更新 14 天内、update_multi 的卡片，单条消息 5 QPS */
+export async function patchCard(messageId: string, card: object) {
+	try {
+		check(await client().im.v1.message.patch({ path: { message_id: messageId }, data: { content: JSON.stringify(card) } }), "更新卡片");
+	} catch (e) {
+		throw larkError(e, "更新卡片");
+	}
+}
+
+const patchQueues = new Map<string, Promise<void>>();
+
+/**
+ * 排队更新一张卡片：同一条消息的更新按顺序执行，每次执行时才调 render 取最新内容，乱序到达也以最后一次为准。
+ * render 返回 undefined 就不更新。失败只记日志：卡片是界面，状态以库里为准。
+ */
+export function queuePatch(messageId: string, render: () => object | undefined) {
+	const next = (patchQueues.get(messageId) ?? Promise.resolve())
+		.then(async () => {
+			const card = render();
+			if (card) await patchCard(messageId, card);
+		})
+		.catch((e) => log("更新卡片失败", messageId, e));
+	patchQueues.set(messageId, next);
+	void next.finally(() => {
+		if (patchQueues.get(messageId) === next) patchQueues.delete(messageId);
+	});
+}
+
 export async function react(messageId: string, emoji: string): Promise<string | undefined> {
 	try {
 		const res = await client().im.v1.messageReaction.create({
@@ -428,8 +472,12 @@ export function toBotEvent(data: any): BotEvent {
 	};
 }
 
-/** 长连接收 im.message.receive_v1。SDK 自带断线重连；同一应用多条长连接时事件只推给其中一条 */
-export function startEvents(onMessage: (ev: BotEvent) => void) {
+/**
+ * 长连接收 im.message.receive_v1 和卡片回调 card.action.trigger。SDK 自带断线重连；同一应用多条长连接时事件只推给其中一条。
+ * 卡片回调的返回值由 SDK 经长连接回传（toast、新卡片），必须 3 秒内返回。
+ * 开发者后台要在「事件与回调 → 回调配置」选长连接并订阅「卡片回传交互」，否则点按钮没有反应。
+ */
+export function startEvents(onMessage: (ev: BotEvent) => void, onCardAction?: (data: unknown) => Promise<unknown>) {
 	const ws = new lark.WSClient({
 		appId: FEISHU_APP_ID,
 		appSecret: FEISHU_APP_SECRET,
@@ -445,6 +493,18 @@ export function startEvents(onMessage: (ev: BotEvent) => void) {
 				log("处理事件失败", e);
 			}
 		},
+		// 类型定义里没有这个回调
+		...({
+			"card.action.trigger": async (data: unknown) => {
+				if (!onCardAction) return;
+				try {
+					return await onCardAction(data);
+				} catch (e) {
+					log("处理卡片回调失败", e);
+					return { toast: { type: "error", content: "处理失败，详情见日志" } };
+				}
+			},
+		} as any),
 	});
 	ws.start({ eventDispatcher: dispatcher });
 	return () => ws.close();

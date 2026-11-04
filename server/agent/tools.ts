@@ -4,6 +4,7 @@ import { bool, num, obj, opt, str } from "@earendil-works/pi-schema";
 import { execFile } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
+import { LOOKUP_HELP, lookup } from "../lookup.ts";
 import { render, search } from "../memory/recall.ts";
 
 const MAX_OUTPUT = 50_000;
@@ -79,4 +80,15 @@ export const memoryTool = defineTool({
 		const block = render({ conventions: [], references: items });
 		return text(`〔记忆查询结果：已有记忆，不是新证据${degraded ? `；向量检索不可用，只用了关键词` : ""}〕\n${block || "没有相关记忆"}`);
 	},
+});
+
+// 链式召回：按 ID 查消息、分派、草稿、任务、事件流，结果里带着下一跳的 ID。只给结果先经 Yi 过目的运行（见 lookup.ts）
+export const lookupTool = defineTool({
+	name: "lookup",
+	description:
+		"按 ID 查 cabinet 记下的事：某条消息（trigger）被分派给了谁、产出了什么草稿或任务、结果如何；某个事件流（会话、话题、MR）里最近的消息。" +
+		"每个结果只给摘要，末尾「相关」列出下一跳的 ID，需要就接着查。提示里出现的 ID（trigger、route、draft、dev-、thread、gitlab:）都能查。" +
+		LOOKUP_HELP,
+	parameters: obj({ id: str() }),
+	execute: async (args) => text(lookup(args.id)),
 });

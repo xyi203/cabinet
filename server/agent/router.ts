@@ -23,6 +23,10 @@ export interface AgentConfig {
 	commands?: string[];
 	/** 只能手动指派，不参与分诊 */
 	manual?: boolean;
+	/** agent 任务首轮提示的开头；不填是「Yi 在看板上直接交给你的任务」 */
+	brief?: string;
+	/** agent 任务每轮结束都私聊 Yi（不是 Yi 自己派的活，他不会盯着看板）；不填时只有超过一分钟的才通知 */
+	notify?: boolean;
 }
 
 export interface RouterConfig {

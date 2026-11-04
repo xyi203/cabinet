@@ -4,12 +4,14 @@
 import { eq } from "drizzle-orm";
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { abortRun, runPi, steer } from "./agent/driver.ts";
+import { abortRun, forgetRun, runPi, steer } from "./agent/driver.ts";
 import { modelOptions } from "./agent/models.ts";
 import { changed } from "./bus.ts";
 import { DATA_DIR, DEFAULT_CWD, GLAB_BIN, OWNER_OPEN_ID, PORT } from "./config.ts";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "./db/index.ts";
-import { sendToUserAsBot } from "./lark/bot.ts";
+import { queuePatch, sendCardToUserAsBot, sendToUserAsBot } from "./lark/bot.ts";
+import { devCard, devTitle, type Round } from "./devcard.ts";
+import { decide, receive, settle } from "./pipeline.ts";
 import type { DevTask } from "./db/schema.ts";
 import { DraftError, getDraft } from "./drafts/store.ts";
 import { sem } from "./agent/slots.ts";
@@ -42,6 +44,28 @@ function update(id: string, set: Partial<DevTask>) {
 		.where(eq(schema.devTasks.id, id))
 		.run();
 	changed();
+	if (set.status !== undefined) syncDevCard(id);
+}
+
+// ---------- 通知卡片：devcard:<消息 id> 记这张卡片是哪个任务的哪一轮，devcard-latest:<任务 id> 指向最新的一张 ----------
+
+interface SentCard {
+	id: string;
+	round: Round;
+}
+const cardOf = (msgId: string) => getKv<SentCard | null>(`devcard:${msgId}`, null);
+const latestCard = (id: string) => getKv<string | null>(`devcard-latest:${id}`, null);
+
+/** 按任务当前状态重画一张通知卡片；只有最新的那张带按钮 */
+export function renderDevCard(msgId: string, notice = ""): object | undefined {
+	const sent = cardOf(msgId);
+	const t = sent && getDevTask(sent.id);
+	return t ? devCard(t, sent.round, latestCard(t.id) === msgId, notice) : undefined;
+}
+
+export function syncDevCard(id: string, notice = "") {
+	const msgId = latestCard(id);
+	if (msgId) queuePatch(msgId, () => renderDevCard(msgId, notice));
 }
 
 /** 远端默认分支（origin/HEAD），取不到时按 develop / master 顺序找 */
@@ -72,6 +96,12 @@ export interface DispatchInput {
 	/** 不填用 agent 配置 */
 	model?: string;
 	thinking?: string;
+	/** 不是看板派的活（比如一批告警）：挂在这些 trigger 上，按 rule 记分派 */
+	triggers?: string[];
+	rule?: string;
+	title?: string;
+	/** 每轮结束都私聊 Yi（不是 Yi 在看板上派的活） */
+	notify?: boolean;
 }
 
 /** 校验新建时选的模型和思考强度 */
@@ -84,6 +114,13 @@ function checkModel(model?: string, thinking?: string) {
 }
 
 const isDev = (t: Pick<DevTask, "agent">) => t.agent === "dev";
+
+/** 看板派活（或从草稿转成任务）是一条 Yi 发起的 trigger，直接分派给选定的 agent；别处来的活带着自己的 trigger */
+function routeTask(id: string, agent: string, request: string, input: DispatchInput): number {
+	if (input.triggers?.length) return decide(input.triggers, { agent, rule: input.rule ?? "派活", actionKind: "dev", actionId: id });
+	const tid = receive({ channel: "board", externalId: id, thread: `board:${id}`, actorId: OWNER_OPEN_ID, owner: true, text: request });
+	return decide([tid], { agent, rule: input.draftId ? `草稿转任务（${input.draftId}）` : "看板派活", actionKind: "dev", actionId: id });
+}
 
 export async function dispatch(input: DispatchInput): Promise<DevTask> {
 	const agentName = input.agent || "dev";
@@ -99,12 +136,13 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 	if (agentName !== "dev") {
 		// 只读 agent：不建 worktree，选了仓库就在仓库目录里查
 		const t = now();
+		const id = `dev-${Date.now()}`;
 		const task: DevTask = {
-			id: `dev-${Date.now()}`,
+			id,
 			agent: agentName,
 			...choice,
 			draftId: d?.id ?? null,
-			title: request.slice(0, 200),
+			title: (input.title ?? request).slice(0, 200),
 			request,
 			context: d?.context ?? "",
 			instructions: input.instructions?.trim() ?? "",
@@ -121,6 +159,8 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 			usage: null,
 			created: t,
 			updated: t,
+			routeId: routeTask(id, agentName, request, input),
+			notify: Boolean(input.notify),
 		};
 		db().insert(schema.devTasks).values(task).run();
 		changed();
@@ -146,8 +186,9 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 	mkdirSync(WORKTREES, { recursive: true });
 	await git(repo, ["worktree", "add", "-b", input.branch, worktree, `origin/${base}`], 120);
 	const t = now();
+	const id = `dev-${Date.now()}`;
 	const task: DevTask = {
-		id: `dev-${Date.now()}`,
+		id,
 		agent: "dev",
 		...choice,
 		draftId: d?.id ?? null,
@@ -168,6 +209,8 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 		usage: null,
 		created: t,
 		updated: t,
+		routeId: routeTask(id, "dev", request, input),
+		notify: Boolean(input.notify),
 	};
 	db().insert(schema.devTasks).values(task).run();
 	changed();
@@ -181,11 +224,11 @@ const stoppedByYi = new Set<string>();
 const sessionOf = (id: string) => `dev-${id}`;
 
 /** 跑一轮 dev agent：首轮按需求实现，之后是 Yi 发来的消息（要求、问题、纠偏） */
-async function runDev(id: string, opinion?: string) {
+async function runDev(id: string, opinion?: string, from = "Yi") {
 	const task = getDevTask(id)!;
 	const run = task.runs + 1;
 	const pendingKey = `pending:dev:${id}`;
-	setKv(pendingKey, { id, opinion, run });
+	setKv(pendingKey, { id, opinion, run, from });
 	update(id, { status: "running", error: null, runs: run });
 	const started = now();
 	const base = loadAgents().agents[task.agent];
@@ -195,12 +238,13 @@ async function runDev(id: string, opinion?: string) {
 	const where = task.repo ? `仓库 \`${path.basename(task.repo)}\`（当前目录）` : `\`${DEFAULT_CWD}\`（各仓库都在这下面）`;
 	const prompt = !dev
 		? opinion
-			? `Yi：${opinion}`
+			? `${from}：${opinion}`
 			: [
-					`[Agent 任务] 这是 Yi 本人在看板上直接交给你的任务，直接回答 Yi，不是替他起草回复。工作目录：${where}。`,
+					`${base?.brief ?? "[Agent 任务] 这是 Yi 本人在看板上直接交给你的任务，直接回答 Yi，不是替他起草回复。"}工作目录：${where}。`,
 					task.context ? `相关前文：\n${task.context}` : "",
 					`任务：\n${task.request}`,
 					task.instructions ? `补充说明：\n${task.instructions}` : "",
+					`（这个任务的 ID：${task.id}${task.routeId ? `，分派 route:${task.routeId}` : ""}；需要以前的来龙去脉时用 lookup 沿 ID 查）`,
 				]
 					.filter(Boolean)
 					.join("\n\n")
@@ -230,6 +274,8 @@ async function runDev(id: string, opinion?: string) {
 				chatId: id,
 				// 只有 dev agent 能写，而且只能写自己的 worktree
 				writeRoots: dev ? [task.worktree] : undefined,
+				// 结论只私聊给 Yi：可以沿 ID 查以前的消息、分派和结果
+				lookup: true,
 				memory: { query: opinion ?? `${task.title}\n${task.request}`.slice(0, 1000), scope: {} },
 			}),
 		);
@@ -243,7 +289,7 @@ async function runDev(id: string, opinion?: string) {
 				}
 			: usage;
 		update(id, { status: "review", summary: text, session: sessionId, usage: total });
-		if (dev || now() - started > 60) void notify(id, `第 ${run} 轮完成`, text);
+		if (dev || base?.notify || task.notify || now() - started > 60) void notify(id, `第 ${run} 轮完成`, text);
 	} catch (e) {
 		if (isStopping()) interrupted = true;
 		else if (stoppedByYi.delete(id)) update(id, { status: "review", error: "已按你的要求停止" });
@@ -251,32 +297,47 @@ async function runDev(id: string, opinion?: string) {
 			log("开发任务失败", id, e);
 			const error = String((e as Error).message).slice(0, 500);
 			update(id, { status: "failed", error });
-			void notify(id, `第 ${run} 轮失败`, error);
+			void notify(id, `第 ${run} 轮失败`, error, true);
 		}
 	} finally {
-		if (!interrupted) deleteKv(pendingKey);
+		if (!interrupted) {
+			deleteKv(pendingKey);
+			forgetRun(`dev:${id}:${run}`);
+		}
 	}
 }
 
-/** 每轮结束私聊 Yi 一条通知；引用这条回复就是直接和 agent 对话 */
-async function notify(id: string, what: string, body: string) {
+/** 每轮结束私聊 Yi 一张卡片；卡片里能直接操作，引用它回复也是直接和 agent 对话 */
+async function notify(id: string, what: string, body: string, failed = false) {
 	const t = getDevTask(id);
 	if (!t) return;
-	const md = [
-		isDev(t)
-			? `**开发任务** · ${path.basename(t.repo)} · \`${t.branch}\` · ${what}`
-			: `**Agent 任务** · ${t.agent} · ${t.title.slice(0, 40)} · ${what}`,
-		body.length > 1500 ? `${body.slice(0, 1500)}…` : body,
-		isDev(t)
-			? `引用本条回复：直接写要求或问题会发给 agent；\`推送\` 推送并建 MR；\`停止\`；\`放弃\`。完整 diff 在看板：http://127.0.0.1:${PORT}/?view=agents`
-			: `引用本条回复可以继续追问；\`停止\`；\`完成\` 归档。看板：http://127.0.0.1:${PORT}/?view=agents`,
-	].join("\n\n");
+	const round: Round = { what, body, failed };
+	let dm: string;
 	try {
-		const dm = await sendToUserAsBot(OWNER_OPEN_ID, md);
-		setKv(`devdm:${dm}`, id);
+		dm = await sendCardToUserAsBot(OWNER_OPEN_ID, devCard(t, round));
 	} catch (e) {
-		log("开发任务通知失败", id, e);
+		// 卡片被拒也不能漏掉通知：退回富文本
+		log("任务卡片发送失败，改发文字", id, e);
+		const md = [
+			`**${devTitle(t)}** · ${what}`,
+			body.length > 1500 ? `${body.slice(0, 1500)}…` : body,
+			isDev(t)
+				? `引用本条回复：直接写要求或问题会发给 agent；\`推送\` 推送并建 MR；\`停止\`；\`放弃\`。完整 diff 在看板：http://127.0.0.1:${PORT}/?view=agents`
+				: `引用本条回复可以继续追问；\`停止\`；\`完成\` 归档。看板：http://127.0.0.1:${PORT}/?view=agents`,
+		].join("\n\n");
+		try {
+			setKv(`devdm:${await sendToUserAsBot(OWNER_OPEN_ID, md)}`, id);
+		} catch (e2) {
+			log("开发任务通知失败", id, e2);
+		}
+		return;
 	}
+	const prev = latestCard(id);
+	setKv(`devcard:${dm}`, { id, round } satisfies SentCard);
+	setKv(`devcard-latest:${id}`, dm);
+	setKv(`devdm:${dm}`, id);
+	// 上一轮的卡片收起按钮：操作只认最新的一张
+	if (prev) queuePatch(prev, () => renderDevCard(prev));
 }
 
 /** 飞书里引用了哪条开发任务通知 */
@@ -285,18 +346,18 @@ export const devTaskOfDm = (dmId?: string) => (dmId ? (getKv<string | null>(`dev
 /**
  * Yi 发给 agent 的消息：正在运行就插进当前这轮（下一个工具步骤之后生效），空闲就开新一轮。
  */
-export async function messageDev(id: string, text: string): Promise<"steered" | "started"> {
+export async function messageDev(id: string, text: string, from = "Yi"): Promise<"steered" | "started"> {
 	const t = getDevTask(id);
 	if (!t) throw new DraftError("任务不存在");
 	if (!text.trim()) throw new DraftError("消息是空的");
 	if (t.status === "discarded") throw new DraftError("任务已放弃");
 	if (t.status === "done") throw new DraftError("任务已完成，新建一个吧");
 	if (t.status === "pushing") throw new DraftError("正在推送，等一下再发");
-	if (t.status === "running" && (await steer(sessionOf(id), `Yi：${text.trim()}`))) {
-		log("开发任务插话", id);
+	if (t.status === "running" && (await steer(sessionOf(id), `${from}：${text.trim()}`))) {
+		log("开发任务插话", id, from);
 		return "steered";
 	}
-	void runDev(id, text.trim());
+	void runDev(id, text.trim(), from);
 	return "started";
 }
 
@@ -309,13 +370,13 @@ export async function stopDev(id: string) {
 }
 
 export function resumePendingDev() {
-	for (const { value } of listKv<{ id: string; opinion?: string; run: number }>("pending:dev:")) {
+	for (const { value } of listKv<{ id: string; opinion?: string; run: number; from?: string }>("pending:dev:")) {
 		const task = getDevTask(value.id);
 		if (!task) continue;
 		log("接回未完成的开发任务", value.id);
 		// runs 已经 +1 过：退回去让 runDev 用同一个 run 序号和 requestId
 		update(value.id, { runs: value.run - 1 });
-		void runDev(value.id, value.opinion);
+		void runDev(value.id, value.opinion, value.from);
 	}
 }
 
@@ -360,6 +421,7 @@ export async function pushDev(id: string): Promise<string> {
 		// MR 已经建过：只推新提交，MR 会自动更新
 		if (t.mrUrl) {
 			update(id, { status: "pushed", error: null });
+			settle({ actionKind: "dev", actionId: id, routeId: t.routeId, outcome: "pushed", effect: "outward", ref: t.mrUrl });
 			return t.mrUrl;
 		}
 		const title = commits
@@ -386,6 +448,7 @@ export async function pushDev(id: string): Promise<string> {
 		);
 		const url = /https?:\/\/\S+\/merge_requests\/\d+/.exec(out)?.[0] ?? "";
 		update(id, { status: "pushed", mrUrl: url, error: null });
+		settle({ actionKind: "dev", actionId: id, routeId: t.routeId, outcome: "pushed", effect: "outward", ref: url });
 		log("开发任务已推送", id, url);
 		return url;
 	} catch (e) {
@@ -404,6 +467,7 @@ export async function discardDev(id: string) {
 		if (t.status !== "pushed") await git(t.repo, ["branch", "-D", t.branch]).catch(() => {});
 	}
 	update(id, { status: "discarded" });
+	settle({ actionKind: "dev", actionId: id, routeId: t.routeId, outcome: "discarded", effect: isDev(t) ? "local" : "internal" });
 }
 
 export const devTasksList = () => db().select().from(schema.devTasks).all();
@@ -414,4 +478,5 @@ export function closeTask(id: string) {
 	if (!t) throw new DraftError("任务不存在");
 	if (t.status === "running") throw new DraftError("任务正在运行");
 	update(id, { status: "done" });
+	settle({ actionKind: "dev", actionId: id, routeId: t.routeId, outcome: "done", effect: "internal" });
 }

@@ -52,6 +52,20 @@ export const DRAFT_ENABLED = env("DRAFT_ENABLED", "1") === "1";
 export const POLL_INTERVAL = Number(env("POLL_INTERVAL", "30"));
 export const POLL_TOP_N = Number(env("POLL_TOP_N", "15"));
 export const DRAFT_SKIP_CHATS = new Set(list("DRAFT_SKIP_CHATS"));
+// 告警：群里机器人 @Yi 的消息不起草回复，按群攒一批交给 alert agent（docs/pipeline.md §4）
+export const ALERT_ENABLED = env("ALERT_ENABLED", "true") !== "false";
+/** 只认这些机器人（发送者 id）；为空时任何机器人 @Yi 都算 */
+export const ALERT_SENDERS = new Set(list("ALERT_SENDERS"));
+/** 一批收口：这么多秒没有新告警，或者从第一条起满 ALERT_MAX_WAIT 秒 */
+export const ALERT_QUIET = Number(env("ALERT_QUIET", "120"));
+export const ALERT_MAX_WAIT = Number(env("ALERT_MAX_WAIT", "600"));
+/** 同一个群这么多秒内又来告警，且上一批的任务还没归档：并进上一批，不另开 */
+export const ALERT_FOLLOW = Number(env("ALERT_FOLLOW", "3600"));
+export const ALERT_AGENT = env("ALERT_AGENT", "alert");
+/** Watchdog 多少秒查一次 */
+export const WATCHDOG_INTERVAL = Number(env("WATCHDOG_INTERVAL", "300"));
+/** 订阅直通：话题 / 工作项 / MR 挂到会话上，这么多秒没再用到就失效（默认 3 天） */
+export const SUBSCRIBE_TTL = Number(env("SUBSCRIBE_TTL", String(3 * 86400)));
 
 export const PORT = Number(env("PORT", "10086"));
 // 开发时页面由 vite（5173）提供并代理 /api，需要放行这个来源

@@ -1,4 +1,4 @@
-import { blob, index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { blob, index, integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 // 时间统一存 unix 秒（浮点），和 pi 会话日志、旧数据保持一致
 
@@ -27,6 +27,8 @@ export const drafts = sqliteTable(
 		report: text("report").notNull().default(""),
 		status: text("status").notNull(), // pending noreply sending revising sent completed discarded expired replaced
 		created: real("created").notNull(),
+		/** 起草它的那次分派；改写出的新版本沿用 */
+		routeId: integer("route_id"),
 	},
 	(t) => [index("drafts_chat").on(t.chatId, t.status)],
 );
@@ -54,6 +56,89 @@ export const records = sqliteTable(
 		retry: text("retry", { mode: "json" }).$type<unknown>(),
 	},
 	(t) => [index("records_ts").on(t.ts), index("records_source").on(t.source)],
+);
+
+// ---------- 四段模型：trigger -> route -> action -> result（见 docs/pipeline.md） ----------
+
+/** Trigger：渠道来的一条事件，过了程序规则（Fast Path）才落库；落库后不再改内容 */
+export const triggers = sqliteTable(
+	"triggers",
+	{
+		/** `${channel}:${渠道内 id}`，同一事件重复到达只记一次 */
+		id: text("id").primaryKey(),
+		channel: text("channel").notNull(), // lark（轮询 Yi 的私聊 / @Yi）、meego、bot（@机器人 / 私聊机器人）、board（看板派活）
+		/** 事件流：同一个会话、话题、工作项下的事件，跨渠道关联靠它和 refs */
+		thread: text("thread").notNull(),
+		actorId: text("actor_id").notNull().default(""),
+		actorName: text("actor_name").notNull().default(""),
+		/** 是不是 Yi 本人发的：Yi 的话可以当指令，别人的只是数据 */
+		owner: integer("owner", { mode: "boolean" }).notNull().default(false),
+		text: text("text").notNull().default(""),
+		url: text("url"),
+		/** 正文里提到的其他事件流，比如 MR：gitlab:<项目>!<iid> */
+		refs: text("refs", { mode: "json" }).$type<string[]>().notNull().default([]),
+		at: real("at").notNull(),
+		status: text("status").notNull(), // received routed skipped
+		routeId: integer("route_id"),
+	},
+	(t) => [index("triggers_at").on(t.at), index("triggers_thread").on(t.thread)],
+);
+
+/** Route：一次分派的决定。几条 trigger 可以合成一批；agent 为空表示不处理（比如 Yi 已经亲自回了） */
+export const routes = sqliteTable(
+	"routes",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		triggers: text("triggers", { mode: "json" }).$type<string[]>().notNull(),
+		agent: text("agent"),
+		/** 怎么判的：MR 链接 / 分诊：<理由> / 兜底 / 草稿指令 / 跳过：<原因> */
+		rule: text("rule").notNull(),
+		session: text("session"),
+		/** 分派时的附加信息（MR 项目和 iid）：接回时沿用这次分派要用 */
+		info: text("info", { mode: "json" }).$type<Record<string, string>>().notNull().default({}),
+		/** 产出的 action：draft（drafts.id）/ qa（提问消息 id）/ dev（dev_tasks.id）/ remember / command（操作已有的 action）/ none */
+		actionKind: text("action_kind").notNull(),
+		actionId: text("action_id"),
+		at: real("at").notNull(),
+	},
+	(t) => [index("routes_action").on(t.actionKind, t.actionId)],
+);
+
+/** Result：一个 action 的最终结果。只经 settle() 写入；effect 说这次结果影响到了哪里 */
+export const results = sqliteTable(
+	"results",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		actionKind: text("action_kind").notNull(),
+		actionId: text("action_id"),
+		routeId: integer("route_id"),
+		outcome: text("outcome").notNull(), // sent discarded completed expired replied remembered pushed done failed
+		effect: text("effect").notNull(), // internal：只在 cabinet 里 / bot：机器人对外说话 / local：改了本机的 worktree / outward：以 Yi 身份发出或推送
+		/** 外部留下的痕迹：发出的消息 id、MR 链接 */
+		ref: text("ref"),
+		detail: text("detail"),
+		at: real("at").notNull(),
+	},
+	(t) => [index("results_action").on(t.actionKind, t.actionId), index("results_at").on(t.at)],
+);
+
+/**
+ * 订阅：事件流（话题、飞书项目工作项）或被引用的对象（MR）挂到一个 agent 会话上。
+ * 之后同一事件流、或提到同一个 MR 的消息直接进这个会话（订阅直通），不再分诊；跨渠道接得上同一件事。
+ */
+export const subscriptions = sqliteTable(
+	"subscriptions",
+	{
+		/** thread（lark:<chat>#<话题>、meego:<工作项>）或 ref（gitlab:<项目>!<iid>） */
+		key: text("key").notNull(),
+		agent: text("agent").notNull(),
+		session: text("session").notNull(),
+		/** 分派时的附加信息（MR 项目和 iid），直通时原样带上 */
+		info: text("info", { mode: "json" }).$type<Record<string, string>>().notNull().default({}),
+		routeId: integer("route_id"),
+		updated: real("updated").notNull(),
+	},
+	(t) => [primaryKey({ columns: [t.key, t.session] }), index("subscriptions_updated").on(t.updated)],
 );
 
 /** 轮询已处理过的消息，重启后不重复起草 */
@@ -124,9 +209,34 @@ export const devTasks = sqliteTable("dev_tasks", {
 	usage: text("usage", { mode: "json" }).$type<Usage | null>(),
 	created: real("created").notNull(),
 	updated: real("updated").notNull(),
+	routeId: integer("route_id"),
+	/** 每轮结束都私聊 Yi（定时任务、告警这类不是 Yi 在看板上派的活） */
+	notify: integer("notify", { mode: "boolean" }).notNull().default(false),
+});
+
+/** 定时任务（借鉴 multica 的 Autopilots）：到点交给一个只读 agent 跑一次，结论私聊给 Yi */
+export const schedules = sqliteTable("schedules", {
+	id: text("id").primaryKey(),
+	name: text("name").notNull(),
+	/** 5 段 cron（分 时 日 月 周），本机时区 */
+	cron: text("cron").notNull(),
+	agent: text("agent").notNull(),
+	prompt: text("prompt").notNull(),
+	enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+	nextRun: real("next_run"),
+	lastRun: real("last_run"),
+	/** 最近一次跑出来的 agent 任务 */
+	lastTask: text("last_task"),
+	created: real("created").notNull(),
+	updated: real("updated").notNull(),
 });
 
 export type DevTask = typeof devTasks.$inferSelect;
+export type TriggerRow = typeof triggers.$inferSelect;
+export type RouteRow = typeof routes.$inferSelect;
+export type ResultRow = typeof results.$inferSelect;
+export type Subscription = typeof subscriptions.$inferSelect;
+export type Schedule = typeof schedules.$inferSelect;
 
 // ---------- 长期记忆（借鉴 komo docs/memory.md §9） ----------
 

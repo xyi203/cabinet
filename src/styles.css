@@ -905,3 +905,80 @@ pre.diff {
 .newtask select {
 	max-width: 100%;
 }
+/* 待你处理 */
+.inbox-group h2 {
+	font-size: 14px;
+	margin: 18px 0 8px;
+}
+.inbox-group h2 span {
+	color: var(--muted);
+	font-weight: 400;
+	margin-left: 4px;
+}
+.inbox-group h2 small {
+	color: var(--muted);
+	font-weight: 400;
+	font-size: 12px;
+	margin-left: 8px;
+}
+.inbox-group .tag {
+	border-radius: 5px;
+	padding: 0 6px;
+	font-size: 12px;
+	background: var(--soft);
+}
+.inbox-group .tag.draft {
+	background: var(--accent-soft);
+	color: var(--accent);
+}
+.inbox-group .tag.failed {
+	background: var(--bad-soft);
+	color: var(--bad);
+}
+.inbox-group .tag.dev {
+	background: var(--warn-soft);
+	color: var(--warn);
+}
+/* 定时任务 */
+.schedules {
+	margin-bottom: 12px;
+}
+.schedules .cron {
+	width: 130px;
+	font-family: ui-monospace, monospace;
+}
+.schedules .chip {
+	font: inherit;
+	font-size: 12px;
+	border: 1px solid var(--line);
+	background: var(--soft);
+	color: var(--muted);
+	border-radius: 999px;
+	padding: 2px 8px;
+	cursor: pointer;
+}
+.sched {
+	border-top: 1px solid var(--line);
+	padding: 10px 0;
+}
+.sched.off {
+	opacity: 0.55;
+}
+.sched .head {
+	display: flex;
+	gap: 10px;
+	align-items: baseline;
+	flex-wrap: wrap;
+}
+.sched code {
+	font-size: 12px;
+	background: var(--soft);
+	border-radius: 5px;
+	padding: 0 6px;
+}
+.sched .desc {
+	color: var(--muted);
+	font-size: 13px;
+	margin: 4px 0 8px;
+	white-space: pre-wrap;
+}
