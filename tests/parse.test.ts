@@ -136,3 +136,18 @@ test("图片消息带出 image_key，正文里的 ![Image](key) 也能取到", a
 	assert.equal(messageText("image", JSON.stringify({ image_key: "img_v3_02_ab-c" })), "[图片 img_v3_02_ab-c]");
 	assert.deepEqual(imageKeys("![Image](img_v3_02174_7d1c68b7-338c) @a [图片 img_v3_02_x]"), ["img_v3_02174_7d1c68b7-338c", "img_v3_02_x"]);
 });
+
+test("过期截图按修改时间清理", async () => {
+	const { mkdtempSync, writeFileSync, utimesSync, readdirSync } = await import("node:fs");
+	const { tmpdir } = await import("node:os");
+	const path = await import("node:path");
+	const { pruneOldFiles } = await import("../server/cleanup.ts");
+	const dir = mkdtempSync(path.join(tmpdir(), "cabinet-img-"));
+	writeFileSync(path.join(dir, "old.jpg"), "x");
+	writeFileSync(path.join(dir, "new.jpg"), "x");
+	const old = Date.now() / 1000 - 8 * 86400;
+	utimesSync(path.join(dir, "old.jpg"), old, old);
+	assert.equal(pruneOldFiles(dir, 0), 0);
+	assert.equal(pruneOldFiles(dir, 7), 1);
+	assert.deepEqual(readdirSync(dir), ["new.jpg"]);
+});

@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { startServer } from "./api.ts";
 import { CHATS, DRAFT_ENABLED, PATHS, PI_MODEL, missingConfig } from "./config.ts";
 import { closeHarness, harness } from "./agent/driver.ts";
+import { scheduleCleanup } from "./cleanup.ts";
 import { db } from "./db/index.ts";
 import { resumePendingDev } from "./dev.ts";
 import { resumePendingDrafts } from "./drafts/make.ts";
@@ -18,7 +19,7 @@ if (missing.length) {
 	console.error(`.env 缺少 ${missing.join(", ")}，参考 .env.example`);
 	process.exit(1);
 }
-for (const d of [PATHS.sessions, PATHS.stickers]) mkdirSync(d, { recursive: true });
+for (const d of [PATHS.sessions, PATHS.stickers, PATHS.images]) mkdirSync(d, { recursive: true });
 db();
 importLegacyMemory();
 // 先打开 durable：上次没跑完的 agent 运行在这里恢复
@@ -26,6 +27,7 @@ await harness();
 // 记忆向量在后台补齐（Ollama 没起来时先只用关键词，退避重试）；上次没做完的提取接着做
 scheduleVectors();
 resumePendingMemory();
+scheduleCleanup();
 
 log(`cabinet 启动：监听群 ${JSON.stringify(Object.keys(CHATS))}，默认模型 ${PI_MODEL}`);
 const server = startServer();

@@ -44,6 +44,10 @@ export const CHATS: Record<string, string> = Object.fromEntries(
 );
 export const READ_ROOTS = [...new Set([DEFAULT_CWD, ...Object.values(CHATS)])].toSorted();
 
+// 截图在 data/images 保留的天数；会话闲置超过这么多天，下次换新会话（旧会话里的长上下文和图片不再每轮重发）。0 = 不清理 / 不换
+export const IMAGE_RETAIN_DAYS = Number(env("IMAGE_RETAIN_DAYS", "7"));
+export const SESSION_IDLE_DAYS = Number(env("SESSION_IDLE_DAYS", "7"));
+
 export const DRAFT_ENABLED = env("DRAFT_ENABLED", "1") === "1";
 export const POLL_INTERVAL = Number(env("POLL_INTERVAL", "30"));
 export const POLL_TOP_N = Number(env("POLL_TOP_N", "15"));

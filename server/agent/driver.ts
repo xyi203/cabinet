@@ -20,11 +20,22 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
+import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
+import { createBashTool, createEditTool, createReadTool, createWriteTool, type ImageProcessor } from "@earendil-works/pi-durable/tools";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { emit } from "../bus.ts";
-import { CONFIG_DIR, PATHS, PI_FALLBACK_MODEL, PI_MODEL, PI_THINKING, PI_TIMEOUT, READ_ROOTS, SKILLS_DIR } from "../config.ts";
+import {
+	CONFIG_DIR,
+	PATHS,
+	PI_FALLBACK_MODEL,
+	PI_MODEL,
+	PI_THINKING,
+	PI_TIMEOUT,
+	READ_ROOTS,
+	SESSION_IDLE_DAYS,
+	SKILLS_DIR,
+} from "../config.ts";
 import { type RecallScope, recallBlock } from "../memory/recall.ts";
 import { getKv, setKv } from "../db/index.ts";
 import { openTursoDurable } from "../db/turso.ts";
@@ -74,9 +85,22 @@ export interface RunningInfo {
 /** 运行中的会话，看板据此显示「进行中」 */
 export const running = new Map<string, RunningInfo>();
 
+// read 打开的图片会作为工具结果留在会话里，之后每一轮都重发：先压到 Claude 视觉推荐的长边 1568px，
+// base64 不超过 300KB（原图常有几百 KB，Photon 会依次降 JPEG 质量、再缩尺寸直到放得下）
+const IMAGE_LIMITS = { maxWidth: 1568, maxHeight: 1568, maxBytes: 300_000 };
+let photon: Promise<ImageProcessor> | undefined;
+const images: ImageProcessor = {
+	prepare: async (bytes, mimeType, limits) =>
+		(await (photon ??= createNodePhotonImages())).prepare(bytes, mimeType, {
+			maxWidth: Math.min(limits.maxWidth, IMAGE_LIMITS.maxWidth),
+			maxHeight: Math.min(limits.maxHeight, IMAGE_LIMITS.maxHeight),
+			maxBytes: Math.min(limits.maxBytes, IMAGE_LIMITS.maxBytes),
+		}),
+};
+
 // edit / write 只有开发任务会选，守卫限制只能写它自己的 worktree
 const TOOLS = {
-	read: createReadTool(),
+	read: createReadTool({ images }),
 	bash: createBashTool(),
 	grep: grepTool,
 	find: findTool,
@@ -201,13 +225,20 @@ export async function closeHarness() {
 	if (h) await (await h).close(ctx);
 }
 
+/** 会话 key -> durable conversation。闲置超过 SESSION_IDLE_DAYS 的换新会话：durable 的记录不可删改，
+ * 旧会话留在库里（看板的执行日志按时间段取，不受影响），只是不再接着用，免得早已过时的上下文和图片每轮重发 */
 async function conversationFor(key: string): Promise<Conversation> {
 	const h = await harness();
 	const id = getKv<number | null>(`conv:${key}`, null);
-	if (id) {
+	// 没有记录的老会话当作刚用过，不在升级后第一次就被换掉
+	const last = getKv<number | null>(`conv-at:${key}`, null) ?? now();
+	const stale = SESSION_IDLE_DAYS > 0 && now() - last > SESSION_IDLE_DAYS * 86400;
+	setKv(`conv-at:${key}`, now());
+	if (id && !stale) {
 		const conv = await h.conversation(id as any, ctx);
 		if (conv) return conv;
 	}
+	if (id && stale) log(`会话 ${key} 闲置超过 ${SESSION_IDLE_DAYS} 天，换新会话`);
 	const conv = await h.createConversation({ ownership: { kind: "ownerless" } }, ctx);
 	setKv(`conv:${key}`, conv.id);
 	return conv;
