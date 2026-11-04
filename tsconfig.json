@@ -1,0 +1,20 @@
+{
+	"compilerOptions": {
+		"target": "ES2024",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"jsx": "react-jsx",
+		"strict": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"rewriteRelativeImportExtensions": false,
+		"verbatimModuleSyntax": true,
+		"erasableSyntaxOnly": true,
+		"skipLibCheck": true,
+		"resolveJsonModule": true,
+		"types": ["node"],
+		"lib": ["ES2024", "DOM", "DOM.Iterable"]
+	},
+	"include": ["server", "tests", "scripts", "*.ts"],
+	"exclude": ["vite.config.ts"]
+}

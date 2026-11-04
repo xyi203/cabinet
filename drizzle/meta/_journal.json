@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1793780194293,
+      "tag": "0000_cute_marvel_apes",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1793781715385,
+      "tag": "0001_classy_gladiator",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793786025043,
+      "tag": "0002_young_whirlwind",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793787684632,
+      "tag": "0003_far_songbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1793787991195,
+      "tag": "0004_keen_gateway",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+ALTER TABLE `dev_tasks` ADD `agent` text DEFAULT 'dev' NOT NULL;

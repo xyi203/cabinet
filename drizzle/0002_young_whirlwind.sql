@@ -1,0 +1,21 @@
+CREATE TABLE `dev_tasks` (
+	`id` text PRIMARY KEY NOT NULL,
+	`draft_id` text,
+	`title` text NOT NULL,
+	`request` text DEFAULT '' NOT NULL,
+	`context` text DEFAULT '' NOT NULL,
+	`instructions` text DEFAULT '' NOT NULL,
+	`repo` text NOT NULL,
+	`base` text NOT NULL,
+	`branch` text NOT NULL,
+	`worktree` text NOT NULL,
+	`status` text NOT NULL,
+	`summary` text DEFAULT '' NOT NULL,
+	`error` text,
+	`mr_url` text,
+	`session` text,
+	`runs` integer DEFAULT 0 NOT NULL,
+	`usage` text,
+	`created` real NOT NULL,
+	`updated` real NOT NULL
+);

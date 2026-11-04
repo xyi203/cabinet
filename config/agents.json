@@ -1,0 +1,56 @@
+{
+	"cr": {
+		"desc": "代码评审：消息里带 GitLab MR 链接，请 Yi CR、合并或看下改动",
+		"match": {
+			"links": ["gitlab_mr"]
+		},
+		"model": "claude/claude-opus-5-5",
+		"thinking": "high",
+		"skills": ["check"],
+		"bash": ["git", "glab"],
+		"cwd": "repo_of_mr",
+		"session": "mr",
+		"prompt": "agents/cr.md"
+	},
+	"ask": {
+		"desc": "问题咨询：线上报错、数据不对、配置、某个现象的原因，或请 Yi 帮忙看/排查某个问题，需要查数据库、日志或代码",
+		"model": "claude/claude-opus-5-5",
+		"thinking": "high",
+		"skills": ["archery", "sls", "superset", "log-diagnosis"],
+		"bash": ["git", "meegle", "archery", "sls", "superset"],
+		"cwd": "default",
+		"session": "chat",
+		"prompt": "agents/ask.md"
+	},
+	"chat": {
+		"desc": "简单回应：确认收到、致谢、寒暄、问在不在，且不需要 Yi 后续去查、去看或去做任何事",
+		"model": "codex/gpt-6-luna",
+		"thinking": "minimal",
+		"tools": [],
+		"session": "none",
+		"prompt": "agents/chat.md"
+	},
+	"general": {
+		"desc": "其他需要 Yi 回复的事：协调、排期、方案讨论等，可能需要看一下代码",
+		"model": "claude/claude-opus-5-5",
+		"bash": ["git", "meegle"],
+		"cwd": "default",
+		"session": "chat"
+	},
+	"dev": {
+		"desc": "（手动指派）按需求在独立 worktree 里改代码、跑测试、本地提交，推送前由 Yi 审核",
+		"manual": true,
+		"model": "claude/claude-opus-5-5",
+		"thinking": "high",
+		"tools": ["read", "grep", "find", "ls", "bash", "edit", "write"],
+		"skills": ["check"],
+		"bash": ["git", "git-local"],
+		"commands": ["go build", "go test", "go vet", "gofmt", "go mod tidy", "make test", "make lint"],
+		"session": "chat",
+		"prompt": "agents/dev.md"
+	},
+	"_router": {
+		"model": "codex/gpt-6-luna",
+		"fallback": "general"
+	}
+}

@@ -1,0 +1,116 @@
+// 进程级配置：.env 由 node --env-file 载入。代码与运行数据分开，运行数据都在 DATA_DIR 下，不进 git。
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+
+const env = (key: string, fallback = ""): string => process.env[key]?.trim() || fallback;
+const expand = (p: string) => p.replace(/^~(?=$|\/)/, homedir());
+const list = (key: string) =>
+	env(key)
+		.split(",")
+		.map((x) => x.trim())
+		.filter(Boolean);
+
+export const ROOT = path.resolve(import.meta.dirname, "..");
+export const CONFIG_DIR = path.join(ROOT, "config");
+export const DATA_DIR = path.resolve(ROOT, expand(env("DATA_DIR", "data")));
+
+export const FEISHU_APP_ID = env("FEISHU_APP_ID");
+export const FEISHU_APP_SECRET = env("FEISHU_APP_SECRET");
+export const BOT_OPEN_ID = env("BOT_OPEN_ID");
+export const OWNER_OPEN_ID = env("OWNER_OPEN_ID");
+export const OWNER_NAME = env("OWNER_NAME", "主人");
+
+// 用户身份（以 Yi 的名义读消息、发消息）走 lark-cli：它管着 Yi 的 OAuth 令牌和刷新
+export const LARK_CLI = expand(env("LARK_CLI", "lark-cli"));
+export const MEEGLE_BIN = expand(env("MEEGLE_BIN", "meegle"));
+export const GLAB_BIN = expand(env("GLAB_BIN", "glab"));
+
+export const PI_MODEL = env("PI_MODEL", "claude/claude-opus-5-5");
+export const PI_THINKING = env("PI_THINKING", "medium");
+// 主模型额度用完、限流或过载时换用的模型；留空则不切换
+export const PI_FALLBACK_MODEL = env("PI_FALLBACK_MODEL", "codex/gpt-6.1-sol");
+export const PI_TIMEOUT = Number(env("PI_TIMEOUT", "600"));
+export const MAX_CONCURRENCY = Number(env("MAX_CONCURRENCY", "3"));
+export const THREAD_CONTEXT_N = Number(env("THREAD_CONTEXT_N", "15"));
+export const DEFAULT_CWD = expand(env("DEFAULT_CWD", "~"));
+
+// CHATS=oc_xxx:/path/a,oc_yyy:/path/b —— 只响应这些群里的 @机器人，冒号后是该群的工作目录
+export const CHATS: Record<string, string> = Object.fromEntries(
+	list("CHATS").map((item) => {
+		const i = item.indexOf(":");
+		const chatId = i < 0 ? item : item.slice(0, i);
+		const cwd = i < 0 ? "" : item.slice(i + 1);
+		return [chatId.trim(), expand(cwd.trim() || DEFAULT_CWD)];
+	}),
+);
+export const READ_ROOTS = [...new Set([DEFAULT_CWD, ...Object.values(CHATS)])].toSorted();
+
+export const DRAFT_ENABLED = env("DRAFT_ENABLED", "1") === "1";
+export const POLL_INTERVAL = Number(env("POLL_INTERVAL", "30"));
+export const POLL_TOP_N = Number(env("POLL_TOP_N", "15"));
+export const DRAFT_SKIP_CHATS = new Set(list("DRAFT_SKIP_CHATS"));
+
+export const PORT = Number(env("PORT", "10086"));
+// 开发时页面由 vite（5173）提供并代理 /api，需要放行这个来源
+export const DEV_ORIGIN = env("DEV_ORIGIN");
+
+// 飞书用户授权的回调地址，必须和开发者后台「重定向 URL」一致；授权时临时监听这个端口
+export const OAUTH_REDIRECT = env("OAUTH_REDIRECT", "http://127.0.0.1:9768/callback");
+
+export const MEEGO_ENABLED = env("MEEGO_ENABLED", "1") === "1";
+export const MEEGO_CHAT = env("MEEGO_CHAT");
+
+export const SKILLS_DIR = expand(env("SKILLS_DIR", "~/.pi/agent/skills"));
+
+export const PATHS = {
+	db: path.join(DATA_DIR, "cabinet.db"),
+	/** pi-durable 的对话存储（会话、模型轮次、工具调用） */
+	agentDb: path.join(DATA_DIR, "agents.sqlite"),
+	sessions: path.join(DATA_DIR, "sessions"),
+	memory: path.join(DATA_DIR, "memory", "MEMORY.md"),
+	stickers: path.join(DATA_DIR, "stickers"),
+	agents: path.join(CONFIG_DIR, "agents.json"),
+	system: path.join(CONFIG_DIR, "system.md"),
+	draftRules: path.join(CONFIG_DIR, "draft.md"),
+	emojiTypes: path.join(CONFIG_DIR, "emoji_types.txt"),
+	migrations: path.join(ROOT, "drizzle"),
+	web: path.join(ROOT, "dist"),
+};
+
+export const EMOJI_TYPES = new Set(existsSync(PATHS.emojiTypes) ? readFileSync(PATHS.emojiTypes, "utf8").split(/\s+/).filter(Boolean) : []);
+// 起草时推荐给模型、看板上放按钮的常用表情回复（Yi 飞书里「最常使用」）
+export const COMMON_EMOJI = list("COMMON_EMOJI").length
+	? list("COMMON_EMOJI")
+	: ["OK", "CRY", "HUSKY", "Get", "YouAreTheBest", "BLACKFACE", "Yes", "THUMBSUP", "DONE", "FISTBUMP", "LOL", "No"];
+// 飞书里「表情 赞」这类中文别名
+export const EMOJI_ALIASES: Record<string, string> = {
+	赞: "THUMBSUP",
+	好的: "OK",
+	收到: "Get",
+	完成: "DONE",
+	谢谢: "THANKS",
+	加油: "MUSCLE",
+	鼓掌: "APPLAUSE",
+	"+1": "JIAYI",
+	加一: "JIAYI",
+	看: "OnIt",
+	稍等: "OneSecond",
+	送花: "YouAreTheBest",
+	花: "YouAreTheBest",
+	你最棒: "YouAreTheBest",
+	玫瑰: "ROSE",
+	搞定: "DONE",
+	黑脸: "BLACKFACE",
+	哈士奇: "HUSKY",
+	笑哭: "LOL",
+	感动: "CRY",
+	捂嘴: "CRY",
+	碰拳: "FISTBUMP",
+	是: "Yes",
+	不: "No",
+};
+
+export function missingConfig(): string[] {
+	return ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "BOT_OPEN_ID", "OWNER_OPEN_ID"].filter((k) => !env(k));
+}
