@@ -19,13 +19,14 @@ import {
 	UsageDoc,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { emit } from "../bus.ts";
 import { CONFIG_DIR, PATHS, PI_FALLBACK_MODEL, PI_MODEL, PI_THINKING, PI_TIMEOUT, READ_ROOTS, SKILLS_DIR } from "../config.ts";
 import { getKv, setKv } from "../db/index.ts";
+import { openTursoDurable } from "../db/turso.ts";
 import type { Usage } from "../db/schema.ts";
 import { Guard } from "../guard.ts";
 import { QUOTA_RE, log, now } from "../util.ts";
@@ -198,11 +199,10 @@ let _harness: Promise<Harness> | undefined;
 
 export function harness(): Promise<Harness> {
 	return (_harness ??= (async () => {
-		mkdirSync(path.dirname(PATHS.agentDb), { recursive: true });
 		const registry = createRegistry();
 		registry.install(Cabinet);
 		const h = await Harness.open(
-			await openNodeSqliteStorage(PATHS.agentDb),
+			await SqliteStorage.open(openTursoDurable(PATHS.agentDb)),
 			{
 				models: models(),
 				registry,
@@ -225,7 +225,10 @@ export function harness(): Promise<Harness> {
 }
 
 export async function closeHarness() {
-	if (_harness) await (await _harness).close(ctx);
+	const h = _harness;
+	_harness = undefined;
+	policies.clear();
+	if (h) await (await h).close(ctx);
 }
 
 async function conversationFor(key: string): Promise<Conversation> {

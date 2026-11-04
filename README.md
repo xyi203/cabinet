@@ -24,14 +24,14 @@ server/          后端（Node 直接跑 TypeScript）
   qa.ts          @机器人问答与私聊里的草稿指令
   tasks.ts       任务模型、执行日志、重试
   api.ts         看板接口、SSE、托管前端构建产物
-  db/            Drizzle + SQLite
+  db/            Drizzle + Turso（turso.ts：drizzle 与 durable 存储的 Turso 适配）
 src/             看板前端（TanStack Start + React Query）
 config/          agents.json、各 agent 提示词、系统规则、起草规则
 drizzle/         数据库迁移（drizzle-kit 生成，启动时自动执行）
 data/            运行数据，不进 git：cabinet.db（业务）、agents.sqlite（durable 对话）、memory/、stickers/
 ```
 
-技术栈：TypeScript（Node 24+ 原生类型擦除）、`@earendil-works/pi-durable`（agent 驱动）、`@larksuiteoapi/node-sdk`、Drizzle ORM + better-sqlite3、TanStack Start、Vite 8（Rolldown + Oxc）、oxlint、oxfmt。
+技术栈：TypeScript（Node 24+ 原生类型擦除）、`@earendil-works/pi-durable`（agent 驱动）、`@larksuiteoapi/node-sdk`、Drizzle ORM + Turso（`@tursodatabase/database`）、TanStack Start、Vite 8（Rolldown + Oxc）、oxlint、oxfmt。
 
 ## agent 驱动
 
@@ -41,7 +41,8 @@ agent 跑在 [pi-durable](https://github.com/earendil-works/pi/tree/main/package
 - 每次提交带 requestId（`draft:<消息 id>`、`qa:<消息 id>`、`revise:<草稿 id>`）。进程崩溃或重启后，`pending:*` 里记着没跑完的任务，启动时用同一个 requestId 重新提交，接上原来那次运行，已经执行过的工具不会再跑。手动重试会换一个 requestId。
 - 模型来自 `~/.pi/agent/models.json`（magpie 网关，openai-completions）。主模型额度用完或限流时，在同一会话里换 `PI_FALLBACK_MODEL` 接着跑。
 - 工具：durable 自带的 read、bash，加上 cabinet 补的只读 grep / find / ls；守卫挂在 `beforeTool` 钩子上，策略同时存进 `kv`，所以重启恢复的运行也受约束。
-- pi-durable 还是 Experimental 版本，依赖锁定在 1.5.0，升级前先跑 `pnpm check` 和真实调用。
+- 对话存储跑在 Turso 上（`server/db/turso.ts` 的适配层，语义照 chord 的 node:sqlite 适配器：一条连接、串行执行、事务独占），`pnpm test` 里跑 pi-durable 自带的存储一致性用例。
+- pi-durable 还是 Experimental 版本，依赖锁定在 1.5.0；Turso 也锁定在 0.8.3。升级前先跑 `pnpm check` 和真实调用。
 
 ## 身份与权限
 

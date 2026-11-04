@@ -1,22 +1,15 @@
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { eq, like } from "drizzle-orm";
-import { mkdirSync } from "node:fs";
-import path from "node:path";
 import { PATHS } from "../config.ts";
 import * as schema from "./schema.ts";
+import { drizzleTurso, openTurso } from "./turso.ts";
 
 export { schema };
 export type DB = ReturnType<typeof openDb>;
 
 export function openDb(file = PATHS.db) {
-	if (file !== ":memory:") mkdirSync(path.dirname(file), { recursive: true });
-	const sqlite = new Database(file);
-	sqlite.pragma("journal_mode = WAL");
-	sqlite.pragma("busy_timeout = 5000");
-	const db = drizzle(sqlite, { schema });
-	migrate(db, { migrationsFolder: PATHS.migrations });
+	const db = drizzleTurso(openTurso(file), schema);
+	migrate(db as any, { migrationsFolder: PATHS.migrations });
 	return db;
 }
 

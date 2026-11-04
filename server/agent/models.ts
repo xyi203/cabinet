@@ -48,6 +48,9 @@ export function models(): MutableModels {
 	return (_models = m);
 }
 
+/** 测试用：换成假模型 */
+export const useModels = (m: MutableModels) => void (_models = m);
+
 /** "claude/claude-opus-5-5" 这类名字在 magpie 提供方下；也接受 "provider:model" */
 export function resolveModel(spec: string): ModelSpec {
 	const m = models();
