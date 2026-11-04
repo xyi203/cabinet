@@ -249,6 +249,9 @@ export class Guard {
 			case "edit":
 			case "write":
 				return this.writable(cwd, input.path as string | undefined) ? undefined : `只能修改开发任务 worktree 里的文件: ${input.path}`;
+			case "memory":
+				// 只读，只查 cabinet 自己的记忆库
+				return undefined;
 			case "bash":
 				input.command = this.normalizeScriptPath(String(input.command ?? ""));
 				return this.checkBash(String(input.command), cwd);

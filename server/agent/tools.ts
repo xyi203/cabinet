@@ -4,6 +4,7 @@ import { bool, num, obj, opt, str } from "@earendil-works/pi-schema";
 import { execFile } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
+import { render, search } from "../memory/recall.ts";
 
 const MAX_OUTPUT = 50_000;
 const cwdOf = (api: { env?: { cwd?: string } | undefined }) => (api.env as any)?.cwd ?? process.cwd();
@@ -64,5 +65,18 @@ export const lsTool = defineTool({
 				.toSorted()
 				.join("\n"),
 		);
+	},
+});
+
+// 注入的记忆不够用、或者想找以前的排查经验时，agent 自己查。结果是已有记忆，提取时不当新证据（见 memory/extract.ts）
+export const memoryTool = defineTool({
+	name: "memory",
+	description:
+		"查 Yi 的长期记忆（约定与历史线索）：注入的记忆不够用、或者想找以前的排查经验时，用关键词或一句话查。约定在条件成立时照做；线索先核实再用。",
+	parameters: obj({ query: str() }),
+	execute: async (args) => {
+		const { items, degraded } = await search(args.query, { anyScope: true, topK: 10 });
+		const block = render({ conventions: [], references: items });
+		return text(`〔记忆查询结果：已有记忆，不是新证据${degraded ? `；向量检索不可用，只用了关键词` : ""}〕\n${block || "没有相关记忆"}`);
 	},
 });

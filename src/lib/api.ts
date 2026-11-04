@@ -167,7 +167,59 @@ export async function post<T = any>(url: string, body: unknown = {}): Promise<T>
 
 export const fetchState = () => getJson<State>("/api/state");
 export const fetchStickers = () => getJson<{ stickers: string[]; emoji: string[] }>("/api/stickers");
-export const fetchMemory = () => getJson<{ text: string }>("/api/memory");
+export interface Evidence {
+	kind: "yi" | "tool" | "board" | "message";
+	ref: string;
+	quote: string;
+	at: number;
+}
+
+export interface Memory {
+	id: number;
+	revision: number;
+	content: string;
+	kind: "preference" | "fact" | "experience";
+	application: "convention" | "reference";
+	appliesWhen: string;
+	scope: string;
+	scopeName: string;
+	provenance: "user_statement" | "tool_observation" | "model_inference";
+	confirmed: boolean;
+	state: "candidate" | "active" | "contested" | "superseded" | "forgotten";
+	evidence: Evidence[];
+	conflicts: number[];
+	supersededBy: number | null;
+	source: string;
+	injected: number;
+	lastInjected: number | null;
+	created: number;
+	updated: number;
+}
+
+export interface ArmScore {
+	id: number;
+	keyword?: number;
+	vector?: number;
+	passed: "keyword" | "vector" | "both" | null;
+}
+
+export interface MemoryState {
+	items: Memory[];
+	vectors: { model: string; total: number; pending: number; retryIn?: number };
+}
+
+export interface Classification {
+	kind: Memory["kind"];
+	application: Memory["application"];
+	appliesWhen: string;
+}
+
+export const fetchMemory = () => getJson<MemoryState>("/api/memory");
+export const searchMemory = (q: string) =>
+	getJson<{ ids: number[]; scores: ArmScore[]; degraded?: string }>(`/api/memory/search?${new URLSearchParams({ q })}`);
+export const addMemory = (input: Classification & { content: string }) => post("/api/memory", input);
+export const memoryAction = (m: Memory, action: "confirm" | "forget" | "restore" | "classify", extra: Partial<Classification> = {}) =>
+	post(`/api/memory/${m.id}/${action}`, { revision: m.revision, ...extra });
 export const fetchLog = (t: Pick<Task, "session" | "start" | "end">) =>
 	getJson<{ steps: Step[] }>(
 		`/api/log?${new URLSearchParams({ session: t.session ?? "", start: String(t.start ?? ""), end: String(t.end ?? "") })}`,

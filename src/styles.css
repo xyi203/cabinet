@@ -253,13 +253,54 @@ blockquote {
 	padding: 40px 0;
 	text-align: center;
 }
-pre.mem {
-	white-space: pre-wrap;
-	margin: 0;
-	font:
-		13px/1.6 ui-monospace,
-		Menlo,
-		monospace;
+/* 记忆 */
+.memory-group {
+	margin-bottom: 14px;
+}
+.memory-group > summary {
+	cursor: pointer;
+	margin-bottom: 8px;
+}
+.card.memory .row {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	align-items: center;
+	margin-top: 8px;
+}
+.card.memory .meta {
+	margin-top: 6px;
+}
+.card.memory .tag,
+.memory-board .tag {
+	border-radius: 5px;
+	padding: 0 6px;
+	background: var(--soft);
+}
+.card.memory .tag.warn {
+	background: var(--warn-soft);
+	color: var(--warn);
+}
+.card.memory select,
+.card.memory input {
+	font: inherit;
+	color: var(--text);
+	background: var(--bg);
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	padding: 6px 8px;
+}
+.memory-board .grow {
+	flex: 1;
+	min-width: 200px;
+}
+.evidence {
+	margin-top: 6px;
+	font-size: 12.5px;
+}
+.evidence summary {
+	cursor: pointer;
+	color: var(--muted);
 }
 /* 草稿抽屉 */
 .mask {

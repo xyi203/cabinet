@@ -1,4 +1,4 @@
-import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { blob, index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 // 时间统一存 unix 秒（浮点），和 pi 会话日志、旧数据保持一致
 
@@ -127,3 +127,65 @@ export const devTasks = sqliteTable("dev_tasks", {
 });
 
 export type DevTask = typeof devTasks.$inferSelect;
+
+// ---------- 长期记忆（借鉴 komo docs/memory.md §9） ----------
+
+/** 记忆的依据：哪条消息、哪次工具调用、哪条草稿，quote 是原文片段 */
+export interface Evidence {
+	/** yi：Yi 自己说的话；tool：工具结果；board：Yi 在看板上写的；message：别人的消息、草稿、处理结果 */
+	kind: "yi" | "tool" | "board" | "message";
+	ref: string;
+	quote: string;
+	at: number;
+}
+
+/**
+ * 一条记忆。kind 说内容是什么，provenance 说从哪来，confirmed 说 Yi 有没有复核过这一版，
+ * application 说怎么用：convention 在 appliesWhen 成立时直接照做，reference 只是线索。
+ * 改正文、用法、条件或作用域都升 revision，索引跟着重建。
+ */
+export const memories = sqliteTable(
+	"memories",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		revision: integer("revision").notNull().default(1),
+		content: text("content").notNull(),
+		kind: text("kind").notNull(), // preference / fact / experience
+		application: text("application").notNull().default("reference"), // convention / reference
+		appliesWhen: text("applies_when").notNull().default(""),
+		/** personal：处处适用；person:<open_id>：只在和这个人有关时；chat:<chat_id>：只在这个会话 */
+		scope: text("scope").notNull().default("personal"),
+		scopeName: text("scope_name").notNull().default(""),
+		provenance: text("provenance").notNull(), // user_statement / tool_observation / model_inference
+		confirmed: integer("confirmed", { mode: "boolean" }).notNull().default(false),
+		state: text("state").notNull(), // candidate active contested superseded forgotten
+		evidence: text("evidence", { mode: "json" }).$type<Evidence[]>().notNull().default([]),
+		/** 互相矛盾、等 Yi 裁定的条目 */
+		conflicts: text("conflicts", { mode: "json" }).$type<number[]>().notNull().default([]),
+		supersededBy: integer("superseded_by"),
+		/** 记下它的途径：remember / board / import / draft:<消息 id> / qa:<消息 id> */
+		source: text("source").notNull().default(""),
+		injected: integer("injected").notNull().default(0),
+		lastInjected: real("last_injected"),
+		created: real("created").notNull(),
+		updated: real("updated").notNull(),
+	},
+	(t) => [index("memories_state").on(t.state, t.application)],
+);
+
+/** 关键词索引：terms 是首尾带空格的 token 串，查询用 instr(terms, ' tok ')（Turso 没有 FTS5） */
+export const memoryTerms = sqliteTable("memory_terms", {
+	memoryId: integer("memory_id").primaryKey(),
+	revision: integer("revision").notNull(),
+	terms: text("terms").notNull(),
+});
+
+/** 向量索引：Turso 的 vector32，按 model 区分向量空间，换模型后旧向量不再参与比较 */
+export const memoryVectors = sqliteTable("memory_vectors", {
+	memoryId: integer("memory_id").primaryKey(),
+	revision: integer("revision").notNull(),
+	model: text("model").notNull(),
+	vec: blob("vec").notNull(),
+});
+
+export type MemoryRow = typeof memories.$inferSelect;

@@ -1,5 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
-import { type Draft, type RecordRow, fetchMemory } from "../lib/api";
+import { type Draft, type RecordRow } from "../lib/api";
 import { STATUS, describeDraft, isLive, money, time } from "../lib/format";
 
 const Pill = ({ st }: { st: string }) => <span className={`pill ${st}`}>{STATUS[st] ?? st}</span>;
@@ -55,15 +54,6 @@ export function RecordList({ records }: { records: RecordRow[] }) {
 					{r.error && <div className="err">{r.error}</div>}
 				</div>
 			))}
-		</div>
-	);
-}
-
-export function Memory() {
-	const { data, error } = useQuery({ queryKey: ["memory"], queryFn: fetchMemory });
-	return (
-		<div className="panel">
-			<pre className="mem">{error ? "读取失败" : data ? data.text || "（空）" : "加载中…"}</pre>
 		</div>
 	);
 }

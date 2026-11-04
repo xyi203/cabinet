@@ -63,11 +63,33 @@ export const MEEGO_CHAT = env("MEEGO_CHAT");
 
 export const SKILLS_DIR = expand(env("SKILLS_DIR", "~/.pi/agent/skills"));
 
+// 长期记忆：约定每次都带，线索按关键词 + 向量召回、过门槛才带；草稿反馈和工具结果自动提取
+export const MEMORY = {
+	enabled: env("MEMORY_ENABLED", "1") === "1",
+	/** 提取与「记住」分类用的模型 */
+	model: env("MEMORY_MODEL", PI_MODEL),
+	/** Ollama 的 /api/embed；留空则只用关键词 */
+	embedUrl: env("EMBED_URL", "http://127.0.0.1:11434"),
+	embedModel: env("EMBED_MODEL", "qwen3-embedding:4b"),
+	/** 只加在查询上；换前缀或模型要重新校准下面三个门槛 */
+	queryPrefix: env("EMBED_QUERY_PREFIX", "Instruct: Given a chat message, retrieve memories relevant to replying to it\nQuery: "),
+	/** 向量臂：余弦过它就留下（0 = 不启用） */
+	minSimilarity: Number(env("MEMORY_MIN_SIMILARITY", "0.58")),
+	/** 关键词臂：命中 token 的归一 IDF 之和过它就留下 */
+	minKeyword: Number(env("MEMORY_MIN_KEYWORD", "1.0")),
+	/** 只过关键词门槛的，向量跑了且余弦低于它就不算过（挡常用词凑分的误召回） */
+	minKeywordCosine: Number(env("MEMORY_MIN_KEYWORD_COSINE", "0.45")),
+	topK: Number(env("MEMORY_TOP_K", "8")),
+	tokens: Number(env("MEMORY_TOKENS", "1500")),
+	conventionTokens: Number(env("MEMORY_CONVENTION_TOKENS", "800")),
+};
+
 export const PATHS = {
 	db: path.join(DATA_DIR, "cabinet.db"),
 	/** pi-durable 的对话存储（会话、模型轮次、工具调用） */
 	agentDb: path.join(DATA_DIR, "agents.sqlite"),
 	sessions: path.join(DATA_DIR, "sessions"),
+	/** 旧版记忆文件，启动时导入一次 */
 	memory: path.join(DATA_DIR, "memory", "MEMORY.md"),
 	stickers: path.join(DATA_DIR, "stickers"),
 	agents: path.join(CONFIG_DIR, "agents.json"),

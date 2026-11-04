@@ -8,6 +8,9 @@ import { resumePendingDrafts } from "./drafts.ts";
 import { startEvents } from "./lark/bot.ts";
 import { markHandled, pollForever, stopPolling } from "./poller.ts";
 import { onBotEvent, resumePendingQa } from "./qa.ts";
+import { resumePendingMemory } from "./memory/extract.ts";
+import { importLegacyMemory } from "./memory/remember.ts";
+import { scheduleVectors } from "./memory/store.ts";
 import { log, markStopping } from "./util.ts";
 
 const missing = missingConfig();
@@ -17,8 +20,12 @@ if (missing.length) {
 }
 for (const d of [PATHS.sessions, PATHS.stickers]) mkdirSync(d, { recursive: true });
 db();
+importLegacyMemory();
 // 先打开 durable：上次没跑完的 agent 运行在这里恢复
 await harness();
+// 记忆向量在后台补齐（Ollama 没起来时先只用关键词，退避重试）；上次没做完的提取接着做
+scheduleVectors();
+resumePendingMemory();
 
 log(`cabinet 启动：监听群 ${JSON.stringify(Object.keys(CHATS))}，默认模型 ${PI_MODEL}`);
 const server = startServer();

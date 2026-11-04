@@ -1,14 +1,15 @@
 // @机器人 的问答：一个 @ 开一个话题，主消息的 message_id 就是会话 key，话题内后续消息的 root_id 指回它，
 // 所以 key = root_id ?? message_id，话题和 pi 会话一一对应。Yi 私聊机器人时还能处理草稿指令。
-import { appendFileSync, mkdirSync } from "node:fs";
-import path from "node:path";
-import { BOT_OPEN_ID, CHATS, COMMON_EMOJI, DEFAULT_CWD, OWNER_NAME, OWNER_OPEN_ID, PATHS, THREAD_CONTEXT_N } from "./config.ts";
+import { BOT_OPEN_ID, CHATS, COMMON_EMOJI, DEFAULT_CWD, OWNER_NAME, OWNER_OPEN_ID, THREAD_CONTEXT_N } from "./config.ts";
 import { type Action, DraftError, type Kind, LIVE, applyDraftAction, listStickers, locks, pickDraft, sem } from "./drafts.ts";
 import { type BotEvent, LarkError, quotedMessage, react, replyAsBot, threadContext, unreact } from "./lark/bot.ts";
 import { record } from "./records.ts";
 import { runPi } from "./agent/driver.ts";
 import { closeTask, devTaskOfDm, discardDev, messageDev, pushDev, stopDev } from "./dev.ts";
 import { deleteKv, listKv, setKv } from "./db/index.ts";
+import { enqueueMemory } from "./memory/extract.ts";
+import { rememberStatement } from "./memory/remember.ts";
+import { MemoryError } from "./memory/store.ts";
 import { isStopping, log, now } from "./util.ts";
 
 const seen = new Set<string>();
@@ -62,10 +63,16 @@ async function remember(ev: BotEvent, text: string) {
 	const content = text.replace(/^记住[:：,，\s]*/, "").trim();
 	if (ev.senderId !== OWNER_OPEN_ID) return void (await reply(ev, `写入记忆需要${OWNER_NAME}确认，可以请${OWNER_NAME}来说「记住 …」。`));
 	if (!content) return void (await reply(ev, "要记住什么？用法：记住 xxx"));
-	mkdirSync(path.dirname(PATHS.memory), { recursive: true });
-	// 记忆只由程序追加、不经过模型，避免群里的提示词注入写进长期记忆
-	appendFileSync(PATHS.memory, `- ${content}（${new Date().toLocaleDateString("sv-SE")}，来源 ${ev.messageId}）\n`);
+	// 只有 Yi 能写；正文就是他的原话，模型只帮着分类，群里的提示词注入写不进长期记忆
+	let m;
+	try {
+		m = await rememberStatement(content, ev.messageId);
+	} catch (e) {
+		if (e instanceof MemoryError) return void (await reply(ev, `没记下：${e.message}。`));
+		throw e;
+	}
 	await react(ev.messageId, "DONE");
+	if (m.application === "convention") await reply(ev, `记成长期约定 #${m.id}，适用：${m.appliesWhen}。不对的话在看板「记忆」里改。`);
 	record({ kind: "qa", status: "remembered", source: ev.messageId, chatId: ev.chatId, question: content, label: "记忆" });
 }
 
@@ -168,6 +175,7 @@ export async function handle(ev: BotEvent, attempt?: string) {
 					requestId: `qa:${ev.messageId}${attempt ? `:${attempt}` : ""}`,
 					prompt: await buildPrompt(ev, text),
 					label,
+					memory: { query: text, scope: { personId: ev.senderId === OWNER_OPEN_ID ? undefined : ev.senderId, chatId: ev.chatId } },
 				});
 				await reply(ev, answer);
 				await unreact(ev.messageId, rid);
@@ -183,6 +191,18 @@ export async function handle(ev: BotEvent, attempt?: string) {
 					usage,
 					question: text,
 					answer,
+				});
+				enqueueMemory({
+					type: "qa",
+					messageId: ev.messageId,
+					session: key,
+					chatId: ev.chatId,
+					askerId: ev.senderId,
+					askerName: ev.senderId === OWNER_OPEN_ID ? OWNER_NAME : ev.senderId,
+					question: text,
+					answer,
+					start: started,
+					end: now(),
 				});
 			} catch (e) {
 				// 退出时被打断：不打叉、不记失败，留着待接回标记

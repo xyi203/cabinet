@@ -229,6 +229,7 @@ async function runDev(id: string, opinion?: string) {
 				chatId: id,
 				// 只有 dev agent 能写，而且只能写自己的 worktree
 				writeRoots: dev ? [task.worktree] : undefined,
+				memory: { query: opinion ?? `${task.title}\n${task.request}`.slice(0, 1000), scope: {} },
 			}),
 		);
 		const prev = task.usage;

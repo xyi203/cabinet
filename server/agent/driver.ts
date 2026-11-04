@@ -25,13 +25,14 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { emit } from "../bus.ts";
 import { CONFIG_DIR, PATHS, PI_FALLBACK_MODEL, PI_MODEL, PI_THINKING, PI_TIMEOUT, READ_ROOTS, SKILLS_DIR } from "../config.ts";
+import { type RecallScope, recallBlock } from "../memory/recall.ts";
 import { getKv, setKv } from "../db/index.ts";
 import { openTursoDurable } from "../db/turso.ts";
 import type { Usage } from "../db/schema.ts";
 import { Guard } from "../guard.ts";
 import { QUOTA_RE, log, now } from "../util.ts";
 import { models, resolveModel } from "./models.ts";
-import { findTool, grepTool, lsTool } from "./tools.ts";
+import { findTool, grepTool, lsTool, memoryTool } from "./tools.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -69,6 +70,8 @@ export interface RunOptions {
 	agentName?: string;
 	/** 允许写的目录（开发任务的 worktree） */
 	writeRoots?: string[];
+	/** 按这段文字召回长期记忆，带在这一轮的输入里；不给就不带 */
+	memory?: { query: string; scope: RecallScope };
 }
 
 export interface RunResult {
@@ -98,9 +101,10 @@ const TOOLS = {
 	ls: lsTool,
 	edit: createEditTool(),
 	write: createWriteTool(),
+	memory: memoryTool,
 };
 type ToolName = keyof typeof TOOLS;
-const DEFAULT_TOOLS: ToolName[] = ["read", "grep", "find", "ls", "bash"];
+const DEFAULT_TOOLS: ToolName[] = ["read", "grep", "find", "ls", "bash", "memory"];
 
 // ---------- 守卫策略：conversation -> 只读策略 ----------
 
@@ -144,15 +148,7 @@ const Cabinet = defineExtension({
 	tools: Object.values(TOOLS),
 	sections: [
 		section("rules", () => readText(PATHS.system) || undefined, { tag: false }),
-		// 记忆只由程序追加；改了之后下一次请求生效
-		section(
-			"memory",
-			() => {
-				const memory = readText(PATHS.memory);
-				return memory ? `# 长期记忆\n\n${memory}` : undefined;
-			},
-			{ tag: false },
-		),
+		// 长期记忆不进系统段：每轮按当前消息召回，带在输入里（见 runPi 的 memory）
 		section("cwd", (input) => input.env?.cwd),
 	],
 	hooks: [
@@ -332,7 +328,9 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 			ctx,
 		);
 		const before = await usageNow(h, conv.id);
-		let settled = await waitSettled(await conv.submit({ type: "input", content: opts.prompt, requestId: opts.requestId }, ctx), conv);
+		const memory = opts.memory ? await recallBlock(opts.memory.query, opts.memory.scope) : "";
+		const content = memory ? `${memory}\n\n---\n\n${opts.prompt}` : opts.prompt;
+		let settled = await waitSettled(await conv.submit({ type: "input", content, requestId: opts.requestId }, ctx), conv);
 		// 额度/限流这类错误换模型也能跑：同一会话里换成备用模型接着做，前面已经查到的内容不丢
 		const fallback = agent.fallbackModel ?? PI_FALLBACK_MODEL;
 		if (settled.status === "unanswered" && fallback && fallback !== spec) {

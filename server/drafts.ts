@@ -22,6 +22,7 @@ import { loadAgents, mrBrief, resolveCwd, route, sessionKey } from "./hub.ts";
 import { meegoContext, meegoYiReplied, sendMeegoComment } from "./meego.ts";
 import { record } from "./records.ts";
 import { runPi } from "./agent/driver.ts";
+import { enqueueMemory } from "./memory/extract.ts";
 import { KeyedLock, Semaphore, isStopping, log, now } from "./util.ts";
 import { MAX_CONCURRENCY, DEFAULT_CWD } from "./config.ts";
 
@@ -264,7 +265,16 @@ export function expireDrafts(chat: ChatRef, m: Message) {
 	for (const d of live) {
 		if (d.created >= repliedAt + 60) continue;
 		const src = [{ message_id: d.replyTo, thread_id: d.threadId ?? undefined, sender: { id: d.senderId, name: "", sender_type: "user" } }];
-		if (ownerReplyCovers(chat.chat_mode, m, src) && claim(d.id, LIVE, "expired")) log("草稿作废：Yi 已亲自回复", d.id);
+		if (ownerReplyCovers(chat.chat_mode, m, src) && claim(d.id, LIVE, "expired")) {
+			log("草稿作废：Yi 已亲自回复", d.id);
+			// Yi 没用草稿、自己回的那句，是最直接的口吻样本
+			enqueueMemory({
+				type: "draft",
+				replyTo: d.replyTo,
+				outcome: "expired",
+				yiReply: { id: m.message_id, text: m.content, at: repliedAt },
+			});
+		}
 	}
 }
 
@@ -278,6 +288,7 @@ export async function expireMeegoDrafts() {
 	for (const d of live) {
 		if (d.meego && (await meegoYiReplied(d.meego)) && claim(d.id, LIVE, "expired")) {
 			changed();
+			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: "expired" });
 			log("飞书项目草稿作废：Yi 已亲自评论", d.id);
 		}
 	}
@@ -439,6 +450,11 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], attempt?: string) {
 					agent,
 					agentName: name,
 					chatId: chat.chat_id,
+					memory: {
+						// 只有 @ 的消息意思在前文里，召回也带上最后一段前文
+						query: `${source.text}\n${(source.context ?? "").slice(-300)}`,
+						scope: { personId: chat.chat_mode === "meego" ? undefined : source.senderId, chatId: chat.chat_id },
+					},
 				});
 				source.session = sessionId;
 				const dm = await pushDraft(source, draft);
@@ -548,6 +564,7 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 			setStatus(id, "sent", arg ? { kind, draft: arg } : {});
 			void react(id, "DONE");
 			record({ kind: "draft", status: "sent", dm: id, chatId: d.chatId, source: d.replyTo, answer: toSend.draft });
+			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: "sent" });
 		} else if (action === "revise") {
 			const agent = loadAgents().agents[d.agent ?? ""] ?? {};
 			// 早于上下文功能的草稿没有存前文，改写时现补
@@ -556,6 +573,7 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 				const orig = await getMessage(d.replyTo).catch(() => undefined);
 				if (orig) context = (await gatherContext(d.chatId, [orig])).related;
 			}
+			const started = now();
 			const { text } = await locks.run(`draft-${d.chatId}`, () =>
 				sem.run(() =>
 					runPi({
@@ -569,14 +587,29 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 						agent,
 						agentName: d.agent ?? undefined,
 						chatId: d.chatId,
+						memory: {
+							query: `${d.text}\n${arg}`,
+							scope: { personId: d.chatMode === "meego" ? undefined : d.senderId, chatId: d.chatId },
+						},
 					}),
 				),
 			);
 			const { id: _id, kind: _k, draft: _d, note: _n, report: _r, status: _s, created: _c, ...source } = d;
 			await pushDraft({ ...source, context }, text, id);
-			record({ kind: "draft", status: "revised", dm: id, chatId: d.chatId, source: d.replyTo });
+			// 修改意见是 Yi 的原话，草稿走完时提取记忆要用；耗时用来圈出这次运行的工具调用
+			record({
+				kind: "draft",
+				status: "revised",
+				dm: id,
+				chatId: d.chatId,
+				source: d.replyTo,
+				question: arg,
+				seconds: now() - started,
+				session: d.session,
+			});
 		} else {
 			record({ kind: "draft", status: busy, dm: id, chatId: d.chatId, source: d.replyTo });
+			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: busy as "discarded" | "completed" });
 		}
 		return getDraft(id)!.status;
 	} catch (e) {

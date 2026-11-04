@@ -10,6 +10,8 @@ const dir = mkdtempSync(path.join(tmpdir(), "cabinet-agent-"));
 process.env.DATA_DIR = path.join(dir, "data");
 process.env.DEFAULT_CWD = path.join(dir, "work");
 process.env.PI_FALLBACK_MODEL = "";
+// 测试不依赖本机的 Ollama：只用关键词
+process.env.EMBED_URL = "";
 const work = process.env.DEFAULT_CWD;
 await import("node:fs").then((fs) => fs.mkdirSync(work, { recursive: true }));
 writeFileSync(path.join(work, "a.txt"), "hello");
@@ -66,4 +68,36 @@ test("重启后从 Turso 读回对话", async () => {
 	const { conversationTranscript: again } = await import("../server/agent/driver.ts");
 	const items = await again("t1");
 	assert.ok(items.some((i) => i.kind === "assistant" && i.text === "读到了 hello"));
+});
+
+test("记忆：约定拼进这一轮的输入，agent 能用 memory 工具查", async () => {
+	const { rememberFromYi } = await import("../server/memory/store.ts");
+	rememberFromYi(
+		"回 PM 的排期问题不要直接承诺日期",
+		{ kind: "preference", application: "convention", appliesWhen: "有人问上线或排期时间时" },
+		{ kind: "yi", ref: "om_m", quote: "以后排期别直接承诺", at: 1 },
+		"test",
+		true,
+	);
+	let input = "";
+	faux.setResponses([
+		(ctx) => {
+			input = JSON.stringify(ctx.messages.at(-1));
+			return fauxAssistantMessage([fauxToolCall("memory", { query: "排期" })], { stopReason: "toolUse" });
+		},
+		fauxAssistantMessage("好"),
+	]);
+	await runPi({
+		cwd: work,
+		sessionId: "t-mem",
+		requestId: "req-mem",
+		prompt: "王五问：周三能上线吗",
+		agent: { model: "faux-1" },
+		memory: { query: "周三能上线吗", scope: {} },
+	});
+	assert.match(input, /适用的长期约定/);
+	assert.match(input, /排期问题不要直接承诺日期/);
+	const tool = (await conversationTranscript("t-mem")).find((i) => i.kind === "tool");
+	assert.equal(tool?.error, false);
+	assert.match(tool?.result ?? "", /记忆查询结果[\s\S]*排期问题/);
 });

@@ -5,7 +5,8 @@ import { AgentBoard } from "../components/AgentBoard";
 import { Board } from "../components/Board";
 import { DevDrawer } from "../components/DevDrawer";
 import { DraftDrawer, TaskDrawer } from "../components/Drawers";
-import { DraftList, Memory, RecordList } from "../components/Lists";
+import { DraftList, RecordList } from "../components/Lists";
+import { MemoryBoard } from "../components/MemoryBoard";
 import { type DevTask, type Draft, type Task, fetchState, post } from "../lib/api";
 import { isLive, money } from "../lib/format";
 import { useLiveUpdates } from "../lib/live";
@@ -94,7 +95,7 @@ function Dashboard() {
 				{state && view === "drafts" && <DraftList drafts={state.drafts} onOpen={openDraft} />}
 				{state && view === "qa" && <RecordList records={state.records.filter((r) => r.kind !== "draft")} />}
 				{state && view === "failed" && <RecordList records={state.records.filter((r) => r.status === "failed")} />}
-				{view === "memory" && <Memory />}
+				{view === "memory" && <MemoryBoard />}
 			</main>
 			{open?.dev && state?.devTasks.find((x) => x.id === open.dev) ? (
 				<DevDrawer

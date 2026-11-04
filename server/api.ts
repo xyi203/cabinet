@@ -16,7 +16,19 @@ import { conversationTranscript } from "./agent/driver.ts";
 import { modelOptions } from "./agent/models.ts";
 import { closeTask, devDiff, discardDev, dispatch, getDevTask, listRepos, messageDev, pushDev, stopDev } from "./dev.ts";
 import { dashboardState, retryTask, sessionLog } from "./tasks.ts";
-import { log } from "./util.ts";
+import { search } from "./memory/recall.ts";
+import {
+	type Classification,
+	MemoryError,
+	classifyMemory,
+	confirmMemory,
+	forgetMemory,
+	listMemories,
+	rememberFromYi,
+	restoreMemory,
+	vectorStatus,
+} from "./memory/store.ts";
+import { log, now } from "./util.ts";
 
 const TOKEN = randomBytes(24).toString("base64url");
 const ALLOWED_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
@@ -51,6 +63,34 @@ async function readJson(req: IncomingMessage): Promise<any> {
 		if (raw.length > 100_000) throw new Error("请求体太大");
 	}
 	return raw ? JSON.parse(raw) : {};
+}
+
+const classification = (body: any): Classification => ({
+	kind: body.kind,
+	application: body.application,
+	appliesWhen: String(body.appliesWhen ?? ""),
+});
+
+/** 记忆的写操作：Yi 在看板上新增、确认、遗忘、恢复、改分类。都带预期 revision，防止对着旧版本操作 */
+function memoryAction(p: string, body: any) {
+	if (p === "/api/memory") {
+		const content = String(body.content ?? "");
+		return rememberFromYi(
+			content,
+			classification(body),
+			{ kind: "board", ref: "board", quote: content.slice(0, 200), at: now() },
+			"board",
+			true,
+		);
+	}
+	const m = /^\/api\/memory\/(\d+)\/(confirm|forget|restore|classify)$/.exec(p);
+	if (!m) return undefined;
+	const id = Number(m[1]);
+	const revision = Number(body.revision);
+	if (m[2] === "confirm") return confirmMemory(id, revision);
+	if (m[2] === "forget") return forgetMemory(id, revision);
+	if (m[2] === "restore") return restoreMemory(id, revision);
+	return classifyMemory(id, revision, classification(body));
 }
 
 function sse(req: IncomingMessage, res: ServerResponse) {
@@ -97,7 +137,13 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			const ext = path.extname(name).slice(1).toLowerCase();
 			return send(res, 200, readFileSync(path.join(PATHS.stickers, name)), `image/${ext === "jpg" ? "jpeg" : ext}`);
 		}
-		if (p === "/api/memory") return send(res, 200, { text: existsSync(PATHS.memory) ? readFileSync(PATHS.memory, "utf8") : "" });
+		if (p === "/api/memory") return send(res, 200, { items: listMemories(), vectors: vectorStatus() });
+		if (p === "/api/memory/search") {
+			// 看板搜索不限作用域，带两臂分数，校准门槛用
+			const q = url.searchParams.get("q") ?? "";
+			const r = await search(q, { anyScope: true, states: ["active", "candidate", "contested"] });
+			return send(res, 200, { ids: r.items.map((m) => m.id), scores: r.scores, degraded: r.degraded });
+		}
 		return send(res, 404, { error: "not found" });
 	}
 	if (req.method !== "POST") return send(res, 405, { error: "method not allowed" });
@@ -126,6 +172,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		body = await readJson(req);
 	} catch {
 		return send(res, 400, { error: "bad json" });
+	}
+	if (p.startsWith("/api/memory")) {
+		try {
+			const item = memoryAction(p, body);
+			return item ? send(res, 200, { ok: true, item }) : send(res, 404, { error: "not found" });
+		} catch (e) {
+			if (e instanceof MemoryError) return send(res, 409, { error: e.message });
+			throw e;
+		}
 	}
 	// 开发任务：指派、继续修改、推送建 MR、放弃
 	const dispatchM = /^\/api\/drafts\/(om_[\w-]+)\/dispatch$/.exec(p);

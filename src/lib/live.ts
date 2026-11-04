@@ -41,7 +41,10 @@ export function useLiveUpdates(onStatus: (connected: boolean) => void) {
 		// 一次处理常连带多个事件，合并成一次刷新
 		const refresh = () => {
 			clearTimeout(timer);
-			timer = setTimeout(() => qc.invalidateQueries({ queryKey: ["state"] }), 300);
+			timer = setTimeout(() => {
+				qc.invalidateQueries({ queryKey: ["state"] });
+				qc.invalidateQueries({ queryKey: ["memory"] });
+			}, 300);
 		};
 		const es = new EventSource("/api/events");
 		es.addEventListener("open", () => onStatus(true));
