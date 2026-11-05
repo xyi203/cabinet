@@ -13,7 +13,8 @@
 		"import-legacy": "node --env-file-if-exists=.env scripts/import-legacy.ts",
 		"lint": "oxlint",
 		"format": "oxfmt",
-		"check": "oxlint && oxfmt --check && pnpm typecheck && pnpm test"
+		"check": "oxlint && oxfmt --check && pnpm typecheck && pnpm test",
+		"push:gitlab": "bash scripts/push-gitlab.sh"
 	},
 	"dependencies": {
 		"@earendil-works/chord": "1.5.0",
