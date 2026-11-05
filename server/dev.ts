@@ -15,7 +15,7 @@ import { decide, receive, settle } from "./pipeline.ts";
 import type { DevTask } from "./db/schema.ts";
 import { DraftError, getDraft } from "./drafts/store.ts";
 import { sem } from "./agent/slots.ts";
-import { loadAgents } from "./agent/router.ts";
+import { ASSISTANT, LEGACY_TIER, TASK_TIER, loadAgents, withTier } from "./agent/router.ts";
 import { exec, isStopping, log, now } from "./util.ts";
 
 const WORKTREES = path.join(DATA_DIR, "worktrees");
@@ -159,7 +159,8 @@ export async function nameBranch(
 }
 
 export async function dispatch(input: DispatchInput): Promise<DevTask> {
-	const agentName = input.agent || "dev";
+	// 改版前的 agent 名（ask、general…）都交给 assistant
+	const agentName = LEGACY_TIER[input.agent ?? ""] ? ASSISTANT : input.agent || "dev";
 	const agentConfig = loadAgents().agents[agentName];
 	if (!agentConfig) throw new DraftError(`没有 agent ${agentName}`);
 	const d = input.draftId ? getDraft(input.draftId) : undefined;
@@ -287,8 +288,9 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 	setKv(pendingKey, { id, opinion, run, from });
 	update(id, { status: "running", error: null, runs: run });
 	const started = now();
-	const base = loadAgents().agents[task.agent];
-	// 新建时选的模型和思考强度覆盖 agent 配置，之后每一轮都沿用
+	const raw = loadAgents().agents[LEGACY_TIER[task.agent] ? ASSISTANT : task.agent];
+	// agent 任务按 deep 档跑；新建时选的模型和思考强度覆盖配置，之后每一轮都沿用
+	const base = raw && withTier(raw, TASK_TIER);
 	const agent = base && { ...base, ...(task.model ? { model: task.model } : {}), ...(task.thinking ? { thinking: task.thinking } : {}) };
 	const dev = isDev(task);
 	const where = task.repo ? `仓库 \`${path.basename(task.repo)}\`（当前目录）` : `\`${DEFAULT_CWD}\`（各仓库都在这下面）`;

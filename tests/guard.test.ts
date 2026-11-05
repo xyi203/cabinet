@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { Guard, tokenize } from "../server/agent/guard.ts";
+import { Guard, RULES_FILE, loadRules, mcpReadOnly, tokenize } from "../server/agent/guard.ts";
 
 const root = mkdtempSync(path.join(tmpdir(), "cabinet-guard-"));
 const repo = path.join(root, "repo");
@@ -149,10 +149,60 @@ test("lookup 只给允许的会话：群里问答的会话拦下", () => {
 
 test("MCP：只放行 agent 配了的 server 的工具，codemode 只给配了 MCP 的会话", () => {
 	const withMcp = new Guard({ roots: [], bash: [], skillsDir: "/nonexistent", mcp: ["prometheus-saas-cluster"] });
+	mcpReadOnly.add("mcp__prometheus-saas-cluster__execute_query");
 	assert.equal(withMcp.check("mcp__prometheus-saas-cluster__execute_query", {}, "/"), undefined);
+	// 没声明只读的按写操作：要审批
+	assert.equal(withMcp.verdict("mcp__prometheus-saas-cluster__drop_series", {}, "/").kind, "approve");
 	assert.equal(withMcp.check("codemode", { code: "1" }, "/"), undefined);
 	assert.match(withMcp.check("mcp__devops-mcp-prod__issue_create", {}, "/") ?? "", /未在白名单/);
 	const plain = new Guard({ roots: [], bash: [], skillsDir: "/nonexistent" });
 	assert.match(plain.check("codemode", { code: "1" }, "/") ?? "", /未在白名单/);
 	assert.match(plain.check("mcp__prometheus-saas-cluster__execute_query", {}, "/") ?? "", /未在白名单/);
+});
+
+test("命令三态：read 放行，write 要审批（审批上线前拦截并说明），deny 和没列出的拒绝", () => {
+	const ga = new Guard({ roots: [repo], bash: "*", skillsDir: skills });
+	const v = (cmd: string) => ga.verdict("bash", { command: cmd }, repo).kind;
+	assert.equal(v(`${skills}/archery/scripts/archery query --env prod --sql "select 1"`), "allow");
+	assert.equal(v(`${skills}/archery/scripts/archery submit --sql "update t set a=1"`), "approve");
+	assert.equal(v(`${skills}/archery/scripts/archery login`), "deny");
+	assert.equal(v(`${skills}/archery/scripts/archery export`), "deny");
+	assert.equal(v("glab mr note 12 -R gitlab.shoplazza.site/a/b -m ok"), "approve");
+	assert.equal(v("glab api projects/1"), "allow");
+	assert.equal(v("glab api -X POST projects/1/notes"), "approve");
+	assert.match(ga.check("bash", { command: "glab mr note 12 -m ok" }, repo) ?? "", /需要 Yi 审批.*还没上线/);
+	// "*" 包含 git 和规则文件里的全部命令族
+	assert.equal(v("git log -1"), "allow");
+	// 只写脚本名也认（改写成 skill 里的绝对路径），没列出的子命令拒绝
+	assert.equal(v("kafka topics"), "allow");
+	assert.equal(v("kafka produce --topic x"), "deny");
+});
+
+test("规则文件：每条都有 argv0，子命令不在 read 和 write 里重复", () => {
+	const rules = loadRules("/skills");
+	assert.ok(Object.keys(rules).length >= 10);
+	for (const [name, r] of Object.entries(rules)) {
+		assert.ok(r.argv0.length, name);
+		const read = new Set(r.read.map((w) => w.join(" ")));
+		for (const w of r.write) assert.ok(!read.has(w.join(" ")), `${name} ${w.join(" ")}`);
+	}
+	assert.ok(rules.archery.argv0[0].startsWith("/skills/"));
+	assert.ok(RULES_FILE.endsWith("config/skill-rules.json"));
+});
+
+test("数组里的 * 展开成全部命令族，再加上别的（dev 的 git-local）", () => {
+	const gd = new Guard({ roots: [repo], bash: ["*", "git-local"], skillsDir: skills });
+	assert.ok(gd.enabled.has("git-local") && gd.enabled.has("archery") && gd.enabled.has("glab"));
+});
+
+test("工具输出太长时存的临时文件可以读，临时目录里的其他文件不行", async () => {
+	const { realpathSync } = await import("node:fs");
+	const tmp = realpathSync(tmpdir());
+	const spill = path.join(tmp, "tmp-AbC123", "pi-output-98e5f7e4-73a9.log");
+	mkdirSync(path.dirname(spill), { recursive: true });
+	writeFileSync(spill, "x");
+	writeFileSync(path.join(tmp, "tmp-AbC123", "other.txt"), "x");
+	assert.equal(g.check("read", { path: spill }, repo), undefined);
+	assert.ok(g.check("read", { path: path.join(tmp, "tmp-AbC123", "other.txt") }, repo));
+	assert.ok(g.check("read", { path: path.join(tmp, "tmp-AbC123", "pi-output-x.log.bak") }, repo));
 });

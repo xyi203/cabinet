@@ -9,8 +9,8 @@ Yi 的飞书助理。名字取自内阁「票拟批红」：消息先由它审�
 - **待你处理**：看板上需要你判断的事汇成一页，按「现在 / 尽快 / 有空」排：待确认的草稿、起草失败、告警结论、Watchdog 发现的问题、agent 任务、建议不回的草稿、有冲突的记忆（只在这里，不推送）。
 - **定时任务**：看板 Agent 页按 cron 配置，到点交给只读 agent 跑一次，结论私聊给你。
 - **Watchdog**：每 5 分钟自检一次，新问题私聊一张卡片，恢复后自动清掉。
-- **任务中台**：MR 链接直接交给 CR agent，其余消息由便宜模型分诊到 ask / chat / general。每个 agent 的模型、思考强度、skill、可用命令、工作目录和会话粒度都在 `config/agents.json` 里配置，改完不用重启。
-- **@机器人问答**：在 `CHATS` 配置的群里 @机器人，按话题开 pi 会话，结果回复到话题里。「记住 xxx」会写入长期记忆（只有 Yi 能写），见下方「长期记忆」。
+- **一个助手**：所有消息都交给 `assistant`，分诊只选档位——`ack`（寒暄确认，便宜模型、不带工具）、`answer`（一般问题）、`deep`（要查证据）、`mr`（MR 链接直接进这一档）。能用 `SKILLS_DIR` 下全部 skill 和 `MCP_CONFIG` 里全部 MCP；命令按 `config/skill-rules.json` 判成放行 / 要审批 / 拒绝，写操作在审批上线前一律拦截。档位、模型、思考强度在 `config/agents.json` 里配置，改完不用重启。dev（改代码）和 alert（告警）是两种单独的任务类型。改版方案见 `docs/redesign.md`。
+- **私聊机器人**：Yi 私聊机器人直接提问，交给助手按 deep 档查；引用草稿卡片回「发 / 改 xxx / 不发」处理草稿；引用任务通知继续追问；「记住 xxx」写入长期记忆，见下方「长期记忆」。
 - **看板**（http://127.0.0.1:10086）：按 todo / 进行中 / 审核中 / 阻塞 / 完成 / 取消展示任务；可以直接改稿、发送、回表情或表情包、AI 改写、标记完成、失败重试；运行中的任务能实时看到执行步骤。「记忆」页管理长期记忆：确认、遗忘、恢复、改分类、手记一条、按消息试召回。
 
 ## 结构
@@ -22,8 +22,8 @@ server/          后端（Node 直接跑 TypeScript）
   agent/         agent 驱动（pi-durable）
     driver.ts    Harness、会话、守卫钩子、runPi、执行日志
     models.ts    模型目录、一问一答的 complete
-    router.ts    任务中台：agents.json、规则分派 + 模型分诊
-    guard.ts     工具白名单（只读文件、只读命令，dev 只能写自己的 worktree）
+    router.ts    任务中台：agents.json、档位、MR 规则 + 模型分诊
+    guard.ts     工具守卫：读文件限目录，命令按 config/skill-rules.json 判放行 / 审批 / 拒绝，dev 只能写自己的 worktree
     tools.ts     只读工具 grep / find / ls / memory
     slots.ts     运行并发：全局信号量 + 按会话排队
   drafts/        代回复草稿
@@ -45,7 +45,7 @@ server/          后端（Node 直接跑 TypeScript）
   pipeline.ts    四段模型：trigger -> route -> action -> result 的落库与查询（docs/pipeline.md）
   poller.ts      轮询主循环：每轮把各渠道拉一遍
   meego.ts       飞书项目（meegle CLI）
-  qa.ts          @机器人问答与私聊里的草稿指令
+  qa.ts          Yi 私聊机器人：提问、草稿指令、追问任务、记住
   dev.ts         agent 任务（dev 在独立 worktree 改代码）
   tasks.ts       看板的任务模型、执行日志
   retry.ts       失败任务重试
@@ -53,7 +53,7 @@ server/          后端（Node 直接跑 TypeScript）
   memory/        长期记忆：存取与生命周期、召回（关键词 + 向量）、自动提取、「记住」
   db/            Drizzle + Turso（turso.ts：drizzle 与 durable 存储的 Turso 适配）
 src/             看板前端（TanStack Start + React Query）
-config/          agents.json、各 agent 提示词、系统规则、起草规则
+config/          agents.json、skill-rules.json、各 agent 提示词、系统规则、起草规则
 drizzle/         数据库迁移（drizzle-kit 生成，启动时自动执行）
 data/            运行数据，不进 git：cabinet.db（业务与记忆）、agents.sqlite（durable 对话）、stickers/；旧版 memory/MEMORY.md 启动时导入一次
 ```

@@ -33,16 +33,7 @@ export const MAX_CONCURRENCY = Number(env("MAX_CONCURRENCY", "3"));
 export const THREAD_CONTEXT_N = Number(env("THREAD_CONTEXT_N", "15"));
 export const DEFAULT_CWD = expand(env("DEFAULT_CWD", "~"));
 
-// CHATS=oc_xxx:/path/a,oc_yyy:/path/b —— 只响应这些群里的 @机器人，冒号后是该群的工作目录
-export const CHATS: Record<string, string> = Object.fromEntries(
-	list("CHATS").map((item) => {
-		const i = item.indexOf(":");
-		const chatId = i < 0 ? item : item.slice(0, i);
-		const cwd = i < 0 ? "" : item.slice(i + 1);
-		return [chatId.trim(), expand(cwd.trim() || DEFAULT_CWD)];
-	}),
-);
-export const READ_ROOTS = [...new Set([DEFAULT_CWD, ...Object.values(CHATS)])].toSorted();
+export const READ_ROOTS = [DEFAULT_CWD];
 
 // 截图在 data/images 保留的天数；会话闲置超过这么多天，下次换新会话（旧会话里的长上下文和图片不再每轮重发）。0 = 不清理 / 不换
 export const IMAGE_RETAIN_DAYS = Number(env("IMAGE_RETAIN_DAYS", "7"));

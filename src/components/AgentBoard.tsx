@@ -51,8 +51,8 @@ function NewTask({ agents, onCreated }: { agents: AgentStat[]; onCreated: (t: De
 	const qc = useQueryClient();
 	const { data: repos } = useQuery({ queryKey: ["repos"], queryFn: fetchRepos });
 	// 简单回应 agent 只用于代回复表情，不适合派活
-	const choices = agents.filter((a) => a.name !== "chat");
-	const [agent, setAgent] = useState(choices.find((a) => a.name === "ask")?.name ?? choices[0]?.name ?? "");
+	const choices = agents;
+	const [agent, setAgent] = useState(choices.find((a) => a.name === "assistant")?.name ?? choices[0]?.name ?? "");
 	const [request, setRequest] = useState("");
 	const [repo, setRepo] = useState("");
 	const [branch, setBranch] = useState("");

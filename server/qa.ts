@@ -1,6 +1,6 @@
 // @机器人 的问答：一个 @ 开一个话题，主消息的 message_id 就是会话 key，话题内后续消息的 root_id 指回它，
 // 所以 key = root_id ?? message_id，话题和 pi 会话一一对应。Yi 私聊机器人时还能处理草稿指令。
-import { BOT_OPEN_ID, CHATS, COMMON_EMOJI, DEFAULT_CWD, OWNER_NAME, OWNER_OPEN_ID, THREAD_CONTEXT_N } from "./config.ts";
+import { BOT_OPEN_ID, COMMON_EMOJI, DEFAULT_CWD, OWNER_NAME, OWNER_OPEN_ID, THREAD_CONTEXT_N } from "./config.ts";
 import { type Action, applyDraftAction } from "./drafts/actions.ts";
 import { type Kind, listStickers } from "./drafts/format.ts";
 import { DraftError, LIVE, pickDraft } from "./drafts/store.ts";
@@ -10,6 +10,7 @@ import type { BotEvent } from "./lark/types.ts";
 import { decide, openRoute, receive, settle } from "./pipeline.ts";
 import { record } from "./records.ts";
 import { forgetRun, runPi } from "./agent/driver.ts";
+import { ASSISTANT, TASK_TIER, loadAgents, withTier } from "./agent/router.ts";
 import { closeTask, devTaskOfDm, discardDev, messageDev, pushDev, stopDev } from "./dev.ts";
 import { deleteKv, listKv, setKv } from "./db/index.ts";
 import { enqueueMemory } from "./memory/extract.ts";
@@ -29,10 +30,8 @@ function firstSeen(id: string) {
 
 export function accept(ev: BotEvent): boolean {
 	if (ev.senderType !== "user" || ev.senderId === BOT_OPEN_ID) return false;
-	if (ev.chatType === "p2p") return ev.senderId === OWNER_OPEN_ID;
-	if (!(ev.chatId in CHATS)) return false;
-	// @所有人 也会推给机器人，必须确认 mentions 里有机器人本身
-	return ev.mentions.some((m) => m.id === BOT_OPEN_ID);
+	// 只认 Yi 私聊机器人；群里 @机器人问答已下线（docs/redesign.md）
+	return ev.chatType === "p2p" && ev.senderId === OWNER_OPEN_ID;
 }
 
 export function stripMentions(ev: Pick<BotEvent, "content" | "mentions">) {
@@ -182,7 +181,10 @@ export async function handle(ev: BotEvent, attempt?: string) {
 		}
 		if (await draftCommand(ev, text, tid)) return;
 	}
-	const cwd = CHATS[ev.chatId] ?? DEFAULT_CWD;
+	const cwd = DEFAULT_CWD;
+	// Yi 私聊直接问的：交给 assistant，按 deep 档查
+	const agentName = loadAgents().router.agent ?? ASSISTANT;
+	const agent = withTier(loadAgents().agents[agentName] ?? {}, TASK_TIER);
 	const label = ev.chatType === "p2p" ? "私聊机器人" : `群 ${ev.chatId.slice(-6)}`;
 	const started = now();
 	// 重启接回、手动重试之外的重复到达沿用同一次分派
@@ -202,6 +204,8 @@ export async function handle(ev: BotEvent, attempt?: string) {
 					sessionId: key,
 					requestId,
 					prompt: await buildPrompt(ev, text),
+					agent,
+					agentName,
 					label,
 					memory: { query: text, scope: { personId: ev.senderId === OWNER_OPEN_ID ? undefined : ev.senderId, chatId: ev.chatId } },
 				});

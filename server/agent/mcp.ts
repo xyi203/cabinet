@@ -11,7 +11,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { existsSync, readFileSync } from "node:fs";
 import { MCP_CONFIG } from "../config.ts";
 import { log } from "../util.ts";
-import { mcpToolName } from "./guard.ts";
+import { RULES_FILE, mcpReadOnly, mcpToolName } from "./guard.ts";
 
 interface ServerDef {
 	command?: string;
@@ -73,9 +73,19 @@ function renderResult(result: any): string {
 	return s.length > MAX_OUTPUT ? `${s.slice(0, MAX_OUTPUT)}\n…（已截断）` : s || "（无结果）";
 }
 
+/** 没声明 readOnlyHint 但确认只读的 MCP 工具，写在 skill-rules.json 的 _mcpRead（完整工具名 mcp__<server>__<tool>） */
+function mcpReadList(): Set<string> {
+	try {
+		return new Set(JSON.parse(readFileSync(RULES_FILE, "utf8"))._mcpRead ?? []);
+	} catch {
+		return new Set();
+	}
+}
+
 /** 连上这些 server，列出工具。连不上的跳过并记日志，不影响其他 server 和 cabinet 启动 */
 export async function mcpTools(names: string[], servers = loadServers()): Promise<ToolRegistration[]> {
 	const tools: ToolRegistration[] = [];
+	const readList = mcpReadList();
 	await Promise.all(
 		[...new Set(names)].map(async (name) => {
 			const def = servers[name];
@@ -83,6 +93,8 @@ export async function mcpTools(names: string[], servers = loadServers()): Promis
 			try {
 				const listed = await (await clientOf(name, def)).listTools(undefined, { timeout: CONNECT_TIMEOUT });
 				for (const t of listed.tools) {
+					// 只读的直接放行，其余在守卫里按写操作处理（要审批）
+					if (t.annotations?.readOnlyHint || readList.has(mcpToolName(name, t.name))) mcpReadOnly.add(mcpToolName(name, t.name));
 					tools.push(
 						defineTool({
 							name: mcpToolName(name, t.name),

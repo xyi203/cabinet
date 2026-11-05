@@ -9,7 +9,7 @@ import { draftLabel } from "./drafts/format.ts";
 import { inflight } from "./drafts/store.ts";
 import { PI_MODEL, PI_THINKING } from "./config.ts";
 import { devTasksList } from "./dev.ts";
-import { loadAgents } from "./agent/router.ts";
+import { TASK_TIER, loadAgents, withTier } from "./agent/router.ts";
 import { recentRecords } from "./records.ts";
 import { conversationLog, running } from "./agent/driver.ts";
 import { listMemories, type Memory } from "./memory/store.ts";
@@ -239,7 +239,9 @@ function todayOutcomes(since: number): Record<string, number> {
 function agentStats(records: RecordRow[], today: string) {
 	const isToday = (ts: number) => new Date(ts * 1000).toLocaleDateString("sv-SE") === today;
 	const tasks = devTasksList();
-	return Object.entries(loadAgents().agents).map(([name, a]) => {
+	return Object.entries(loadAgents().agents).map(([name, raw]) => {
+		// 看板上派的任务按 deep 档跑：显示这一档的模型和思考强度
+		const a = withTier(raw, TASK_TIER);
 		const recs = records.filter((r) => r.agent === name && isToday(r.ts));
 		const own = tasks.filter((t) => t.agent === name && isToday(t.updated));
 		const cost = recs.reduce((c, r) => c + ((r.usage as any)?.cost ?? 0), 0) + own.reduce((c, t) => c + (t.usage?.cost ?? 0), 0);

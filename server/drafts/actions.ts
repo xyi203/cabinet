@@ -7,7 +7,7 @@ import { OWNER_NAME, OWNER_OPEN_ID, PATHS } from "../config.ts";
 import type { Draft } from "../db/schema.ts";
 import { channelOfDraft } from "../channels/index.ts";
 import { getMessage, LarkError, react } from "../lark/bot.ts";
-import { loadAgents } from "../agent/router.ts";
+import { ASSISTANT, LEGACY_TIER, TASK_TIER, loadAgents, withTier } from "../agent/router.ts";
 import { settle } from "../pipeline.ts";
 import { record } from "../records.ts";
 import { runPi } from "../agent/driver.ts";
@@ -63,7 +63,9 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 			});
 			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: "sent" });
 		} else if (action === "revise") {
-			const agent = loadAgents().agents[d.agent ?? ""] ?? {};
+			// 改写要能查事实：按 deep 档跑；改版前的草稿记的是旧 agent 名，一律交给 assistant
+			const name = LEGACY_TIER[d.agent ?? ""] ? ASSISTANT : (d.agent ?? ASSISTANT);
+			const agent = withTier(loadAgents().agents[name] ?? {}, TASK_TIER);
 			// 早于上下文功能的草稿没有存前文，改写时现补
 			let context = d.context;
 			if (!context && d.chatMode !== "meego") {
@@ -82,7 +84,7 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 						extraSystem: [PATHS.draftRules],
 						label: draftLabel(d),
 						agent,
-						agentName: d.agent ?? undefined,
+						agentName: name,
 						chatId: d.chatId,
 						lookup: true,
 						memory: {

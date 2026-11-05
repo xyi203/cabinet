@@ -51,3 +51,14 @@ test("没引用时不会挑中只在看板上的表情草稿", () => {
 	assert.equal(pickDraft(undefined, ["pending", "noreply"])!.id, "om_d2");
 	assert.equal(pickDraft("quiet_om_x_1", ["noreply"])!.id, "quiet_om_x_1");
 });
+
+test("改版前接回的起草：旧 agent 名交给 assistant 的对应档位", async () => {
+	const { stageAgent } = await import("../server/drafts/make.ts");
+	const s = (agent: string, tier?: string) => stageAgent({ source: { agent } as any, tier });
+	assert.deepEqual(s("ask"), { name: "assistant", tier: "deep" });
+	assert.deepEqual(s("cr"), { name: "assistant", tier: "mr" });
+	assert.deepEqual(s("chat"), { name: "assistant", tier: "ack" });
+	// chat 改派到 general 之后又被打断：stage 记着 answer
+	assert.deepEqual(s("general", "answer"), { name: "assistant", tier: "answer" });
+	assert.deepEqual(s("assistant", "deep"), { name: "assistant", tier: "deep" });
+});

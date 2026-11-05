@@ -1,0 +1,95 @@
+{
+	"_note": "agent 能执行的命令。read 直接放行；write 要 Yi 审批（审批上线前一律拦截）；deny 和没列出的子命令一律拒绝。子命令按词匹配，多个词的要在参数里连续出现。argv0 里的 {skills} 换成 SKILLS_DIR。改完不用重启，下一次运行生效。",
+	"_mcpRead": [
+		"mcp__codegraph__codegraph_search",
+		"mcp__codegraph__codegraph_context",
+		"mcp__codegraph__codegraph_callers",
+		"mcp__codegraph__codegraph_callees",
+		"mcp__codegraph__codegraph_impact",
+		"mcp__codegraph__codegraph_node",
+		"mcp__codegraph__codegraph_explore",
+		"mcp__codegraph__codegraph_status",
+		"mcp__codegraph__codegraph_files",
+		"mcp__codegraph__codegraph_trace",
+		"mcp__cloudflare__docs",
+		"mcp__cloudflare__search",
+		"mcp__devops-mcp-prod__acr_list_repos",
+		"mcp__devops-mcp-prod__acr_list_tags",
+		"mcp__devops-mcp-prod__apollo_get_config",
+		"mcp__devops-mcp-prod__apollo_get_ticket",
+		"mcp__devops-mcp-prod__apollo_get_ticket_logs",
+		"mcp__devops-mcp-prod__apollo_list_tickets",
+		"mcp__devops-mcp-prod__apollo_list_workloads",
+		"mcp__devops-mcp-prod__issue_get_deploy_options",
+		"mcp__devops-mcp-prod__issue_get_editable_schema",
+		"mcp__devops-mcp-prod__issue_get_failure_log",
+		"mcp__devops-mcp-prod__issue_get_info",
+		"mcp__devops-mcp-prod__issue_get_schema",
+		"mcp__devops-mcp-prod__issue_get_service_tags",
+		"mcp__devops-mcp-prod__issue_get_status",
+		"mcp__devops-mcp-prod__issue_get_teams",
+		"mcp__devops-mcp-prod__issue_get_users_by_role",
+		"mcp__devops-mcp-prod__issue_list",
+		"mcp__devops-mcp-prod__issue_list_supported_types",
+		"mcp__devops-mcp-prod__issue_search_feishu_stories",
+		"mcp__devops-mcp-prod__issue_validate",
+		"mcp__devops-mcp-prod__reference_get",
+		"mcp__devops-mcp-prod__reference_list"
+	],
+	"archery": {
+		"argv0": ["{skills}/archery/scripts/archery"],
+		"read": ["envs", "instances", "databases", "tables", "desc", "query"],
+		"write": ["workflow", "submit", "execute", "approve", "cancel"],
+		"deny": ["login"]
+	},
+	"superset": {
+		"argv0": ["{skills}/superset/scripts/superset"],
+		"read": ["query", "datasets", "dataset", "columns", "desc", "charts"],
+		"deny": ["auth"]
+	},
+	"sls": {
+		"argv0": ["python3", "{skills}/sls/scripts/sls_query.py"],
+		"read": ["query", "check", "logstores"]
+	},
+	"grafana": {
+		"argv0": ["{skills}/grafana/scripts/grafana"],
+		"read": ["alerts", "datasources", "search", "dashboard", "panel", "query"],
+		"deny": ["config"]
+	},
+	"oncall": {
+		"argv0": ["{skills}/oncall/scripts/oncall"],
+		"read": ["analyze", "pd"],
+		"deny": ["aggregate"]
+	},
+	"kafka": {
+		"argv0": ["{skills}/kafka/scripts/kafka"],
+		"read": ["clusters", "topics", "topic", "messages", "groups"]
+	},
+	"sentry": {
+		"argv0": ["{skills}/sentry/scripts/sentry"],
+		"read": ["check", "projects", "project", "issues", "issue", "latest", "events", "tags", "issue-releases", "stats", "users", "teams"]
+	},
+	"glab": {
+		"argv0": ["glab"],
+		"read": ["mr view", "mr diff", "mr list", "mr notes", "repo view", "ci view", "ci status", "api"],
+		"write": ["mr note", "mr approve", "mr merge"]
+	},
+	"meegle": {
+		"argv0": ["meegle"],
+		"read": [
+			"workitem get",
+			"workitem query",
+			"comment list",
+			"project search",
+			"user search",
+			"url decode",
+			"workflow get-node",
+			"relation list",
+			"mywork todo"
+		]
+	},
+	"lark-cli": {
+		"argv0": ["lark-cli"],
+		"read": ["docs +fetch"]
+	}
+}

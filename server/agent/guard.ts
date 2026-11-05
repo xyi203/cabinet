@@ -1,18 +1,29 @@
-// agent 的工具白名单：只读文件 + 按 agent 配置放行的只读命令，其余一律拦截。
+// agent 的工具守卫：读文件只能在允许目录里；命令按 config/skill-rules.json 判成 放行 / 要审批 / 拒绝。
 // 由 durable 的 beforeTool 钩子调用（server/agent/driver.ts）；钩子抛错时 durable 也会拦截（fail-closed）。
 // 每个会话用自己的策略创建一份守卫，同一进程里并行的 agent 互不影响。
-import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
 /** MCP 工具名：只能是 [A-Za-z0-9_-]，最长 64（部分模型接口的上限）。注册（mcp.ts）和放行（这里）用同一个规则 */
 export const mcpToolName = (server: string, tool: string) => `mcp__${server}__${tool}`.replace(/[^\w-]/g, "_").slice(0, 64);
 
+/** 只读的 MCP 工具（声明了 readOnlyHint，或 skill-rules.json 的 _mcpRead 里列了）：mcp.ts 注册时填 */
+export const mcpReadOnly = new Set<string>();
+
+/** 放行；要 Yi 审批（审批上线前当拒绝处理）；拒绝 */
+export type Verdict = { kind: "allow" } | { kind: "approve"; reason: string } | { kind: "deny"; reason: string };
+const ALLOW: Verdict = { kind: "allow" };
+const deny = (reason: string): Verdict => ({ kind: "deny", reason });
+const approve = (reason: string): Verdict => ({ kind: "approve", reason });
+
+export const RULES_FILE = path.resolve(import.meta.dirname, "../../config/skill-rules.json");
+
 export interface GuardPolicy {
 	/** 允许读的目录（不存在的会被丢弃） */
 	roots: string[];
-	/** 放行的命令族：git / glab / meegle / lark-cli / archery / superset / sls / git-local */
-	bash: string[];
+	/** 放行的命令族：skill-rules.json 里的名字，加 git / git-local；"*"（或数组里的 "*"）= 全部规则 + git */
+	bash: string[] | "*";
 	skillsDir: string;
 	/** 这个会话能不能用 lookup（链式召回）：群里问答的会话不能 */
 	lookup?: boolean;
@@ -22,7 +33,29 @@ export interface GuardPolicy {
 	commands?: string[];
 	/** 能用的 MCP server：只放行 mcp__<server>__ 开头的工具 */
 	mcp?: string[];
+	/** 命令规则，不给就读 RULES_FILE（测试里直接传） */
+	rules?: Record<string, RuleSpec>;
 }
+
+/** skill-rules.json 里的一条：argv0 是命令本身，read / write / deny 是子命令（多个词的按连续出现匹配） */
+export interface RuleSpec {
+	argv0: string[];
+	read?: string[];
+	write?: string[];
+	deny?: string[];
+}
+
+// bash / read 输出太长时 durable 把完整输出存到系统临时目录（<tmp>/tmp-xxx/pi-output-<id>.log），提示里给的就是这个路径：
+// 只放行这一种文件，临时目录里的其他文件照样不能读
+const SPILL_RE = (() => {
+	let tmp = tmpdir();
+	try {
+		tmp = realpathSync(tmp);
+	} catch {
+		// 用原路径
+	}
+	return new RegExp(`^${tmp.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/tmp-[\\w-]+/pi-output-[\\w-]+\\.log$`);
+})();
 
 // 即使在允许的目录里，这些也不读：凭证、密钥、本地配置
 const secretPattern =
@@ -35,55 +68,32 @@ const gitBannedArg = /^(--output|--ext-diff|--textconv|--no-index|-c$|--exec|--u
 // 开发任务在自己的 worktree 里可以做的本地 git 写操作；push / fetch / 切分支 / reset 一律不放
 const gitLocalWrite = new Set(["add", "commit", "restore", "rm", "mv"]);
 
-const meegleReadOnly = new Set([
-	"workitem get",
-	"workitem query",
-	"comment list",
-	"project search",
-	"user search",
-	"url decode",
-	"workflow get-node",
-	"relation list",
-	"mywork todo",
-]);
-
-// glab 用的是 Yi 的 GitLab 账号：只看不改。api 只允许 GET，带字段参数会被 glab 自动改成 POST
-const glabReadOnly = new Set(["mr view", "mr diff", "mr list", "mr notes", "repo view", "ci view", "ci status"]);
-
-// lark-cli 用的是 Yi 的飞书账号：只放行读文档正文，其他子命令（发消息、改文档、导出落盘）一律不放
-const larkReadOnly = new Set(["docs +fetch"]);
+// lark-cli 用的是 Yi 的飞书账号：--as 能换身份，--output 会落盘
 const larkBannedArg = /^(--output|-o$|--as$|--as=)/;
 
 interface ScriptRule {
 	argv0: string[];
-	allow: string[];
-	deny: string[];
+	read: string[][];
+	write: string[][];
+	deny: string[][];
 }
 
-// skill 自带的查询脚本：只放行查询类子命令，login/auth 这类会改本地凭据的不放
-function scriptRules(skillsDir: string): Record<string, ScriptRule> {
-	return {
-		archery: {
-			argv0: [path.join(skillsDir, "archery/scripts/archery")],
-			allow: ["instances", "databases", "tables", "desc", "query"],
-			deny: ["login", "workflow", "submit", "execute", "approve", "cancel"],
-		},
-		superset: {
-			argv0: [path.join(skillsDir, "superset/scripts/superset")],
-			allow: ["query", "datasets", "dataset", "columns"],
-			deny: ["auth"],
-		},
-		sls: { argv0: ["python3", path.join(skillsDir, "sls/scripts/sls_query.py")], allow: ["query", "check", "logstores"], deny: [] },
-		grafana: {
-			argv0: [path.join(skillsDir, "grafana/scripts/grafana")],
-			allow: ["alerts", "datasources", "search", "dashboard", "panel", "query"],
-			deny: ["config"],
-		},
-		// analyze 读 Grafana 的状态历史算真实持续时长；aggregate 要读本地导出文件，告警分析用不上
-		// pd 只发 GET（读 incident 和 alert body），没有 ack / resolve / snooze
-		oncall: { argv0: [path.join(skillsDir, "oncall/scripts/oncall")], allow: ["analyze", "pd"], deny: ["aggregate"] },
-	};
+const words = (list?: string[]) => (list ?? []).map((w) => w.split(/\s+/));
+
+export function loadRules(skillsDir: string, specs?: Record<string, RuleSpec>): Record<string, ScriptRule> {
+	const raw: Record<string, RuleSpec> = specs ?? (existsSync(RULES_FILE) ? JSON.parse(readFileSync(RULES_FILE, "utf8")) : {});
+	return Object.fromEntries(
+		Object.entries(raw)
+			.filter(([k]) => !k.startsWith("_"))
+			.map(([name, r]) => [
+				name,
+				{ argv0: r.argv0.map((a) => a.replace("{skills}", skillsDir)), read: words(r.read), write: words(r.write), deny: words(r.deny) },
+			]),
+	);
 }
+
+/** 子命令词组在参数里连续出现 */
+const hits = (rest: string[], list: string[][]) => list.find((w) => rest.some((_, i) => w.every((x, k) => rest[i + k] === x)));
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -143,8 +153,9 @@ export class Guard {
 		this.writeRoots = real(policy.writeRoots ?? []);
 		this.roots = [...real(policy.roots), ...this.writeRoots];
 		this.commands = (policy.commands ?? []).map((c) => c.trim().split(/\s+/));
-		this.enabled = new Set(policy.bash);
-		this.scripts = scriptRules(policy.skillsDir);
+		this.scripts = loadRules(policy.skillsDir, policy.rules);
+		const all = ["git", ...Object.keys(this.scripts)];
+		this.enabled = new Set(policy.bash === "*" ? all : policy.bash.flatMap((b) => (b === "*" ? all : [b])));
 		this.lookup = Boolean(policy.lookup);
 		this.mcp = (policy.mcp ?? []).map((s) => mcpToolName(s, ""));
 	}
@@ -168,6 +179,7 @@ export class Guard {
 				}
 			}
 		}
+		if (SPILL_RE.test(full)) return full;
 		const inside = roots.some((r) => full === r || full.startsWith(r + path.sep));
 		return inside && !secretPattern.test(full) ? full : undefined;
 	}
@@ -184,6 +196,7 @@ export class Guard {
 		for (const [name, rule] of Object.entries(this.scripts)) {
 			if (!this.enabled.has(name)) continue;
 			const abs = rule.argv0[rule.argv0.length - 1];
+			if (!path.isAbsolute(abs)) continue;
 			const prefix = rule.argv0.length > 1 ? `${rule.argv0[0]} ` : "";
 			const re = new RegExp(`^${escapeRe(prefix)}(?:\\./)?(?:scripts/)?${escapeRe(path.basename(abs))}(?=\\s|$)`);
 			if (re.test(trimmed)) return trimmed.replace(re, `${prefix}${abs}`);
@@ -212,86 +225,101 @@ export class Guard {
 		return undefined;
 	}
 
-	checkGlab(args: string[]): string | undefined {
-		if (args[1] === "api") {
-			const method = args.findIndex((a) => a === "-X" || a === "--method");
-			if (method >= 0 && args[method + 1]?.toUpperCase() !== "GET") return "glab api 只允许 GET";
-			if (args.some((a) => /^(-f|-F|--field|--raw-field|--input|-X.+|--method=(?!GET))/i.test(a))) return "glab api 不允许带请求体";
-			return undefined;
+	/** 命令规则：deny > write > read，没列出的拒绝。glab api 只有 GET 算读，meegle 带 --params、lark-cli 换身份或落盘一律拒绝 */
+	ruleVerdict(name: string, rule: ScriptRule, rest: string[]): Verdict {
+		if (hits(rest, rule.deny)) return deny(`${name} 不允许这个子命令`);
+		if (name === "lark-cli" && rest.some((a) => larkBannedArg.test(a))) return deny("lark-cli 不允许这个参数");
+		if (name === "meegle" && rest.includes("--params")) return deny("meegle 不允许 --params");
+		if (name === "glab" && rest[0] === "api") {
+			const m = rest.findIndex((a) => a === "-X" || a === "--method");
+			const write =
+				(m >= 0 && rest[m + 1]?.toUpperCase() !== "GET") ||
+				rest.some((a) => /^(-f|-F|--field|--raw-field|--input|-X.+|--method=(?!GET))/i.test(a));
+			return write ? approve("glab api 的写请求") : ALLOW;
 		}
-		return glabReadOnly.has(`${args[1]} ${args[2]}`) ? undefined : `不允许的 glab 命令: ${args[1]} ${args[2]}`;
+		const w = hits(rest, rule.write);
+		if (w) return approve(`${name} ${w.join(" ")} 是写操作`);
+		if (hits(rest, rule.read)) return ALLOW;
+		const list = (l: string[][]) => l.map((x) => x.join(" ")).join("/");
+		// 把要审批的写子命令也列出来：只列只读的，agent 会以为写操作也一律被拒、不去走审批
+		return deny(
+			`${name} 不允许这个子命令。直接放行：${list(rule.read)}${rule.write.length ? `；要 Yi 审批的写操作：${list(rule.write)}` : ""}`,
+		);
 	}
 
-	checkBash(cmd: string, cwd: string): string | undefined {
+	bashVerdict(cmd: string, cwd: string): Verdict {
 		const tokens = tokenize(cmd.trim());
-		if (typeof tokens === "string") return tokens;
+		if (typeof tokens === "string") return deny(tokens);
 		let args = tokens.map((t) => t.replace(/^~(?=$|\/)/, homedir()));
-		if (!args.length) return "空命令";
-		if (args[0] === "git" && (this.enabled.has("git") || this.enabled.has("git-local"))) return this.checkGit(args, cwd);
+		if (!args.length) return deny("空命令");
+		const reason = (r: string | undefined): Verdict => (r ? deny(r) : ALLOW);
+		if (args[0] === "git" && (this.enabled.has("git") || this.enabled.has("git-local"))) return reason(this.checkGit(args, cwd));
 		// go -C <目录> test 这类写法：目录在 worktree 内就当作在那里执行
 		if (args[1] === "-C" && this.commands.some((c) => c[0] === args[0])) {
 			const dir = this.writable(cwd, args[2]);
-			if (!dir) return `${args[0]} -C 的目录不在 worktree 内: ${args[2]}`;
+			if (!dir) return deny(`${args[0]} -C 的目录不在 worktree 内: ${args[2]}`);
 			args = [args[0], ...args.slice(3)];
 			cwd = dir;
 		}
 		const command = this.commands.find((c) => c.every((t, i) => args[i] === t));
 		if (command) {
 			// 构建/测试会执行仓库代码：只在开发任务的 worktree 里跑，路径参数也不能指到外面
-			if (!this.writable(cwd, ".")) return `${command.join(" ")} 只能在开发任务的 worktree 里执行`;
+			if (!this.writable(cwd, ".")) return deny(`${command.join(" ")} 只能在开发任务的 worktree 里执行`);
 			const bad = args
 				.slice(command.length)
 				.find((a) => (a.startsWith("/") || a.startsWith("~") || a.includes("..")) && !this.writable(cwd, a.replace(/^-[\w-]+=/, "")));
-			return bad ? `参数里的路径不在 worktree 内: ${bad}` : undefined;
-		}
-		if (args[0] === "glab" && this.enabled.has("glab")) return this.checkGlab(args);
-		if (args[0] === "meegle" && this.enabled.has("meegle")) {
-			// meegle 用的是 Yi 的账号，写操作（评论、建单、流转）只由 cabinet 在 Yi 确认后执行
-			const sub = `${args[1]} ${args[2]}`;
-			return meegleReadOnly.has(sub) && !args.includes("--params") ? undefined : `不允许的 meegle 命令: ${sub}`;
-		}
-		if (args[0] === "lark-cli" && this.enabled.has("lark-cli")) {
-			const sub = `${args[1]} ${args[2]}`;
-			if (!larkReadOnly.has(sub)) return `不允许的 lark-cli 命令: ${sub}`;
-			return args.some((a) => larkBannedArg.test(a)) ? "lark-cli 不允许这个参数" : undefined;
+			return bad ? deny(`参数里的路径不在 worktree 内: ${bad}`) : ALLOW;
 		}
 		for (const [name, rule] of Object.entries(this.scripts)) {
 			if (!this.enabled.has(name)) continue;
 			const head = args.slice(0, rule.argv0.length).map((a) => (a.includes("/") ? path.resolve(cwd, a) : a));
 			if (head.join("\0") !== rule.argv0.join("\0")) continue;
-			const rest = args.slice(rule.argv0.length);
-			if (rest.some((a) => rule.deny.includes(a))) return `${name} 不允许这个子命令`;
-			return rest.some((a) => rule.allow.includes(a)) ? undefined : `${name} 只允许查询类子命令: ${rule.allow.join("/")}`;
+			return this.ruleVerdict(name, rule, args.slice(rule.argv0.length));
 		}
 		const allowed = [...this.enabled, ...this.commands.map((c) => c.join(" "))];
-		return `这个 agent 不允许执行: ${args[0]}（可用：${allowed.join(", ")}）`;
+		return deny(`这个 agent 不允许执行: ${args[0]}（可用：${allowed.join(", ")}）`);
 	}
 
-	/** 返回拦截原因；放行返回 undefined。bash 命令会被就地改写成绝对路径 */
-	check(toolName: string, input: Record<string, unknown>, cwd: string): string | undefined {
+	checkBash(cmd: string, cwd: string): string | undefined {
+		const v = this.bashVerdict(cmd, cwd);
+		return v.kind === "allow" ? undefined : v.reason;
+	}
+
+	/** 一次工具调用的判定。bash 命令会被就地改写成绝对路径 */
+	verdict(toolName: string, input: Record<string, unknown>, cwd: string): Verdict {
 		switch (toolName) {
 			case "read":
 			case "grep":
 			case "find":
 			case "ls":
-				return this.resolveInside(cwd, input.path as string | undefined) ? undefined : `路径不在允许范围内: ${input.path ?? "."}`;
+				return this.resolveInside(cwd, input.path as string | undefined) ? ALLOW : deny(`路径不在允许范围内: ${input.path ?? "."}`);
 			case "edit":
 			case "write":
-				return this.writable(cwd, input.path as string | undefined) ? undefined : `只能修改开发任务 worktree 里的文件: ${input.path}`;
+				return this.writable(cwd, input.path as string | undefined) ? ALLOW : deny(`只能修改开发任务 worktree 里的文件: ${input.path}`);
 			case "memory":
 				// 只读，只查 cabinet 自己的记忆库
-				return undefined;
+				return ALLOW;
 			case "lookup":
 				// 只读，但能看到私聊和草稿：只给结果先经 Yi 过目的会话
-				return this.lookup ? undefined : "这个会话不能用 lookup";
+				return this.lookup ? ALLOW : deny("这个会话不能用 lookup");
 			case "bash":
 				input.command = this.normalizeScriptPath(String(input.command ?? ""));
-				return this.checkBash(String(input.command), cwd);
+				return this.bashVerdict(String(input.command), cwd);
 			default:
 				// codemode 只是在沙箱里跑脚本，脚本里调的每个工具会再过一遍这里
-				if (toolName === "codemode" && this.mcp.length) return undefined;
-				if (this.mcp.some((prefix) => toolName.startsWith(prefix))) return undefined;
-				return `工具 ${toolName} 未在白名单中`;
+				if (toolName === "codemode" && this.mcp.length) return ALLOW;
+				if (this.mcp.some((prefix) => toolName.startsWith(prefix)))
+					return mcpReadOnly.has(toolName) ? ALLOW : approve(`${toolName} 没有声明只读，按写操作处理`);
+				return deny(`工具 ${toolName} 未在白名单中`);
 		}
+	}
+
+	/** 返回拦截原因；放行返回 undefined。要审批的写操作在审批上线前也拦截，原因里说清楚 */
+	check(toolName: string, input: Record<string, unknown>, cwd: string): string | undefined {
+		const v = this.verdict(toolName, input, cwd);
+		if (v.kind === "allow") return undefined;
+		if (v.kind === "approve")
+			return `${v.reason}，需要 Yi 审批；审批功能还没上线，这次不执行。把要执行的命令和理由写进给 Yi 的结论或备注里，由 Yi 自己执行`;
+		return v.reason;
 	}
 }

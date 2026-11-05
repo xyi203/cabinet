@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { resumePendingAlerts, stopAlerts } from "./alerts.ts";
 import { startServer } from "./api.ts";
-import { CHATS, DRAFT_ENABLED, PATHS, PI_MODEL, missingConfig } from "./config.ts";
+import { DRAFT_ENABLED, PATHS, PI_MODEL, missingConfig } from "./config.ts";
 import { closeHarness, harness, pruneRuns } from "./agent/driver.ts";
 import { scheduleCleanup } from "./cleanup.ts";
 import { db } from "./db/index.ts";
@@ -33,7 +33,7 @@ scheduleVectors();
 resumePendingMemory();
 scheduleCleanup();
 
-log(`cabinet 启动：监听群 ${JSON.stringify(Object.keys(CHATS))}，默认模型 ${PI_MODEL}`);
+log(`cabinet 启动，默认模型 ${PI_MODEL}`);
 const server = startServer();
 const stopEvents = startListeners();
 // 接回上次进程中断的起草和问答：同一 requestId 会接上 durable 里原来那次运行

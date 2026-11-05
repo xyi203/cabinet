@@ -7,7 +7,7 @@ const { onlyMentions } = await import("../server/drafts/context.ts");
 const { parseMeegoCard, meegoMention, plainComment } = await import("../server/meego.ts");
 const { messageText } = await import("../server/lark/bot.ts");
 const { stripMentions } = await import("../server/qa.ts");
-const { fastRoute, sessionKey } = await import("../server/agent/router.ts");
+const { LEGACY_TIER, fastRoute, parseTier, sessionKey, withTier } = await import("../server/agent/router.ts");
 
 test("草稿拆出评审报告和备注", () => {
 	assert.deepEqual(splitNote("看过了\n【评审报告】❌ 有问题\n【备注】别承诺"), { body: "看过了", note: "别承诺", report: "❌ 有问题" });
@@ -94,14 +94,35 @@ test("消息内容转文字", () => {
 	assert.equal(stripMentions({ content: "@_user_1 帮我看下", mentions }), "帮我看下");
 });
 
-test("MR 链接直接分给 CR，会话按 MR 区分", () => {
-	const agents = { cr: { match: { links: ["gitlab_mr"] }, session: "mr" as const }, general: {} };
-	const r = fastRoute(agents, "帮忙看下 https://gitlab.shoplazza.site/cart/baymax/-/merge_requests/89 谢谢")!;
-	assert.equal(r[0], "cr");
-	assert.equal(r[1].mrProject, "cart/baymax");
-	assert.equal(sessionKey("cr", agents.cr, "oc_1", r[1]), "cr-cart_baymax-89");
-	assert.equal(fastRoute(agents, "普通消息"), undefined);
-	assert.equal(sessionKey("chat", { session: "none" }, "oc_1", { rule: "" }), null);
+test("MR 链接直接进 mr 档，会话按 MR 区分", () => {
+	const assistant = { session: "chat" as const, tiers: { answer: {}, mr: { session: "mr" as const, cwd: "repo_of_mr" as const } } };
+	const r = fastRoute(assistant, "帮忙看下 https://gitlab.shoplazza.site/cart/baymax/-/merge_requests/89 谢谢")!;
+	assert.equal(r.tier, "mr");
+	assert.equal(r.mrProject, "cart/baymax");
+	assert.equal(sessionKey("assistant", withTier(assistant, "mr"), "oc_1", r), "assistant-cart_baymax-89");
+	assert.equal(fastRoute(assistant, "普通消息"), undefined);
+	assert.equal(sessionKey("assistant", { session: "none" }, "oc_1", { rule: "" }), null);
+});
+
+test("档位：分诊回答里取档位，不认识的和 mr 都走 answer；档位字段覆盖 agent 本身", () => {
+	const assistant = {
+		model: "big",
+		thinking: "medium",
+		tiers: { ack: { model: "small", tools: [] }, answer: {}, deep: { thinking: "high" }, mr: {} },
+	};
+	assert.equal(parseTier(assistant, '{"tier":"ack","reason":"寒暄"}').tier, "ack");
+	assert.equal(parseTier(assistant, '{"tier":"mr"}').tier, "answer");
+	assert.equal(parseTier(assistant, '{"tier":"xx"}').tier, "answer");
+	assert.equal(parseTier(assistant, "不是 JSON").rule, "兜底");
+	const ack = withTier(assistant, "ack");
+	assert.deepEqual([ack.model, ack.thinking, ack.tools], ["small", "medium", []]);
+	assert.equal("tiers" in ack, false);
+	assert.equal(withTier(assistant, "deep").thinking, "high");
+	assert.equal(withTier(assistant, "没有的档").model, "big");
+	// 没有档位的 agent（dev、alert）原样返回
+	const dev = { model: "x" };
+	assert.equal(withTier(dev, "deep"), dev);
+	assert.deepEqual(LEGACY_TIER, { ask: "deep", general: "answer", cr: "mr", chat: "ack" });
 });
 
 test("只有 @ 的消息", () => {
@@ -150,4 +171,21 @@ test("过期截图按修改时间清理", async () => {
 	assert.equal(pruneOldFiles(dir, 0), 0);
 	assert.equal(pruneOldFiles(dir, 7), 1);
 	assert.deepEqual(readdirSync(dir), ["new.jpg"]);
+});
+
+test("skill 描述：单行和 YAML 折叠块都取得到，过长截断", async () => {
+	const { skillDescription, expandSkills } = await import("../server/agent/driver.ts");
+	assert.equal(skillDescription("---\nname: a\ndescription: 查日志\n---\n"), "查日志");
+	assert.equal(skillDescription("---\nname: a\ndescription: >\n  第一行\n  第二行\nlicense: x\n---\n"), "第一行 第二行");
+	assert.equal(skillDescription(`---\ndescription: ${"长".repeat(200)}\n---`).length, 121);
+	const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+	const { tmpdir } = await import("node:os");
+	const dir = mkdtempSync(`${tmpdir()}/skills-`);
+	mkdirSync(`${dir}/b`);
+	writeFileSync(`${dir}/b/SKILL.md`, "x");
+	mkdirSync(`${dir}/a`);
+	writeFileSync(`${dir}/a/SKILL.md`, "x");
+	mkdirSync(`${dir}/no-skill`);
+	assert.deepEqual(expandSkills("*", dir), ["a", "b"]);
+	assert.deepEqual(expandSkills(["x"], dir), ["x"]);
 });

@@ -29,11 +29,11 @@ test("cron：写错的报出哪里错", () => {
 });
 
 test("定时任务：校验 cron、agent 和内容，停用后没有下次", () => {
-	assert.throws(() => saveSchedule({ name: "x", cron: "bad", agent: "ask", prompt: "看看" }), DraftError);
+	assert.throws(() => saveSchedule({ name: "x", cron: "bad", agent: "assistant", prompt: "看看" }), DraftError);
 	assert.throws(() => saveSchedule({ name: "x", cron: "0 9 * * *", agent: "dev", prompt: "改代码" }), /不能定时跑/);
 	assert.throws(() => saveSchedule({ name: "x", cron: "0 9 * * *", agent: "nobody", prompt: "看看" }), /没有 agent/);
-	assert.throws(() => saveSchedule({ name: "", cron: "0 9 * * *", agent: "ask", prompt: "看看" }), /名字/);
-	const s = saveSchedule({ name: "每日告警回顾", cron: "0 9 * * 1-5", agent: "ask", prompt: "看看昨天的告警" });
+	assert.throws(() => saveSchedule({ name: "", cron: "0 9 * * *", agent: "assistant", prompt: "看看" }), /名字/);
+	const s = saveSchedule({ name: "每日告警回顾", cron: "0 9 * * 1-5", agent: "assistant", prompt: "看看昨天的告警" });
 	assert.ok(s.nextRun && s.nextRun > Date.now() / 1000);
 	const off = saveSchedule({ ...s, enabled: false });
 	assert.equal(off.id, s.id);

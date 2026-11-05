@@ -11,7 +11,7 @@ const EXAMPLES = [
 ];
 
 type Draft = Pick<Schedule, "name" | "cron" | "agent" | "prompt"> & { id?: string };
-const EMPTY: Draft = { name: "", cron: "0 9 * * 1-5", agent: "ask", prompt: "" };
+const EMPTY: Draft = { name: "", cron: "0 9 * * 1-5", agent: "assistant", prompt: "" };
 
 /** 定时任务：到点交给只读 agent 跑一次，结论私聊给你（server/schedules.ts） */
 export function Schedules({ agents, onOpen }: { agents: AgentStat[]; onOpen: (taskId: string) => void }) {
@@ -21,7 +21,7 @@ export function Schedules({ agents, onOpen }: { agents: AgentStat[]; onOpen: (ta
 	const [msg, setMsg] = useState<Msg>(null);
 	const [busy, setBusy] = useState(false);
 	// 开发任务要仓库和分支，简单回应不干活：都不能定时跑
-	const choices = agents.filter((a) => a.name !== "dev" && a.name !== "chat");
+	const choices = agents.filter((a) => a.name !== "dev");
 	const refresh = () => qc.invalidateQueries({ queryKey: ["schedules"] });
 
 	async function act(fn: () => Promise<unknown>, ok: string) {

@@ -5,7 +5,18 @@ import { deleteKv, getKv, listKv, setKv } from "../db/index.ts";
 import type { MeegoCard } from "../db/schema.ts";
 import { imageKeys, imagesNote, saveImage } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
-import { glabRepo, loadAgents, mrBrief, resolveCwd, route, type RouteInfo, sessionKey } from "../agent/router.ts";
+import {
+	ASSISTANT,
+	LEGACY_TIER,
+	glabRepo,
+	loadAgents,
+	mrBrief,
+	resolveCwd,
+	route,
+	type RouteInfo,
+	sessionKey,
+	withTier,
+} from "../agent/router.ts";
 import { meegoContext } from "../meego.ts";
 import {
 	decide,
@@ -73,8 +84,17 @@ interface Stage {
 	routeId: number;
 	triggerIds: string[];
 	started: number;
-	/** chat 写出文字、改派之后的那次运行：requestId 带这个后缀 */
+	/** assistant 的档位；改版前的 stage 没有，按旧 agent 名推（LEGACY_TIER） */
+	tier?: string;
+	/** ack 档写出文字、升到 answer 档之后的那次运行：requestId 带这个后缀 */
 	suffix?: string;
+}
+
+/** stage 实际用哪个 agent、哪一档：改版前接回的旧分派（ask、cr…）交给 assistant 的对应档位 */
+export function stageAgent(stage: Pick<Stage, "source" | "tier">): { name: string; tier?: string } {
+	const name = stage.source.agent ?? "";
+	const legacy = LEGACY_TIER[name];
+	return legacy ? { name: ASSISTANT, tier: stage.tier ?? legacy } : { name, tier: stage.tier };
 }
 
 interface Pending {
@@ -171,7 +191,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 					source.context = related;
 					ctx = contextBlock(recent, related, source.text);
 				}
-				// 订阅直通（Fast Path）：同一个话题 / 工作项、或提到的 MR 已经挂在某个会话上，直接进那个会话，不再分诊
+				// 订阅接续：同一个话题 / 工作项、或提到的 MR 已经挂在某个会话上，档位照常分诊，会话接着用
 				const thread = triggerOf(chat, last).thread;
 				const keys = subscribable(thread, refsOf(source.text));
 				const agents = loadAgents().agents;
@@ -179,20 +199,24 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				let name: string;
 				let info: RouteInfo;
 				let sid: string | null;
-				if (open?.agent && agents[open.agent]) {
-					// 重启接回：沿用上次的分派（同一个 agent、同一个会话），durable 才接得回原来那次运行
-					name = open.agent;
-					info = { ...open.info, rule: open.rule };
+				const openName = open?.agent && (LEGACY_TIER[open.agent] ? ASSISTANT : open.agent);
+				if (open && openName && agents[openName]) {
+					// 重启接回：沿用上次的分派（同一个会话），durable 才接得回原来那次运行；改版前的旧 agent 名换成 assistant 的对应档位
+					name = openName;
+					info = { ...open.info, rule: open.rule, tier: open.info?.tier ?? LEGACY_TIER[open.agent!] };
 					sid = open.session;
-				} else if (sub && agents[sub.agent]) {
-					name = sub.agent;
-					info = { ...sub.info, rule: `订阅直通：${sub.key}` };
-					sid = sub.session;
 				} else {
 					[name, info] = await route(source);
-					sid = sessionKey(name, agents[name] ?? {}, chat.chat_id, info);
+					// 寒暄确认不需要前文，不接续也不挂订阅
+					if (sub && info.tier !== "ack") {
+						const { mrProject, mrIid } = (sub.info ?? {}) as Record<string, string>;
+						// 挂在 MR 上的会话：后续消息按 MR 预审档接着看
+						if (mrIid) info = { ...info, tier: "mr", mrProject, mrIid };
+						info = { ...info, rule: `${info.rule}；接续 ${sub.key}` };
+						sid = sub.session;
+					} else sid = sessionKey(name, withTier(agents[name] ?? {}, info.tier), chat.chat_id, info);
 				}
-				const agent = agents[name] ?? {};
+				const agent = withTier(agents[name] ?? {}, info.tier);
 				const { rule: _rule, ...routeExtra } = info;
 				routeId =
 					open?.id ??
@@ -204,7 +228,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 						actionKind: "draft",
 					});
 				// 之后同一件事（这个话题、这个 MR）的消息都进这个会话，跨渠道也接得上
-				if (sid) subscribe(keys, { agent: name, session: sid, info: routeExtra as Record<string, string>, routeId });
+				if (sid && info.tier !== "ack") subscribe(keys, { agent: name, session: sid, info: routeExtra as Record<string, string>, routeId });
 				Object.assign(source, { agent: name, session: sid, route: info.rule, routeId });
 				log("分派", chat.chat_id, "->", name, info.rule);
 				let where: string;
@@ -231,7 +255,8 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				// 截图常常就是问题本身：存到本地，把路径给 agent 用 read 查看；chat 没有工具、只回表情，不用看
 				const stage: Stage = {
 					source: { ...source },
-					prompt: name === "chat" ? prompt : `${prompt}${await imageHint(msgs)}`,
+					tier: info.tier,
+					prompt: info.tier === "ack" ? prompt : `${prompt}${await imageHint(msgs)}`,
 					basePrompt: prompt,
 					cwd: resolveCwd(agent, info),
 					label,
@@ -252,7 +277,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 /** 跑（或接回）这一步的 agent 运行 */
 function runStage(chat: ChatRef, stage: Stage, requestId: string) {
 	const { source } = stage;
-	const name = source.agent ?? "";
+	const { name, tier } = stageAgent(stage);
 	return runPi({
 		cwd: stage.cwd,
 		sessionId: source.session,
@@ -260,7 +285,7 @@ function runStage(chat: ChatRef, stage: Stage, requestId: string) {
 		prompt: stage.prompt,
 		extraSystem: [PATHS.draftRules],
 		label: stage.label,
-		agent: loadAgents().agents[name] ?? {},
+		agent: withTier(loadAgents().agents[name] ?? {}, tier),
 		agentName: name,
 		chatId: chat.chat_id,
 		lookup: true,
@@ -276,20 +301,27 @@ function runStage(chat: ChatRef, stage: Stage, requestId: string) {
 async function finish(chat: ChatRef, msgs: Message[], first: Stage, requestId: string, pendingKey: string, attempt?: string) {
 	let stage = first;
 	let { text: draft, usage, sessionId } = await runStage(chat, stage, `${requestId}${stage.suffix ?? ""}`);
-	// chat 用的是便宜模型、不查任何资料，写出文字就可能编事实（替 Yi 确认店铺、猜原因）：只收表情和「无需回复」，否则交给兜底 agent 重写
-	if (stage.source.agent === "chat" && !stage.suffix && !isAckOnly(draft)) {
-		const { router, agents } = loadAgents();
-		const next = router.fallback && agents[router.fallback] ? router.fallback : "general";
-		log("chat 输出了文字，改派", next, chat.chat_id);
-		const agent = agents[next] ?? {};
-		const info: RouteInfo = { rule: `${stage.source.route ?? ""}（chat 输出文字，改派 ${next}）` };
-		const sid = sessionKey(next, agent, chat.chat_id, info);
-		// 四段模型里是一次新的分派；chat 那次记成「改派」
-		settle({ actionKind: "draft", routeId: stage.routeId, outcome: "rerouted", effect: "internal", detail: `chat 输出文字，改派 ${next}` });
-		const routeId = decide(stage.triggerIds, { agent: next, rule: info.rule, session: sid, actionKind: "draft" });
+	// ack 档用的是便宜模型、不查任何资料，写出文字就可能编事实（替 Yi 确认店铺、猜原因）：只收表情和「无需回复」，否则升到 answer 档重写
+	if (stageAgent(stage).tier === "ack" && !stage.suffix && !isAckOnly(draft)) {
+		const { name } = stageAgent(stage);
+		const next = "answer";
+		log("ack 档输出了文字，升到", next, chat.chat_id);
+		const agent = withTier(loadAgents().agents[name] ?? {}, next);
+		const info: RouteInfo = { tier: next, rule: `${stage.source.route ?? ""}（ack 档输出文字，升到 ${next}）` };
+		const sid = sessionKey(name, agent, chat.chat_id, info);
+		// 四段模型里是一次新的分派；ack 那次记成「改派」
+		settle({
+			actionKind: "draft",
+			routeId: stage.routeId,
+			outcome: "rerouted",
+			effect: "internal",
+			detail: `ack 档输出文字，升到 ${next}`,
+		});
+		const routeId = decide(stage.triggerIds, { agent: name, rule: info.rule, session: sid, info: { tier: next }, actionKind: "draft" });
 		stage = {
 			...stage,
-			source: { ...stage.source, agent: next, session: sid, route: info.rule, routeId },
+			tier: next,
+			source: { ...stage.source, agent: name, session: sid, route: info.rule, routeId },
 			prompt: `${stage.basePrompt}${await imageHint(msgs)}`,
 			cwd: resolveCwd(agent, info),
 			routeId,

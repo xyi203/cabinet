@@ -26,7 +26,7 @@ import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool, type ImageProcessor } from "@earendil-works/pi-durable/tools";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { emit } from "../bus.ts";
 import {
@@ -45,7 +45,7 @@ import { deleteKv, getKv, listKv, setKv } from "../db/index.ts";
 import { openTursoDurable } from "../db/turso.ts";
 import type { Usage } from "../db/schema.ts";
 import { Guard, mcpToolName } from "./guard.ts";
-import { closeMcp, mcpNamespaces, mcpTools } from "./mcp.ts";
+import { closeMcp, loadServers, mcpNamespaces, mcpTools } from "./mcp.ts";
 import { QUOTA_RE, log, now } from "../util.ts";
 import { models, resolveModel, textOf } from "./models.ts";
 import { type AgentConfig, loadAgents } from "./router.ts";
@@ -150,7 +150,7 @@ const DEFAULT_TOOLS: ToolName[] = ["read", "grep", "find", "ls", "bash", "memory
 
 interface StoredPolicy {
 	roots: string[];
-	bash: string[];
+	bash: string[] | "*";
 	cwd: string;
 	runId: string;
 	writeRoots?: string[];
@@ -244,7 +244,7 @@ export function harness(): Promise<Harness> {
 		const registry = createRegistry();
 		registry.install(Cabinet);
 		// MCP 工具要在打开前注册：resume 接回的运行会按名字找工具
-		const servers = Object.values(loadAgents().agents).flatMap((a) => a.mcp ?? []);
+		const servers = [...new Set(Object.values(loadAgents().agents).flatMap((a) => expandMcp(a.mcp)))];
 		if (servers.length) {
 			mcp = await mcpTools(servers);
 			mcpExtensions = [
@@ -323,14 +323,32 @@ async function usageNow(h: Harness, convId: Conversation["id"]) {
 	return sumUsage(await h.snapshot(UsageDoc, convId, ctx));
 }
 
+/** skills: "*" 展开成 SKILLS_DIR 下全部有 SKILL.md 的目录 */
+export function expandSkills(skills: AgentConfig["skills"], dir = SKILLS_DIR): string[] {
+	if (skills !== "*") return skills ?? [];
+	try {
+		return readdirSync(dir)
+			.filter((s) => existsSync(path.join(dir, s, "SKILL.md")))
+			.toSorted();
+	} catch {
+		return [];
+	}
+}
+
+/** mcp: "*" 展开成 MCP_CONFIG 里的全部 server */
+export const expandMcp = (servers: AgentConfig["mcp"]): string[] => (servers === "*" ? Object.keys(loadServers()) : (servers ?? []));
+
+/** 描述可能是多行的 YAML 折叠块：取 description 之后到下一个字段前的文字，截到一句话 */
+export function skillDescription(text: string, max = 120): string {
+	const m = /^description:\s*(?:[>|][-+]?\s*)?([\s\S]*?)(?=^\S[\w-]*:|^---)/m.exec(text);
+	const desc = (m?.[1] ?? "").replace(/\s+/g, " ").trim();
+	return desc.length > max ? `${desc.slice(0, max)}…` : desc;
+}
+
 function skillsHint(skills: string[]) {
 	if (!skills.length) return "";
-	const lines = skills.map((s) => {
-		const file = path.join(SKILLS_DIR, s, "SKILL.md");
-		const desc = /^description:\s*(.+)$/m.exec(readText(file))?.[1] ?? "";
-		return `- ${s}：${desc}（说明在 ${file}，用之前先 read）`;
-	});
-	return `# 可用的 skill\n\n${lines.join("\n")}`;
+	const lines = skills.map((s) => `- ${s}：${skillDescription(readText(path.join(SKILLS_DIR, s, "SKILL.md")))}`);
+	return `# 可用的 skill\n\n用到哪个先 read 它的说明 \`${SKILLS_DIR}/<名字>/SKILL.md\`，按说明里的只读子命令用；命令会按 config/skill-rules.json 判定，写操作要 Yi 审批。\n\n${lines.join("\n")}`;
 }
 
 async function waitSettled(submission: { wait(c: typeof ctx): Promise<any> }, conv: Conversation) {
@@ -351,7 +369,7 @@ async function waitSettled(submission: { wait(c: typeof ctx): Promise<any> }, co
 
 /** 选哪些扩展、开哪些工具：配了 mcp 的 agent 加上 codemode 工具和它那几个 server 的工具（连接失败没注册上的就没有） */
 function withMcp(agent: AgentConfig, base: ToolRegistration[]) {
-	const prefixes = (agent.mcp ?? []).map((s) => mcpToolName(s, ""));
+	const prefixes = expandMcp(agent.mcp).map((s) => mcpToolName(s, ""));
 	const own = mcp.filter((t) => prefixes.some((p) => t.name.startsWith(p)));
 	if (!own.length) return { extensions: [Cabinet], tools: base };
 	const codemode = mcpExtensions.flatMap((e) => e.tools ?? []).filter((t) => t.name === CODEMODE_TOOL_NAME);
@@ -385,7 +403,7 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 			submission = resumed;
 			record = rec;
 		} else {
-			const skills = toolNames.includes("read") ? (agent.skills ?? []) : [];
+			const skills = toolNames.includes("read") ? expandSkills(agent.skills) : [];
 			// agent 用到的 skill 目录也要能读，否则连 SKILL.md 都打不开
 			// 消息里的截图存在 PATHS.images，agent 用 read 打开
 			const roots = [...READ_ROOTS, PATHS.images, ...skills.map((s) => path.join(SKILLS_DIR, s))];
@@ -397,7 +415,7 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 				writeRoots: opts.writeRoots,
 				commands: opts.writeRoots ? agent.commands : undefined,
 				lookup: toolNames.includes("lookup"),
-				mcp: agent.mcp,
+				mcp: expandMcp(agent.mcp),
 			};
 			setKv(`conv-policy:${String(conv.id)}`, policy);
 			policies.set(String(conv.id), { guard: guardOf(policy), cwd: opts.cwd, runId: key });
