@@ -85,6 +85,7 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 						label: draftLabel(d),
 						agent,
 						agentName: name,
+						origin: { label: `改写给 ${d.senderName} 的草稿`, draftReplyTo: d.replyTo },
 						chatId: d.chatId,
 						lookup: true,
 						memory: {

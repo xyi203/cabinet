@@ -33,6 +33,8 @@ export function loadServers(file = MCP_CONFIG): Record<string, ServerDef> {
 }
 
 const clients = new Map<string, Promise<Client>>();
+/** 注册过的工具：完整名 -> server 和原名，审批通过后由 cabinet 直接调用 */
+const registered = new Map<string, { server: string; tool: string; def: ServerDef }>();
 
 function connect(name: string, def: ServerDef): Promise<Client> {
 	const client = new Client({ name: "cabinet", version: "1.0.0" });
@@ -95,6 +97,7 @@ export async function mcpTools(names: string[], servers = loadServers()): Promis
 				for (const t of listed.tools) {
 					// 只读的直接放行，其余在守卫里按写操作处理（要审批）
 					if (t.annotations?.readOnlyHint || readList.has(mcpToolName(name, t.name))) mcpReadOnly.add(mcpToolName(name, t.name));
+					registered.set(mcpToolName(name, t.name), { server: name, tool: t.name, def });
 					tools.push(
 						defineTool({
 							name: mcpToolName(name, t.name),
@@ -130,6 +133,16 @@ export function mcpNamespaces(names: string[], servers = loadServers()) {
 		description: (servers[name] as { description?: string } | undefined)?.description,
 		prefix: mcpToolName(name, ""),
 	}));
+}
+
+/** 按完整工具名调用（审批通过的写操作），返回文字结果；出错抛异常 */
+export async function callMcp(fullName: string, args: Record<string, unknown>): Promise<string> {
+	const r = registered.get(fullName);
+	if (!r) throw new Error(`MCP 工具 ${fullName} 没有注册（server 没连上或已下线）`);
+	const result = await (await clientOf(r.server, r.def)).callTool({ name: r.tool, arguments: args }, undefined, { timeout: CALL_TIMEOUT });
+	const text = renderResult(result);
+	if (result.isError) throw new Error(text);
+	return text;
 }
 
 export async function closeMcp() {

@@ -111,7 +111,7 @@ export interface Task {
 
 /** 待你处理：服务端按急缓排好（server/tasks.ts buildInbox） */
 export interface InboxItem {
-	kind: "draft" | "failure" | "dev" | "memory" | "watch";
+	kind: "draft" | "failure" | "dev" | "memory" | "watch" | "approval";
 	ref: string;
 	level: "now" | "soon" | "later";
 	why: string;

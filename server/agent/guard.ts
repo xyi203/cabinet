@@ -92,6 +92,8 @@ export function loadRules(skillsDir: string, specs?: Record<string, RuleSpec>): 
 	);
 }
 
+const joinWords = (l: string[][]) => l.map((x) => x.join(" ")).join("/");
+
 /** 子命令词组在参数里连续出现 */
 const hits = (rest: string[], list: string[][]) => list.find((w) => rest.some((_, i) => w.every((x, k) => rest[i + k] === x)));
 
@@ -240,10 +242,9 @@ export class Guard {
 		const w = hits(rest, rule.write);
 		if (w) return approve(`${name} ${w.join(" ")} 是写操作`);
 		if (hits(rest, rule.read)) return ALLOW;
-		const list = (l: string[][]) => l.map((x) => x.join(" ")).join("/");
 		// 把要审批的写子命令也列出来：只列只读的，agent 会以为写操作也一律被拒、不去走审批
 		return deny(
-			`${name} 不允许这个子命令。直接放行：${list(rule.read)}${rule.write.length ? `；要 Yi 审批的写操作：${list(rule.write)}` : ""}`,
+			`${name} 不允许这个子命令。直接放行：${joinWords(rule.read)}${rule.write.length ? `；要 Yi 审批的写操作：${joinWords(rule.write)}` : ""}`,
 		);
 	}
 
@@ -299,6 +300,9 @@ export class Guard {
 			case "memory":
 				// 只读，只查 cabinet 自己的记忆库
 				return ALLOW;
+			case "schedule":
+				// 新建定时任务：到点会以 Yi 的名义跑 agent，算写操作
+				return approve("新建定时任务");
 			case "lookup":
 				// 只读，但能看到私聊和草稿：只给结果先经 Yi 过目的会话
 				return this.lookup ? ALLOW : deny("这个会话不能用 lookup");

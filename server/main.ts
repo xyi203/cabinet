@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { resumePendingAlerts, stopAlerts } from "./alerts.ts";
+import { startApprovals } from "./approvals.ts";
 import { startServer } from "./api.ts";
 import { DRAFT_ENABLED, PATHS, PI_MODEL, missingConfig } from "./config.ts";
 import { closeHarness, harness, pruneRuns } from "./agent/driver.ts";
@@ -25,6 +26,8 @@ if (missing.length) {
 for (const d of [PATHS.sessions, PATHS.stickers, PATHS.images]) mkdirSync(d, { recursive: true });
 db();
 importLegacyMemory();
+// 审批处理要在 durable 恢复运行之前挂上：接回的运行也可能调写操作
+startApprovals();
 // 先打开 durable：上次没跑完的 agent 运行在这里恢复
 await harness();
 pruneRuns();

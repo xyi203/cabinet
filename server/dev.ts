@@ -336,6 +336,8 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 				writeRoots: dev ? [task.worktree] : undefined,
 				// 结论只私聊给 Yi：可以沿 ID 查以前的消息、分派和结果
 				lookup: true,
+				// 写操作审批的结果作为新消息发回这个任务
+				origin: { label: `${dev ? "开发任务" : "任务"}「${task.title.slice(0, 40)}」`, devTaskId: id },
 				memory: { query: opinion ?? `${task.title}\n${task.request}`.slice(0, 1000), scope: {} },
 			}),
 		);

@@ -38,7 +38,7 @@
 	],
 	"archery": {
 		"argv0": ["{skills}/archery/scripts/archery"],
-		"read": ["envs", "instances", "databases", "tables", "desc", "query"],
+		"read": ["envs", "instances", "databases", "tables", "desc", "query", "check"],
 		"write": ["workflow", "submit", "execute", "approve", "cancel"],
 		"deny": ["login"]
 	},

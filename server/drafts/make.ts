@@ -274,6 +274,13 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 	);
 }
 
+/** 审批卡片上的来源：谁、在哪发的消息 */
+export function originLabel(chat: Pick<ChatRef, "chat_mode" | "name">, source: Pick<Source, "senderName">) {
+	if (chat.chat_mode === "p2p") return `${source.senderName} 私聊你的消息`;
+	if (chat.chat_mode === "meego") return `${source.senderName} 在飞书项目「${chat.name}」的评论`;
+	return `${source.senderName} 在群「${chat.name}」@你的消息`;
+}
+
 /** 跑（或接回）这一步的 agent 运行 */
 function runStage(chat: ChatRef, stage: Stage, requestId: string) {
 	const { source } = stage;
@@ -287,6 +294,7 @@ function runStage(chat: ChatRef, stage: Stage, requestId: string) {
 		label: stage.label,
 		agent: withTier(loadAgents().agents[name] ?? {}, tier),
 		agentName: name,
+		origin: { label: originLabel(chat, source), draftReplyTo: source.replyTo },
 		chatId: chat.chat_id,
 		lookup: true,
 		memory: {

@@ -1024,3 +1024,30 @@ pre.diff {
 	border-radius: 6px;
 	background: #fff;
 }
+
+.approval-what {
+	margin: 6px 0;
+	padding: 8px 10px;
+	background: var(--soft);
+	border-radius: 6px;
+	white-space: pre-wrap;
+	word-break: break-all;
+	font:
+		12px/1.5 ui-monospace,
+		Menlo,
+		monospace;
+}
+.approval-actions {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	flex-wrap: wrap;
+}
+.approval-actions input {
+	flex: 1;
+	min-width: 160px;
+}
+.tag.approval {
+	background: var(--warn-soft);
+	color: var(--warn);
+}

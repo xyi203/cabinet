@@ -3,7 +3,7 @@
 import { BOT_OPEN_ID, COMMON_EMOJI, DEFAULT_CWD, OWNER_NAME, OWNER_OPEN_ID, THREAD_CONTEXT_N } from "./config.ts";
 import { type Action, applyDraftAction } from "./drafts/actions.ts";
 import { type Kind, listStickers } from "./drafts/format.ts";
-import { DraftError, LIVE, pickDraft } from "./drafts/store.ts";
+import { DraftError, LIVE, getDraft, pickDraft } from "./drafts/store.ts";
 import { locks, sem } from "./agent/slots.ts";
 import { LarkError, quotedMessage, react, replyAsBot, threadContext, unreact } from "./lark/bot.ts";
 import type { BotEvent } from "./lark/types.ts";
@@ -69,9 +69,17 @@ async function remember(ev: BotEvent, text: string, tid: string) {
 	if (ev.senderId !== OWNER_OPEN_ID) return void (await reply(ev, `写入记忆需要${OWNER_NAME}确认，可以请${OWNER_NAME}来说「记住 …」。`));
 	if (!content) return void (await reply(ev, "要记住什么？用法：记住 xxx"));
 	// 只有 Yi 能写；正文就是他的原话，模型只帮着分类，群里的提示词注入写不进长期记忆
+	// 引用了草稿卡片说的「记住」：可以只对那条消息的发送人或那个会话生效
+	const d = ev.parentId ? getDraft(ev.parentId) : undefined;
+	const candidates = d
+		? {
+				person: d.chatMode === "meego" ? undefined : { id: d.senderId, name: d.senderName },
+				chat: { id: d.chatId, name: d.chatMode === "p2p" ? `和 ${d.senderName} 的私聊` : d.chatName },
+			}
+		: undefined;
 	let m;
 	try {
-		m = await rememberStatement(content, ev.messageId);
+		m = await rememberStatement(content, ev.messageId, candidates);
 	} catch (e) {
 		if (e instanceof MemoryError) {
 			settle({ actionKind: "remember", actionId: ev.messageId, routeId, outcome: "failed", effect: "internal", detail: e.message });
@@ -81,7 +89,14 @@ async function remember(ev: BotEvent, text: string, tid: string) {
 	}
 	await react(ev.messageId, "DONE");
 	settle({ actionKind: "remember", actionId: ev.messageId, routeId, outcome: "remembered", effect: "internal", ref: `memory:${m.id}` });
-	if (m.application === "convention") await reply(ev, `记成长期约定 #${m.id}，适用：${m.appliesWhen}。不对的话在看板「记忆」里改。`);
+	const scope = m.scope.startsWith("person:")
+		? `，只在和 ${m.scopeName} 有关时用`
+		: m.scope.startsWith("chat:")
+			? `，只在「${m.scopeName}」里用`
+			: "";
+	if (m.application === "convention")
+		await reply(ev, `记成长期约定 #${m.id}，适用：${m.appliesWhen}${scope}。不对的话在看板「记忆」里改。`);
+	else if (scope) await reply(ev, `记下了 #${m.id}${scope}。不对的话在看板「记忆」里改。`);
 	record({ kind: "qa", status: "remembered", source: ev.messageId, chatId: ev.chatId, question: content, label: "记忆" });
 }
 
@@ -206,6 +221,7 @@ export async function handle(ev: BotEvent, attempt?: string) {
 					prompt: await buildPrompt(ev, text),
 					agent,
 					agentName,
+					origin: { label: "你私聊机器人的提问" },
 					label,
 					memory: { query: text, scope: { personId: ev.senderId === OWNER_OPEN_ID ? undefined : ev.senderId, chatId: ev.chatId } },
 				});

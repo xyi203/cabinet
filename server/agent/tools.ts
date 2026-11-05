@@ -92,3 +92,16 @@ export const lookupTool = defineTool({
 	parameters: obj({ id: str() }),
 	execute: async (args) => text(lookup(args.id)),
 });
+
+// 新建定时任务：守卫一律判成「要审批」，由 approvals.ts 在 Yi 批准后建；这里的 execute 不会被走到
+export const scheduleTool = defineTool({
+	name: "schedule",
+	description:
+		"Yi 让你定期做某件事时（「每天 9 点…」「每周一…」），新建一个定时任务：到点交给助手按 prompt 跑一次，结论私聊 Yi。" +
+		"会先发审批卡片给 Yi，批准后才生效。cron 是 5 段「分 时 日 月 周」，本机时区，例如每个工作日 9 点是 `0 9 * * 1-5`。" +
+		"prompt 写清到点要做什么、看哪些数据、结论要什么样，要能脱离这次对话独立看懂。",
+	parameters: obj({ name: str(), cron: str(), prompt: str() }),
+	execute: async () => {
+		throw new Error("新建定时任务需要 Yi 审批，不能直接执行");
+	},
+});

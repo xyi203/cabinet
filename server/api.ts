@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import { type LiveEvent, bus, changed } from "./bus.ts";
 import { COMMON_EMOJI, DEV_ORIGIN, OAUTH_REDIRECT, PATHS, PORT } from "./config.ts";
 import { applyDraftAction } from "./drafts/actions.ts";
+import { ApprovalError, decideApproval } from "./approvals.ts";
 import { lineage, recentLineage } from "./pipeline.ts";
 import { deleteSchedule, listSchedules, runNow, saveSchedule } from "./schedules.ts";
 import { type Kind, listStickers, resolveSticker } from "./drafts/format.ts";
@@ -193,6 +194,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		body = await readJson(req);
 	} catch {
 		return send(res, 400, { error: "bad json" });
+	}
+	const apv = /^\/api\/approvals\/(apv-[\w]+)\/(approve|reject)$/.exec(p);
+	if (apv) {
+		try {
+			return send(res, 200, { ok: true, item: await decideApproval(apv[1], apv[2] as "approve" | "reject", String(body.note ?? "")) });
+		} catch (e) {
+			if (e instanceof ApprovalError) return send(res, 409, { error: e.message });
+			throw e;
+		}
 	}
 	if (p.startsWith("/api/memory")) {
 		try {

@@ -55,7 +55,7 @@ function Dashboard() {
 	const openDraft = (d: Draft) => setOpen({ draft: d, task: state?.tasks.find((t) => t.draft === d.id) });
 	const navigate = useNavigate();
 	const openInbox = (it: InboxItem) => {
-		if (it.kind === "watch") return;
+		if (it.kind === "watch" || it.kind === "approval") return;
 		if (it.kind === "dev") return setOpen({ dev: it.ref });
 		if (it.kind === "memory") return void navigate({ to: "/", search: { view: "memory" } });
 		if (it.kind === "draft") {

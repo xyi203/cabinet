@@ -2,6 +2,7 @@
 // 只认 Yi；回调要 3 秒内返回：操作 2 秒内做完就带回结果卡片，否则先回「处理中」，做完由各自的同步原地更新。
 import { setTimeout as sleep } from "node:timers/promises";
 import { OWNER_NAME, OWNER_OPEN_ID } from "./config.ts";
+import { ApprovalError, approvalCard, decideApproval, getApproval } from "./approvals.ts";
 import { closeTask, discardDev, messageDev, pushDev, renderDevCard, stopDev, syncDevCard } from "./dev.ts";
 import { onDraftCardAction } from "./drafts/actions.ts";
 import { parseCardAction } from "./drafts/card.ts";
@@ -67,6 +68,18 @@ function failureAction(a: string, taskId: string) {
 	return reply("success", a === "retry" ? "已重新起草" : "已忽略");
 }
 
+async function approvalAction(a: string, id: string, form: Record<string, string>) {
+	if (a !== "approve" && a !== "reject") return reply("error", `不认识的操作 ${a}`);
+	try {
+		const r = await decideApproval(id, a, form.note ?? "");
+		return reply("success", a === "approve" ? "已批准，执行中…" : "已拒绝", approvalCard(r));
+	} catch (e) {
+		if (!(e instanceof ApprovalError)) log("审批操作失败", id, e);
+		const cur = getApproval(id);
+		return reply("error", e instanceof ApprovalError ? e.message : "操作失败，详情见日志", cur && approvalCard(cur));
+	}
+}
+
 export async function onCardAction(data: unknown) {
 	const ev = parseCardAction(data);
 	if (!ev) return;
@@ -75,5 +88,6 @@ export async function onCardAction(data: unknown) {
 	const { k, t } = ev.value as { k?: string; t?: string };
 	if (k === "dev" && t) return devAction(ev.messageId, ev.name, t, ev.form);
 	if (k === "fail" && t) return failureAction(ev.name, t);
+	if (k === "apv" && t) return approvalAction(ev.name, t, ev.form);
 	return onDraftCardAction(data);
 }

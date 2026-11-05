@@ -49,7 +49,7 @@ import { closeMcp, loadServers, mcpNamespaces, mcpTools } from "./mcp.ts";
 import { QUOTA_RE, log, now } from "../util.ts";
 import { models, resolveModel, textOf } from "./models.ts";
 import { type AgentConfig, loadAgents } from "./router.ts";
-import { findTool, grepTool, lookupTool, lsTool, memoryTool } from "./tools.ts";
+import { findTool, grepTool, lookupTool, lsTool, memoryTool, scheduleTool } from "./tools.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -72,7 +72,30 @@ export interface RunOptions {
 	lookup?: boolean;
 	/** 按这段文字召回长期记忆，带在这一轮的输入里；不给就不带 */
 	memory?: { query: string; scope: RecallScope };
+	/** 这次运行是谁引起的：写操作审批卡片上给 Yi 看，执行结果按它回到原处 */
+	origin?: Origin;
 }
+
+export interface Origin {
+	/** 例如「张三在群「xx」的消息」「看板任务：xxx」 */
+	label: string;
+	/** agent 任务：执行结果作为新消息发回这个任务 */
+	devTaskId?: string;
+	/** 起草：执行结果交给这条消息的草稿改写 */
+	draftReplyTo?: string;
+}
+
+/** 守卫判成「要审批」的调用怎么处理：返回拦截原因（建了审批、或者参数不对直接拒绝）。由 approvals.ts 注册 */
+export type ApprovalHandler = (req: {
+	tool: string;
+	args: Record<string, unknown>;
+	reason: string;
+	convId: number;
+	cwd: string;
+	origin?: Origin;
+}) => string;
+let approvalHandler: ApprovalHandler | undefined;
+export const setApprovalHandler = (h: ApprovalHandler) => (approvalHandler = h);
 
 export interface RunResult {
 	text: string;
@@ -142,9 +165,10 @@ const TOOLS = {
 	write: createWriteTool(),
 	memory: memoryTool,
 	lookup: lookupTool,
+	schedule: scheduleTool,
 };
 type ToolName = keyof typeof TOOLS;
-const DEFAULT_TOOLS: ToolName[] = ["read", "grep", "find", "ls", "bash", "memory"];
+const DEFAULT_TOOLS: ToolName[] = ["read", "grep", "find", "ls", "bash", "memory", "schedule"];
 
 // ---------- 守卫策略：conversation -> 只读策略 ----------
 
@@ -157,6 +181,7 @@ interface StoredPolicy {
 	commands?: string[];
 	lookup?: boolean;
 	mcp?: string[];
+	origin?: Origin;
 }
 
 const guardOf = (p: StoredPolicy) =>
@@ -169,7 +194,7 @@ const guardOf = (p: StoredPolicy) =>
 		lookup: p.lookup,
 		mcp: p.mcp,
 	});
-const policies = new Map<string, { guard: Guard; cwd: string; runId: string }>();
+const policies = new Map<string, { guard: Guard; cwd: string; runId: string; origin?: Origin }>();
 
 function policyOf(convId: string) {
 	let p = policies.get(convId);
@@ -177,10 +202,16 @@ function policyOf(convId: string) {
 		// 重启后恢复的运行：内存里没有，从库里取；取不到就拦截（fail-closed）
 		const stored = getKv<StoredPolicy | null>(`conv-policy:${convId}`, null);
 		if (!stored) return undefined;
-		p = { guard: guardOf(stored), cwd: stored.cwd, runId: stored.runId };
+		p = { guard: guardOf(stored), cwd: stored.cwd, runId: stored.runId, origin: stored.origin };
 		policies.set(convId, p);
 	}
 	return p;
+}
+
+/** 审批执行前复核用：这个会话当前的守卫（按库里存的策略重新建，规则文件改过也以现在的为准） */
+export function guardFor(convId: number): { guard: Guard; cwd: string } | undefined {
+	const stored = getKv<StoredPolicy | null>(`conv-policy:${convId}`, null);
+	return stored ? { guard: guardOf(stored), cwd: stored.cwd } : undefined;
 }
 
 const readText = (file: string) => (existsSync(file) ? readFileSync(file, "utf8").trim() : "");
@@ -207,8 +238,21 @@ const Cabinet = defineExtension({
 				const p = policyOf(String(api.conversationId));
 				if (!p) return { block: "找不到这个会话的权限配置，已拦截" };
 				const args = { ...(call.arguments as Record<string, unknown>) };
-				const reason = p.guard.check(call.name, args, p.cwd);
-				if (reason) return { block: reason };
+				const v = p.guard.verdict(call.name, args, p.cwd);
+				if (v.kind === "deny") return { block: v.reason };
+				if (v.kind === "approve") {
+					if (!approvalHandler) return { block: p.guard.check(call.name, args, p.cwd) ?? v.reason };
+					return {
+						block: approvalHandler({
+							tool: call.name,
+							args,
+							reason: v.reason,
+							convId: Number(api.conversationId),
+							cwd: p.cwd,
+							origin: p.origin,
+						}),
+					};
+				}
 				emit({ type: "tool_start", runId: p.runId, callId: call.id, tool: call.name, args, t: now() });
 				// bash 命令可能被改写成 skill 脚本的绝对路径
 				return { arguments: args as any };
@@ -416,9 +460,10 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 				commands: opts.writeRoots ? agent.commands : undefined,
 				lookup: toolNames.includes("lookup"),
 				mcp: expandMcp(agent.mcp),
+				origin: opts.origin,
 			};
 			setKv(`conv-policy:${String(conv.id)}`, policy);
-			policies.set(String(conv.id), { guard: guardOf(policy), cwd: opts.cwd, runId: key });
+			policies.set(String(conv.id), { guard: guardOf(policy), cwd: opts.cwd, runId: key, origin: opts.origin });
 			const instructions = [
 				agent.prompt ? readText(path.join(CONFIG_DIR, agent.prompt)) : "",
 				...(opts.extraSystem ?? []).map(readText),

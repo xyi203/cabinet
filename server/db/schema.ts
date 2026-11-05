@@ -299,3 +299,34 @@ export const memoryVectors = sqliteTable("memory_vectors", {
 });
 
 export type MemoryRow = typeof memories.$inferSelect;
+
+/** 写操作审批（docs/redesign.md 阶段 2）：agent 调写操作时守卫判成「要审批」，记一条、私聊 Yi 一张卡片，Yi 点执行才由 cabinet 执行 */
+export const approvals = sqliteTable(
+	"approvals",
+	{
+		id: text("id").primaryKey(),
+		created: real("created").notNull(),
+		/** pending / done（已执行）/ failed（执行出错）/ rejected / expired */
+		status: text("status").notNull(),
+		/** bash、mcp__<server>__<tool>、schedule */
+		tool: text("tool").notNull(),
+		args: text("args", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+		/** 守卫给的说明，例如「archery submit 是写操作」 */
+		reason: text("reason").notNull().default(""),
+		/** 是谁的消息、哪个任务引起的，给 Yi 看 */
+		origin: text("origin").notNull().default(""),
+		/** 发起审批的 durable 会话：执行时按它的权限策略复核 */
+		convId: integer("conv_id"),
+		cwd: text("cwd").notNull().default(""),
+		/** 执行结果回到哪：agent 任务；或起草时被回复的那条消息（找到它的草稿再改写） */
+		devTaskId: text("dev_task_id"),
+		draftReplyTo: text("draft_reply_to"),
+		/** 私聊 Yi 的审批卡片 */
+		dm: text("dm"),
+		result: text("result"),
+		decided: real("decided"),
+	},
+	(t) => [index("approvals_status").on(t.status)],
+);
+
+export type Approval = typeof approvals.$inferSelect;

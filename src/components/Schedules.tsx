@@ -11,7 +11,6 @@ const EXAMPLES = [
 ];
 
 type Draft = Pick<Schedule, "name" | "cron" | "agent" | "prompt"> & { id?: string };
-const EMPTY: Draft = { name: "", cron: "0 9 * * 1-5", agent: "assistant", prompt: "" };
 
 /** 定时任务：到点交给只读 agent 跑一次，结论私聊给你（server/schedules.ts） */
 export function Schedules({ agents, onOpen }: { agents: AgentStat[]; onOpen: (taskId: string) => void }) {
@@ -44,10 +43,14 @@ export function Schedules({ agents, onOpen }: { agents: AgentStat[]; onOpen: (ta
 		<div className="panel schedules">
 			<h3>
 				定时任务
-				<button className="btn" onClick={() => setEdit(edit ? null : EMPTY)}>
-					{edit ? "收起" : "＋ 新建"}
-				</button>
+				{edit && (
+					<button className="btn" onClick={() => setEdit(null)}>
+						收起
+					</button>
+				)}
 			</h3>
+			{/* 新建改成一句话：私聊机器人说要定期做什么，助手出审批卡片，批准后生效；这里只管看、改、停、删 */}
+			<div className="foot">私聊机器人一句话新建，例如「每个工作日 9 点查一下昨晚指派给我的告警」，确认审批卡片后生效。</div>
 			{edit && (
 				<div className="newtask">
 					<div className="row">

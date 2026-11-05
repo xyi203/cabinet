@@ -71,6 +71,13 @@
       "when": 1793806947860,
       "tag": "0009_good_scourge",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1793856106933,
+      "tag": "0010_mysterious_bastion",
+      "breakpoints": true
     }
   ]
 }

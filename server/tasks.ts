@@ -4,7 +4,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { PATHS } from "./config.ts";
 import { db, schema } from "./db/index.ts";
-import type { DevTask, Draft, RecordRow } from "./db/schema.ts";
+import type { Approval, DevTask, Draft, RecordRow } from "./db/schema.ts";
+import { describe, pendingApprovals } from "./approvals.ts";
 import { draftLabel } from "./drafts/format.ts";
 import { inflight } from "./drafts/store.ts";
 import { PI_MODEL, PI_THINKING } from "./config.ts";
@@ -266,7 +267,7 @@ function agentStats(records: RecordRow[], today: string) {
  * 推送规则（docs/pipeline.md）：now 和 soon 都已经私聊过，这里是汇总；有争议的记忆只在这里，不推送。
  */
 export interface InboxItem {
-	kind: "draft" | "failure" | "dev" | "memory" | "watch";
+	kind: "draft" | "failure" | "dev" | "memory" | "watch" | "approval";
 	/** 打开用：草稿 id、看板任务 id、agent 任务 id、记忆 id */
 	ref: string;
 	level: "now" | "soon" | "later";
@@ -278,7 +279,14 @@ export interface InboxItem {
 
 const LEVEL = { now: 0, soon: 1, later: 2 };
 
-export function buildInbox(drafts: Draft[], tasks: Task[], devTasks: DevTask[], contested: Memory[], issues: Issue[] = []): InboxItem[] {
+export function buildInbox(
+	drafts: Draft[],
+	tasks: Task[],
+	devTasks: DevTask[],
+	contested: Memory[],
+	issues: Issue[] = [],
+	approvals: Approval[] = [],
+): InboxItem[] {
 	const items: InboxItem[] = issues.map((i) => ({
 		kind: "watch",
 		ref: i.key,
@@ -288,6 +296,17 @@ export function buildInbox(drafts: Draft[], tasks: Task[], devTasks: DevTask[], 
 		label: "Watchdog",
 		at: now(),
 	}));
+	// 写操作审批：agent 在等，24 小时不处理就过期
+	for (const a of approvals)
+		items.push({
+			kind: "approval",
+			ref: a.id,
+			level: "now",
+			why: `写操作待审批：${a.reason}`,
+			title: describe(a),
+			label: a.origin,
+			at: a.created,
+		});
 	for (const d of drafts) {
 		if (d.status !== "pending" && d.status !== "noreply") continue;
 		items.push({
@@ -372,7 +391,7 @@ export function dashboardState() {
 			.slice(0, 100),
 		records: records.slice(0, 300),
 		tasks,
-		inbox: buildInbox(drafts, tasks, devTasksList(), listMemories(["contested"]), watchdogIssues()),
+		inbox: buildInbox(drafts, tasks, devTasksList(), listMemories(["contested"]), watchdogIssues(), pendingApprovals()),
 	};
 }
 
