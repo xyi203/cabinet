@@ -3,6 +3,7 @@ import { useState } from "react";
 import { type AgentStat, type Schedule, deleteSchedule, fetchSchedules, runSchedule, saveSchedule } from "../lib/api";
 import { AGENT_NAME, time } from "../lib/format";
 import { type Msg, MsgLine } from "./Drawer";
+import { confirmDialog } from "./Confirm";
 
 const EXAMPLES = [
 	["0 9 * * 1-5", "工作日 9:00"],
@@ -130,8 +131,9 @@ export function Schedules({ agents, onOpen }: { agents: AgentStat[]; onOpen: (ta
 						<button
 							className="btn"
 							disabled={busy}
-							onClick={() => {
-								if (confirm(`删除定时任务「${s.name}」？`)) void act(() => deleteSchedule(s.id), "已删除");
+							onClick={async () => {
+								if (await confirmDialog({ title: `删除定时任务「${s.name}」？`, confirmText: "删除", danger: true }))
+									void act(() => deleteSchedule(s.id), "已删除");
 							}}
 						>
 							删除

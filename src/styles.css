@@ -1051,3 +1051,48 @@ pre.diff {
 	background: var(--warn-soft);
 	color: var(--warn);
 }
+
+dialog.confirm {
+	border: none;
+	padding: 0;
+	border-radius: 12px;
+	background: var(--panel);
+	color: var(--text);
+	width: min(420px, calc(100vw - 32px));
+	box-shadow: 0 12px 40px rgb(0 0 0 / 0.25);
+}
+dialog.confirm::backdrop {
+	background: rgb(0 0 0 / 0.35);
+}
+.confirm-box {
+	padding: 20px;
+}
+.confirm-title {
+	font-weight: 600;
+	font-size: 15px;
+	line-height: 1.5;
+}
+.confirm-body {
+	margin: 12px 0 0;
+	padding: 10px 12px;
+	max-height: 40vh;
+	overflow: auto;
+	background: var(--soft);
+	border-radius: 8px;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font: inherit;
+	font-size: 13px;
+	color: var(--text);
+}
+.confirm-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 18px;
+}
+.confirm-actions .btn.danger {
+	background: var(--bad);
+	border-color: var(--bad);
+	color: #fff;
+}

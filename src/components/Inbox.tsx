@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { type InboxItem, post } from "../lib/api";
 import { AGENT_NAME, ago } from "../lib/format";
+import { confirmDialog } from "./Confirm";
 
 const LEVELS: Array<{ level: InboxItem["level"]; name: string; hint: string }> = [
 	{ level: "now", name: "现在", hint: "有人在等：写操作审批、草稿待确认、起草失败、告警结论、Watchdog 发现的问题" },
@@ -18,13 +19,13 @@ const KIND: Record<InboxItem["kind"], string> = {
 };
 
 /** 写操作审批：在这里直接执行或拒绝（飞书卡片上也能点，两边同步） */
-function ApprovalActions({ id }: { id: string }) {
+function ApprovalActions({ id, what }: { id: string; what: string }) {
 	const qc = useQueryClient();
 	const [note, setNote] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [msg, setMsg] = useState("");
 	async function act(action: "approve" | "reject") {
-		if (action === "approve" && !confirm("执行这个写操作？")) return;
+		if (action === "approve" && !(await confirmDialog({ title: "执行这个写操作？", body: what, confirmText: "执行" }))) return;
 		setBusy(true);
 		try {
 			await post(`/api/approvals/${id}/${action}`, { note });
@@ -78,7 +79,7 @@ export function Inbox({ items, now, onOpen }: { items: InboxItem[]; now: number;
 								{it.kind === "approval" ? (
 									<>
 										<pre className="approval-what">{it.title.replace(/```\n?/g, "").slice(0, 1500)}</pre>
-										<ApprovalActions id={it.ref} />
+										<ApprovalActions id={it.ref} what={it.title.replace(/```\n?/g, "").slice(0, 600)} />
 									</>
 								) : (
 									<blockquote>{it.title.slice(0, 300)}</blockquote>

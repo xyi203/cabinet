@@ -5,6 +5,7 @@ import { GLYPH, STATUS, describeDraft, money, time, where } from "../lib/format"
 import { DispatchForm } from "./DevDrawer";
 import { Drawer, type Msg, MsgLine } from "./Drawer";
 import { StepLog } from "./StepLog";
+import { confirmDialog } from "./Confirm";
 
 export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: Task; onClose: () => void }) {
 	const qc = useQueryClient();
@@ -55,11 +56,11 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 					<button
 						className="btn primary"
 						disabled={busy}
-						onClick={() =>
-							text.trim()
-								? confirm(`以你的身份发给 ${d.senderName}？\n\n${text.trim().slice(0, 300)}`) && act("send", text.trim())
-								: setMsg({ text: "回复内容是空的", bad: true })
-						}
+						onClick={async () => {
+							if (!text.trim()) return setMsg({ text: "回复内容是空的", bad: true });
+							if (await confirmDialog({ title: `以你的身份发给 ${d.senderName}？`, body: text.trim().slice(0, 300), confirmText: "发送" }))
+								void act("send", text.trim());
+						}}
 					>
 						以我的身份发送
 					</button>
@@ -129,7 +130,10 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 								title={e}
 								disabled={busy}
 								style={d.kind === "reaction" && d.draft === e ? { borderColor: "var(--accent)" } : undefined}
-								onClick={() => confirm(`以你的身份给 ${d.senderName} 的消息加表情 ${GLYPH[e] ?? e}？`) && act("send", e, "reaction")}
+								onClick={async () => {
+									if (await confirmDialog({ title: `以你的身份给 ${d.senderName} 的消息加表情 ${GLYPH[e] ?? e}？`, confirmText: "加表情" }))
+										void act("send", e, "reaction");
+								}}
 							>
 								{`${GLYPH[e] ?? ""} ${e}`.trim()}
 							</button>
@@ -143,7 +147,10 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 									key={f}
 									disabled={busy}
 									style={d.kind === "sticker" && d.draft === f ? { borderColor: "var(--accent)" } : undefined}
-									onClick={() => confirm(`以你的身份给 ${d.senderName} 发表情包「${f}」？`) && act("send", f, "sticker")}
+									onClick={async () => {
+										if (await confirmDialog({ title: `以你的身份给 ${d.senderName} 发表情包「${f}」？`, confirmText: "发送" }))
+											void act("send", f, "sticker");
+									}}
 								>
 									<img src={`/api/stickers/${encodeURIComponent(f)}`} alt={f} />
 									{f.replace(/\.[^.]+$/, "")}

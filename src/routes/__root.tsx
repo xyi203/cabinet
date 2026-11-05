@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
+import { ConfirmHost } from "../components/Confirm";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -17,6 +18,7 @@ function RootComponent() {
 	return (
 		<QueryClientProvider client={client}>
 			<Outlet />
+			<ConfirmHost />
 		</QueryClientProvider>
 	);
 }

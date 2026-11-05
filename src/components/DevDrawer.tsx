@@ -15,6 +15,7 @@ import { useLiveSteps } from "../lib/live";
 import { AGENT_NAME, money, time } from "../lib/format";
 import { Drawer, type Msg, MsgLine } from "./Drawer";
 import { ModelPicker } from "./ModelPicker";
+import { confirmDialog } from "./Confirm";
 
 const STATUS: Record<string, string> = {
 	running: "运行中",
@@ -194,8 +195,24 @@ export function DevDrawer({ dev: d, onClose }: { dev: DevTask; task?: Task; onCl
 	const [busy, setBusy] = useState(false);
 	const [msg, setMsg] = useState<Msg>(null);
 	async function act(action: "message" | "stop" | "push" | "discard" | "close") {
-		if (action === "push" && !confirm(`推送 ${d.branch}${d.mrUrl ? "（MR 已存在，只推新提交）" : ` 并建 MR 到 ${d.base}`}？`)) return;
-		if (action === "discard" && !confirm(`放弃这个开发任务？会删除 worktree 和本地分支 ${d.branch}`)) return;
+		if (
+			action === "push" &&
+			!(await confirmDialog({
+				title: `推送 ${d.branch}${d.mrUrl ? "（MR 已存在，只推新提交）" : ` 并建 MR 到 ${d.base}`}？`,
+				confirmText: "推送",
+			}))
+		)
+			return;
+		if (
+			action === "discard" &&
+			!(await confirmDialog({
+				title: "放弃这个开发任务？",
+				body: `会删除 worktree 和本地分支 ${d.branch}`,
+				confirmText: "放弃",
+				danger: true,
+			}))
+		)
+			return;
 		if (action === "message" && !text.trim()) return;
 		setBusy(true);
 		try {
