@@ -51,6 +51,10 @@ function localRequest(req: IncomingMessage) {
 	return ALLOWED_HOSTS.has(req.headers.host ?? "") && (!origin || ALLOWED_ORIGINS.has(origin));
 }
 
+// 草稿 id 是私聊卡片的 message_id（om_…）；只回表情 / 不用回的安静草稿没有卡片，id 是 quiet_<原消息 id>_<时间>
+export const DRAFT_DISPATCH_RE = /^\/api\/drafts\/((?:quiet_)?om_[\w-]+)\/dispatch$/;
+export const DRAFT_ACTION_RE = /^\/api\/drafts\/((?:quiet_)?om_[\w-]+)\/(send|discard|revise|complete)$/;
+
 function tokenOk(req: IncomingMessage) {
 	const got = Buffer.from(String(req.headers["x-cabinet-token"] ?? ""));
 	const want = Buffer.from(TOKEN);
@@ -239,7 +243,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		}
 	}
 	// 开发任务：指派、继续修改、推送建 MR、放弃
-	const dispatchM = /^\/api\/drafts\/(om_[\w-]+)\/dispatch$/.exec(p);
+	const dispatchM = DRAFT_DISPATCH_RE.exec(p);
 	const devM = /^\/api\/dev\/(dev-\d+)\/(message|stop|push|discard|close)$/.exec(p);
 	if (dispatchM || devM || p === "/api/agent-tasks") {
 		try {
@@ -278,7 +282,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			return send(res, 500, { error: String((e as Error).message).slice(0, 300) });
 		}
 	}
-	const m = /^\/api\/drafts\/(om_[\w-]+)\/(send|discard|revise|complete)$/.exec(p);
+	const m = DRAFT_ACTION_RE.exec(p);
 	if (!m) return send(res, 404, { error: "not found" });
 	const [, id, action] = m;
 	const arg = String(body.text ?? "");

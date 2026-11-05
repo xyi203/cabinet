@@ -62,3 +62,14 @@ test("改版前接回的起草：旧 agent 名交给 assistant 的对应档位",
 	assert.deepEqual(s("general", "answer"), { name: "assistant", tier: "answer" });
 	assert.deepEqual(s("assistant", "deep"), { name: "assistant", tier: "deep" });
 });
+
+test("看板操作草稿的路由也认安静草稿的 id（quiet_ 开头）", async () => {
+	const { DRAFT_ACTION_RE, DRAFT_DISPATCH_RE } = await import("../server/api.ts");
+	assert.equal(
+		DRAFT_ACTION_RE.exec("/api/drafts/quiet_om_x100b618b2c9948a0cfc842c6ffd120c_mw2zbl32/send")?.[1],
+		"quiet_om_x100b618b2c9948a0cfc842c6ffd120c_mw2zbl32",
+	);
+	assert.equal(DRAFT_ACTION_RE.exec("/api/drafts/om_abc/complete")?.[2], "complete");
+	assert.ok(DRAFT_DISPATCH_RE.test("/api/drafts/quiet_om_abc_x/dispatch"));
+	assert.equal(DRAFT_ACTION_RE.exec("/api/drafts/../etc/send"), null);
+});

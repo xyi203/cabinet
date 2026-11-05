@@ -207,6 +207,9 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 					sid = open.session;
 				} else {
 					[name, info] = await route(source);
+					// 寒暄档看不到图：消息带截图时至少按 answer 档，把图交给 agent 看（否则只能回「看不到图」）
+					if (info.tier === "ack" && msgs.some((m) => imageKeys(m.content).length))
+						info = { ...info, tier: "answer", rule: `${info.rule}（带截图，升到 answer）` };
 					// 寒暄确认不需要前文，不接续也不挂订阅
 					if (sub && info.tier !== "ack") {
 						const { mrProject, mrIid } = (sub.info ?? {}) as Record<string, string>;
