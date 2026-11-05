@@ -85,6 +85,20 @@
       "when": 1793859253005,
       "tag": "0011_nebulous_prowler",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1793869770055,
+      "tag": "0012_polite_malice",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1793870050656,
+      "tag": "0013_wild_dagger",
+      "breakpoints": true
     }
   ]
 }

@@ -4,6 +4,7 @@ export const STATUS: Record<string, string> = {
 	sent: "已发出",
 	discarded: "不发",
 	replaced: "已改写",
+	merged: "已合并",
 	expired: "已亲自回复",
 	completed: "已标记完成",
 	replied: "已回复",

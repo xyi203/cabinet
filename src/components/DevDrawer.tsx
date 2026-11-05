@@ -27,14 +27,20 @@ const STATUS: Record<string, string> = {
 	done: "已完成",
 };
 
-/** 草稿抽屉里的「指派 agent 实现」：选仓库、起分支名、补充说明 */
+/**
+ * 草稿抽屉里的「转成任务」：查询交给助手，在仓库目录里只读地查，不建分支；
+ * 要改代码才交给 dev，在独立 worktree 的新分支上实现
+ */
 export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => void }) {
 	const qc = useQueryClient();
 	const state = qc.getQueryData<State>(["state"]);
-	const devConf = state?.agents.find((a) => a.name === "dev");
-	const [pick, setPick] = useState<{ model: string; thinking: string } | null>(null);
-	const model = pick?.model ?? devConf?.model ?? "";
-	const thinking = pick?.thinking ?? devConf?.thinking ?? "high";
+	const [agent, setAgent] = useState<"assistant" | "dev">("assistant");
+	const dev = agent === "dev";
+	const conf = state?.agents.find((a) => a.name === agent);
+	// 换 agent 时模型跟着换，除非已经手动改过
+	const [pick, setPick] = useState<{ agent: string; model: string; thinking: string } | null>(null);
+	const model = pick?.agent === agent ? pick.model : (conf?.model ?? "");
+	const thinking = pick?.agent === agent ? pick.thinking : (conf?.thinking ?? "high");
 	const { data: repos } = useQuery({ queryKey: ["repos"], queryFn: fetchRepos });
 	const [repo, setRepo] = useState("");
 	const [branch, setBranch] = useState("");
@@ -44,8 +50,17 @@ export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => vo
 	async function submit() {
 		setBusy(true);
 		try {
-			await post(`/api/drafts/${draft.id}/dispatch`, { repo: repo || repos?.[0], branch, instructions, model, thinking });
-			setMsg({ text: "已指派，开发任务会出现在「工作中」；改完后在任务里审核 diff、推送建 MR" });
+			await post(`/api/drafts/${draft.id}/dispatch`, {
+				agent,
+				repo: repo || (dev ? repos?.[0] : ""),
+				branch: dev ? branch : "",
+				instructions,
+				model,
+				thinking,
+			});
+			setMsg({
+				text: dev ? "已指派，开发任务会出现在「工作中」；改完后在任务里审核 diff、推送建 MR" : "已指派，查完会出现在「待你处理」，看完点完成",
+			});
 			qc.invalidateQueries({ queryKey: ["state"] });
 			setTimeout(onDone, 1500);
 		} catch (e) {
@@ -55,19 +70,29 @@ export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => vo
 	}
 	return (
 		<div className="panel dispatch">
+			<div className="label">做什么</div>
+			<select value={agent} onChange={(e) => setAgent(e.target.value as "assistant" | "dev")}>
+				<option value="assistant">查询：助手只读地查，不建分支</option>
+				<option value="dev">实现：dev 在新分支上改代码</option>
+			</select>
 			<div className="label">仓库（{"~/code"} 下，按最近修改排序）</div>
-			<select value={repo || repos?.[0] || ""} onChange={(e) => setRepo(e.target.value)}>
+			<select value={repo || (dev ? repos?.[0] : "") || ""} onChange={(e) => setRepo(e.target.value)}>
+				{!dev && <option value="">不限仓库（~/code）</option>}
 				{repos?.map((r) => (
 					<option key={r} value={r}>
 						{r}
 					</option>
 				))}
 			</select>
-			<div className="label">分支（留空由 agent 按需求起名；自己填就是 feature/ 或 fix/ 加一个单词，基于远端默认分支新建）</div>
-			<input value={branch} onChange={(e) => setBranch(e.target.value.trim())} placeholder="留空自动起名，例如 feature/commentfilter" />
+			{dev && (
+				<>
+					<div className="label">分支（留空由 agent 按需求起名；自己填就是 feature/ 或 fix/ 加一个单词，基于远端默认分支新建）</div>
+					<input value={branch} onChange={(e) => setBranch(e.target.value.trim())} placeholder="留空自动起名，例如 feature/commentfilter" />
+				</>
+			)}
 			<div className="label">模型与 effort</div>
 			<div className="row-inline">
-				<ModelPicker model={model} thinking={thinking} onChange={(m, t) => setPick({ model: m, thinking: t })} />
+				<ModelPicker model={model} thinking={thinking} onChange={(m, t) => setPick({ agent, model: m, thinking: t })} />
 			</div>
 			<div className="label">补充说明（可选，以这个为准）</div>
 			<textarea
@@ -77,8 +102,8 @@ export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => vo
 				style={{ minHeight: 80 }}
 			/>
 			<div className="actions-inline">
-				<button className="btn primary" disabled={busy || !repos?.length} onClick={submit}>
-					开始实现
+				<button className="btn primary" disabled={busy || (dev && !repos?.length)} onClick={submit}>
+					{dev ? "开始实现" : "开始查"}
 				</button>
 			</div>
 			<MsgLine msg={msg} />
@@ -248,6 +273,8 @@ export function DevDrawer({ dev: d, onClose }: { dev: DevTask; task?: Task; onCl
 		}
 	}
 	const canPush = (d.status === "review" || d.status === "pushed") && Boolean(diff?.commits);
+	// 开发任务只查清楚、没改代码，或者 MR 已经提了，也能直接完成；还有没推送的改动时只能推送或放弃
+	const canClose = d.status === "pushed" || (d.status === "review" && Boolean(diff) && !diff!.commits && !diff!.uncommitted);
 	return (
 		<Drawer
 			title={
@@ -286,7 +313,7 @@ export function DevDrawer({ dev: d, onClose }: { dev: DevTask; task?: Task; onCl
 									{d.mrUrl ? "推送新提交" : "推送并建 MR"}
 								</button>
 							)}
-							{!running && !isDev && (
+							{!running && (!isDev || canClose) && (
 								<button className="btn" disabled={busy} title="看完了，归档" onClick={() => act("close")}>
 									完成
 								</button>

@@ -19,6 +19,7 @@ import { gatherContext } from "./context.ts";
 import { describeReply, draftLabel, type Kind, resolveEmoji, resolveSticker, stickerHint } from "./format.ts";
 import { CardInputError, draftCard, parseCardAction, sendText } from "./card.ts";
 import { claim, DraftError, getDraft, isQuiet, LIVE, pushDraft, setStatus, syncCard } from "./store.ts";
+import { applyMrAction, draftMrs } from "./mr.ts";
 
 /** 发回草稿来的那个渠道（channels/）：飞书私聊和群、飞书项目评论 */
 async function sendDraft(d: Draft) {
@@ -70,7 +71,7 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 			let context = d.context;
 			if (!context && d.chatMode !== "meego") {
 				const orig = await getMessage(d.replyTo).catch(() => undefined);
-				if (orig) context = (await gatherContext(d.chatId, [orig])).related;
+				if (orig) context = (await gatherContext({ chat_id: d.chatId, chat_mode: d.chatMode }, [orig])).related;
 			}
 			const started = now();
 			const { text } = await locks.run(`draft-${d.chatId}`, () =>
@@ -125,13 +126,19 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 
 const DONE_TOAST: Record<string, string> = {
 	send: "已发出",
+	mr_approve: "已在 GitLab approve",
+	mr_note: "评审意见已发到 MR",
 	emoji: "已回表情",
 	sticker: "已发表情包",
 	discard: "已标记不发",
 	complete: "已标记完成",
 	revise: "已改写，新草稿见下一张卡片",
 };
-const BUSY_TOAST: Record<string, string> = { revise: "改写中，新草稿会另发一张卡片" };
+const BUSY_TOAST: Record<string, string> = {
+	revise: "改写中，新草稿会另发一张卡片",
+	mr_approve: "approve 中…",
+	mr_note: "发评论中…",
+};
 
 const reason = (e: Error) => (e instanceof DraftError || e instanceof LarkError ? e.message : "执行失败，详情见日志");
 
@@ -153,7 +160,10 @@ export async function onDraftCardAction(data: unknown) {
 	if (!d) return toast("error", "这张卡片不是草稿，或者草稿已经不在了");
 	let job: Promise<string>;
 	try {
-		if (ev.name === "send") job = applyDraftAction(d.id, "send", sendText(d, ev.form.text), "text");
+		if (ev.name === "mr_approve" || ev.name === "mr_note") {
+			const what = ev.name === "mr_approve" ? "approve" : "note";
+			job = applyMrAction(d.id, what).then(() => getDraft(d.id)!.status);
+		} else if (ev.name === "send") job = applyDraftAction(d.id, "send", sendText(d, ev.form.text), "text");
 		else if (ev.name === "emoji" || ev.name === "sticker") {
 			const pick = ev.form[ev.name]?.trim();
 			if (!pick) throw new CardInputError(ev.name === "emoji" ? "先选一个表情" : "先选一个表情包");
@@ -177,14 +187,15 @@ export async function onDraftCardAction(data: unknown) {
 		void outcome.then((r) => {
 			if (r.ok) return;
 			log("草稿卡片操作失败", ev.name, d.id, r.error);
-			syncCard(d.id, `「${ev.name === "revise" ? "AI 改写" : "发送"}」没有成功：${reason(r.error)}`);
+			syncCard(d.id, `「${ev.name === "revise" ? "AI 改写" : ev.name.startsWith("mr_") ? "MR 操作" : "发送"}」没有成功：${reason(r.error)}`);
 		});
-		return toast("info", BUSY_TOAST[ev.name] ?? "发送中…", draftCard(getDraft(d.id)!));
+		return toast("info", BUSY_TOAST[ev.name] ?? "发送中…", draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id)));
 	}
-	if (settled.ok) return toast("success", DONE_TOAST[ev.name] ?? "已处理", draftCard(getDraft(d.id)!));
+	const card = () => draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id));
+	if (settled.ok) return toast("success", DONE_TOAST[ev.name] ?? "已处理", card());
 	if (!(settled.error instanceof DraftError)) log("草稿卡片操作失败", ev.name, d.id, settled.error);
 	const msg = reason(settled.error);
 	// 回滚状态时排了一次不带提示的重画，可能晚于这个回调响应到达：再排一次带提示的，最后停在有原因的那张
 	syncCard(d.id, msg);
-	return toast("error", msg, draftCard(getDraft(d.id)!, msg));
+	return toast("error", msg, draftCard(getDraft(d.id)!, msg, draftMrs([d]).get(d.id)));
 }

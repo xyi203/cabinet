@@ -214,7 +214,37 @@ export const devTasks = sqliteTable("dev_tasks", {
 	notify: integer("notify", { mode: "boolean" }).notNull().default(false),
 	/** 看板「对话」页里和助手的聊天：不进任务看板和待你处理，不私聊卡片，不用点完成 */
 	chat: integer("chat", { mode: "boolean" }).notNull().default(false),
+	/** 从哪个需求任务（飞书工单）派出来的 */
+	storyId: text("story_id"),
 });
+
+/**
+ * 需求任务：一张飞书工单（需求或缺陷）在 cabinet 里的进度。阶段只以这边为准，Yi 在看板上推，不看也不改飞书项目的节点；
+ * 开发任务从这里派、发布工单由助手提（devops 发布工单关联飞书工单 ID，按这个对上）
+ */
+export const stories = sqliteTable("stories", {
+	/** 飞书工单 ID（work_item_id） */
+	id: text("id").primaryKey(),
+	projectKey: text("project_key").notNull(),
+	/** 工作项类型：story 需求、issue 缺陷，其余是自定义类型 */
+	typeKey: text("type_key").notNull(),
+	title: text("title").notNull(),
+	url: text("url").notNull().default(""),
+	/** dev 开发中 / test 测试中 / release 发布中 / done 发布完成 / dropped 不跟了 */
+	stage: text("stage").notNull().default("dev"),
+	/** 关联的发布工单（GD-*）：key、标题、状态，刷新时从 devops 取 */
+	tickets: text("tickets", { mode: "json" }).$type<StoryTicket[]>().notNull().default([]),
+	note: text("note").notNull().default(""),
+	created: real("created").notNull(),
+	updated: real("updated").notNull(),
+});
+
+export interface StoryTicket {
+	key: string;
+	title: string;
+	status: string;
+	url?: string;
+}
 
 /** 定时任务（借鉴 multica 的 Autopilots）：到点交给一个只读 agent 跑一次，结论私聊给 Yi */
 export const schedules = sqliteTable("schedules", {
@@ -234,6 +264,7 @@ export const schedules = sqliteTable("schedules", {
 });
 
 export type DevTask = typeof devTasks.$inferSelect;
+export type Story = typeof stories.$inferSelect;
 export type TriggerRow = typeof triggers.$inferSelect;
 export type RouteRow = typeof routes.$inferSelect;
 export type ResultRow = typeof results.$inferSelect;

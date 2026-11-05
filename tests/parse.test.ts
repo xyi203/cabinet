@@ -3,7 +3,7 @@ import { test } from "node:test";
 process.env.OWNER_OPEN_ID = "ou_owner";
 const { splitNote, parseDraftBody } = await import("../server/drafts/format.ts");
 const { ownerReplyCovers, ownerRepliedIn } = await import("../server/drafts/replied.ts");
-const { onlyMentions } = await import("../server/drafts/context.ts");
+const { onlyMentions, burstBefore, burstAfter } = await import("../server/drafts/context.ts");
 const { parseMeegoCard, meegoMention, plainComment } = await import("../server/meego.ts");
 const { messageText } = await import("../server/lark/bot.ts");
 const { stripMentions } = await import("../server/qa.ts");
@@ -47,6 +47,35 @@ test("只有在对方消息之后的回复才算", () => {
 	const after = msg({ message_id: "y1", message_position: 11, sender: { id: "ou_owner" } });
 	assert.ok(!ownerRepliedIn("p2p", [target, before], [target]));
 	assert.ok(ownerRepliedIn("p2p", [target, before, after], [target]));
+});
+
+test("对方连着发、Yi 还没回的几条合成一段：之前的并进来，之后还有的这一份不推", () => {
+	const min = 60_000;
+	const a = (id: string, t: number, o: any = {}) => msg({ message_id: id, create_time: t * min, ...o });
+	const yi = a("y", 1, { sender: { id: "ou_owner", name: "yi", sender_type: "user" } });
+	const [q1, q2, q3] = [a("q1", 2), a("q2", 2.5), a("q3", 3)];
+	const old = a("q0", 0.5);
+	const other = a("o", 2.7, { sender: { id: "ou_b", name: "b", sender_type: "user" } });
+	const recent = [old, yi, q1, q2, other, q3];
+	// 私聊：Yi 回复之后同一个人发的才算，别人发的、Yi 回复之前的不算
+	assert.deepEqual(
+		burstBefore("p2p", recent, [q3]).map((m: any) => m.message_id),
+		["q1", "q2"],
+	);
+	assert.ok(burstAfter("p2p", recent, [q1]));
+	assert.ok(!burstAfter("p2p", recent, [q3]));
+	// 超过 30 分钟的不合
+	const late = a("late", 40);
+	assert.deepEqual(burstBefore("p2p", [yi, q1, late], [late]), []);
+	assert.ok(!burstAfter("p2p", [yi, q1, late], [q1]));
+	// 群里只合 @Yi 的
+	const g1 = a("g1", 2, { mentions: [{ id: "ou_owner" }] });
+	const g2 = a("g2", 2.5);
+	const g3 = a("g3", 3, { mentions: [{ id: "ou_owner" }] });
+	assert.deepEqual(
+		burstBefore("group", [yi, g1, g2, g3], [g3]).map((m: any) => m.message_id),
+		["g1"],
+	);
 });
 
 const MENTION_CARD = `<card title="💬 有人在评论中提到了你">

@@ -1213,3 +1213,32 @@ dialog.confirm::backdrop {
 		height: 70vh;
 	}
 }
+
+/* 需求任务抽屉：关联的任务、发布工单 */
+.story-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-bottom: 8px;
+}
+.story-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 8px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 13px;
+}
+.story-item .t {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.story-item .m {
+	color: var(--muted);
+	white-space: nowrap;
+}

@@ -2,9 +2,10 @@
 // 人发的起草代回复，机器人 @Yi 的当告警攒批；草稿以 Yi 的身份发回原会话。
 import path from "node:path";
 import { addAlert, batching, isAlert } from "../alerts.ts";
-import { ALERT_ENABLED, BOT_OPEN_ID, DRAFT_ENABLED, DRAFT_SKIP_CHATS, OWNER_OPEN_ID, PATHS, POLL_TOP_N } from "../config.ts";
+import { ALERT_ENABLED, DRAFT_ENABLED, DRAFT_SKIP_CHATS, OWNER_OPEN_ID, PATHS, POLL_TOP_N } from "../config.ts";
 import type { Draft } from "../db/schema.ts";
 import { resolveSticker } from "../drafts/format.ts";
+import { asksYi } from "../drafts/context.ts";
 import { makeDraft } from "../drafts/make.ts";
 import { expireDrafts } from "../drafts/replied.ts";
 import { type ChatRef, DraftError, inflight } from "../drafts/store.ts";
@@ -38,13 +39,7 @@ async function poll(since: number) {
 				addAlert(chat, m, markHandled);
 				continue;
 			}
-			const mentions = new Set(m.mentions.map((x) => x.id));
-			const wanted =
-				m.sender.sender_type === "user" &&
-				m.sender.id !== OWNER_OPEN_ID &&
-				!mentions.has(BOT_OPEN_ID) && // 同时 @了机器人的交给机器人事件处理
-				(chat.chat_mode === "p2p" || mentions.has(OWNER_OPEN_ID));
-			if (wanted) {
+			if (asksYi(chat.chat_mode, m)) {
 				inflight.set(m.message_id, {
 					chatId: chat.chat_id,
 					chatMode: chat.chat_mode,

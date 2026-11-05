@@ -13,6 +13,8 @@ import { applyDraftAction } from "./drafts/actions.ts";
 import { ApprovalError, decideApproval } from "./approvals.ts";
 import { lineage, recentLineage } from "./pipeline.ts";
 import { deleteSchedule, listSchedules, runNow, saveSchedule } from "./schedules.ts";
+import { refreshTickets, setStage, storyTask, syncStories } from "./stories.ts";
+import { applyMrAction, type MrAction } from "./drafts/mr.ts";
 import { type Kind, listStickers, resolveSticker } from "./drafts/format.ts";
 import { DraftError, getDraft, LIVE } from "./drafts/store.ts";
 import { LarkError, authorizeUrl, exchangeCode, userAuthStatus } from "./lark/bot.ts";
@@ -242,6 +244,39 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			return send(res, 500, { error: String((e as Error).message).slice(0, 300) });
 		}
 	}
+	// 需求任务：从飞书同步、推阶段、刷新发布工单、派开发 / 查询 / 提发布工单
+	const storyM = /^\/api\/stories(?:\/(\d+)\/(stage|task))?(\/sync|\/tickets)?$/.exec(p);
+	if (storyM) {
+		try {
+			const [, sid, action, all] = storyM;
+			if (all === "/sync") return send(res, 200, { ok: true, added: await syncStories() });
+			if (all === "/tickets") {
+				await refreshTickets();
+				return send(res, 200, { ok: true });
+			}
+			if (action === "stage") {
+				setStage(sid, String(body.stage ?? ""));
+				return send(res, 200, { ok: true });
+			}
+			if (action === "task") {
+				const kind = String(body.kind ?? "");
+				if (kind !== "dev" && kind !== "ask" && kind !== "release") throw new DraftError(`不认识的任务类型 ${kind}`);
+				const task = await storyTask(sid, {
+					kind,
+					text: String(body.text ?? ""),
+					repo: body.repo ? String(body.repo) : undefined,
+					branch: body.branch ? String(body.branch) : undefined,
+					...modelChoice(body),
+				});
+				return send(res, 200, { ok: true, task });
+			}
+			return send(res, 404, { error: "not found" });
+		} catch (e) {
+			if (e instanceof DraftError) return send(res, 409, { error: e.message });
+			log("需求任务操作失败", p, e);
+			return send(res, 500, { error: String((e as Error).message).slice(0, 300) });
+		}
+	}
 	// 开发任务：指派、继续修改、推送建 MR、放弃
 	const dispatchM = DRAFT_DISPATCH_RE.exec(p);
 	const devM = /^\/api\/dev\/(dev-\d+)\/(message|stop|push|discard|close)$/.exec(p);
@@ -264,6 +299,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 					ok: true,
 					task: await dispatch({
 						draftId: dispatchM[1],
+						// 不传就是改代码（dev），兼容旧页面
+						agent: body.agent ? String(body.agent) : "dev",
 						repo: String(body.repo ?? ""),
 						branch: String(body.branch ?? ""),
 						instructions: String(body.instructions ?? ""),
@@ -273,7 +310,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			const [, id, action] = devM!;
 			if (action === "message") return send(res, 200, { ok: true, mode: await messageDev(id, String(body.text ?? "")) });
 			if (action === "stop") await stopDev(id);
-			if (action === "close") closeTask(id);
+			if (action === "close") await closeTask(id);
 			if (action === "push") return send(res, 200, { ok: true, url: await pushDev(id) });
 			if (action === "discard") await discardDev(id);
 			return send(res, 200, { ok: true });
@@ -281,6 +318,17 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			if (e instanceof DraftError) return send(res, 409, { error: e.message });
 			log("开发任务操作失败", p, e);
 			return send(res, 500, { error: String((e as Error).message).slice(0, 300) });
+		}
+	}
+	// MR 预审草稿：GitLab 上 approve、评审意见发成 MR 评论
+	const mrM = /^\/api\/drafts\/((?:quiet_)?om_[\w-]+)\/mr\/(approve|note)$/.exec(p);
+	if (mrM) {
+		try {
+			await applyMrAction(mrM[1], mrM[2] as MrAction);
+			return send(res, 200, { ok: true });
+		} catch (e) {
+			if (e instanceof DraftError) return send(res, 409, { error: e.message });
+			throw e;
 		}
 	}
 	const m = DRAFT_ACTION_RE.exec(p);

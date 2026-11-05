@@ -3,6 +3,7 @@
 // 对方的原话用 plain_text 展示，不当 markdown 渲染：不让别人的消息在卡片里伪造出链接或格式。
 import { COMMON_EMOJI, PORT } from "../config.ts";
 import type { Draft } from "../db/schema.ts";
+import type { DraftMr } from "./mr.ts";
 import { describeReply, listStickers, NO_REPLY_MARK } from "./format.ts";
 
 /** 飞书输入框 max_length 的上限；更长的草稿卡片里不给编辑框，原样发或 AI 改写 */
@@ -20,6 +21,7 @@ const STATE: Record<string, { text: string; template: string }> = {
 	discarded: { text: "不发", template: "grey" },
 	expired: { text: "你已亲自回复", template: "grey" },
 	replaced: { text: "已改写，见新卡片", template: "grey" },
+	merged: { text: "对方接着发了，已合到新卡片", template: "grey" },
 };
 
 const isLive = (status: string) => status === "pending" || status === "noreply";
@@ -47,10 +49,11 @@ const columns = (...cols: Array<[object, number?]>) => ({
 		elements: [el],
 	})),
 });
-/** 表单里的按钮都是提交按钮：点哪个都带上整张表单的值，按 name 区分 */
+/** 表单里的按钮都是提交按钮：点哪个都带上整张表单的值，按 value.a 区分。
+ * 按钮自己的 name 加前缀：卡片里 name 不能重复，「回表情」按钮和表情下拉框撞名（都叫 emoji）飞书直接拒发整张卡 */
 const submit = (name: string, label: string, type = "default") => ({
 	tag: "button",
-	name,
+	name: `btn_${name}`,
 	text: plain(label),
 	type,
 	form_action_type: "submit",
@@ -82,7 +85,26 @@ export function where(d: Pick<Draft, "chatMode" | "chatName" | "senderName">) {
 export const editable = (d: Pick<Draft, "kind" | "status" | "draft">) =>
 	d.kind === "text" && d.status !== "noreply" && d.draft.length <= INPUT_MAX;
 
-export function draftCard(d: Draft, notice = ""): object {
+/** MR 预审的后续动作：GitLab 上 approve、评审报告发成 MR 评论；草稿发没发都能点，做过的显示成已完成 */
+function mrActions(d: Draft, mr: DraftMr): object[] {
+	const btn = (a: "approve" | "note", label: string, doneLabel: string) =>
+		mr.done.includes(a)
+			? [text(`✓ ${doneLabel}`, "green", "notation")]
+			: [
+					{
+						tag: "button",
+						name: `btn_mr_${a}`,
+						text: plain(label),
+						type: a === "approve" ? "primary" : "default",
+						behaviors: [{ type: "callback", value: { a: `mr_${a}` } }],
+					},
+				];
+	const cols: Array<[object]> = [[btn("approve", "GitLab 通过（approve）", "已在 GitLab approve")[0]]];
+	if (d.report.trim()) cols.push([btn("note", "评审意见发到 MR", "评审意见已发到 MR")[0]]);
+	return [md(`**MR**：[${mr.project}!${mr.iid}](${mr.url})`), columns(...cols)];
+}
+
+export function draftCard(d: Draft, notice = "", mr?: DraftMr): object {
 	const state = STATE[d.status] ?? { text: d.status, template: "grey" };
 	const live = isLive(d.status);
 	const elements: object[] = [];
@@ -93,6 +115,7 @@ export function draftCard(d: Draft, notice = ""): object {
 	if (live && d.report) elements.push(panel("**评审报告**（不会发出）", [md(cut(d.report, LIMIT.report))]));
 	if (live && d.note) elements.push(text(`备注（不会发出）：${cut(d.note, LIMIT.note)}`, "grey", "notation"));
 	elements.push({ tag: "hr" });
+	if (mr) elements.push(...mrActions(d, mr));
 
 	if (!live) {
 		// 结果态：只留发出去的（或当时的）草稿，没有按钮

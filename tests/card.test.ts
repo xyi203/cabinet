@@ -50,9 +50,12 @@ test("待确认的草稿是一张表单，草稿预填在输入框里", () => {
 	assert.ok(form);
 	const input = els.find((e) => e.tag === "input" && e.name === "text");
 	assert.equal(input.default_value, "我看一下日志");
-	const buttons = els.filter((e) => e.tag === "button").map((e) => e.name);
-	assert.deepEqual(buttons.slice(0, 4), ["send", "discard", "complete", "revise"]);
-	assert.ok(buttons.every((n) => els.find((e) => e.name === n && e.tag === "button").form_action_type === "submit"));
+	const buttons = els.filter((e) => e.tag === "button");
+	assert.deepEqual(
+		buttons.slice(0, 4).map((e) => e.behaviors[0].value.a),
+		["send", "discard", "complete", "revise"],
+	);
+	assert.ok(buttons.every((e) => e.form_action_type === "submit"));
 	// 对方的原话用 plain_text，不当 markdown 渲染
 	const src = els.find((e) => e.tag === "div" && e.text.content === base.text);
 	assert.equal(src.text.tag, "plain_text");
@@ -219,4 +222,33 @@ test("卡片回调只认 Yi，按 value.k 分给任务和失败提醒", async ()
 		action: { value: { k: "dev", a: "complete", t: "dev-none" } },
 	});
 	assert.match((noTask as any).toast.content, /任务不存在/);
+});
+
+test("草稿卡片：元素 name 不重复（表情下拉框和回表情按钮撞名时飞书拒发整张卡）", () => {
+	for (const d of [base, { ...base, kind: "reaction", draft: "OK" }, { ...base, status: "noreply", draft: "" }]) {
+		const names = walk(draftCard(d as any))
+			.map((e) => e.name)
+			.filter(Boolean);
+		assert.equal(new Set(names).size, names.length, names.join(","));
+	}
+});
+
+test("MR 预审草稿卡片：有 approve / 发评论按钮，name 不重复，做过的不再出按钮；发出后也还在", () => {
+	const mr = { project: "shoplaza/x", iid: "7", url: "https://g/x/-/merge_requests/7", done: [] as Array<"approve" | "note"> };
+	const d = { ...base, report: "✅ 可以通过" };
+	const callbacks = (card: object) =>
+		walk(card)
+			.flatMap((e) => (e.behaviors ?? []).map((b: any) => b.value?.a))
+			.filter((a: string) => a?.startsWith("mr_"));
+	for (const st of ["pending", "sent"]) {
+		const card = draftCard({ ...d, status: st } as any, "", mr);
+		const names = walk(card)
+			.map((e) => e.name)
+			.filter(Boolean);
+		assert.equal(new Set(names).size, names.length, names.join(","));
+		assert.deepEqual(callbacks(card), ["mr_approve", "mr_note"]);
+	}
+	assert.deepEqual(callbacks(draftCard(d as any, "", { ...mr, done: ["approve"] })), ["mr_note"]);
+	assert.deepEqual(callbacks(draftCard({ ...d, report: "" } as any, "", mr)), ["mr_approve"]);
+	assert.deepEqual(callbacks(draftCard(d as any)), []);
 });

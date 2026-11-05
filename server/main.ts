@@ -16,6 +16,7 @@ import { importLegacyMemory } from "./memory/remember.ts";
 import { scheduleVectors } from "./memory/store.ts";
 import { log, markStopping } from "./util.ts";
 import { startSchedules, stopSchedules } from "./schedules.ts";
+import { startStories } from "./stories.ts";
 import { startWatchdog, stopWatchdog } from "./watchdog.ts";
 
 const missing = missingConfig();
@@ -46,6 +47,7 @@ resumePendingDev();
 resumePendingAlerts(markHandled);
 startWatchdog();
 startSchedules();
+startStories();
 if (DRAFT_ENABLED) void pollForever();
 
 function shutdown() {

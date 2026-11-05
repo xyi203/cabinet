@@ -80,10 +80,10 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 					<button
 						className="btn"
 						disabled={busy}
-						title="需求类消息：让 dev agent 在独立 worktree 里实现，你审核后再推送"
+						title="交给 agent：查询类只读地查，不建分支；要改代码的在独立 worktree 里实现，你审核后再推送"
 						onClick={() => setDispatching(!dispatching)}
 					>
-						指派 agent 实现
+						转成任务
 					</button>
 				</>
 			}
@@ -106,12 +106,7 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 			<div className="label">原消息</div>
 			<blockquote>{d.text}</blockquote>
 			{dispatching && <DispatchForm draft={d} onDone={onClose} />}
-			{d.report && (
-				<>
-					<div className="label">评审报告（只给你看）</div>
-					<div className="body">{d.report}</div>
-				</>
-			)}
+			<MrPanel d={d} />
 			{d.note && (
 				<>
 					<div className="label">备注（不会发出）</div>
@@ -171,6 +166,71 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 	);
 }
 
+/** MR 预审：评审报告，以及 GitLab 上 approve、评审意见发成 MR 评论（草稿发没发都能点） */
+function MrPanel({ d }: { d: Draft }) {
+	const qc = useQueryClient();
+	const [busy, setBusy] = useState(false);
+	const [msg, setMsg] = useState<Msg>(null);
+	const mr = d.mr;
+	async function act(action: "approve" | "note") {
+		const ok = await confirmDialog(
+			action === "approve"
+				? { title: `在 GitLab 上 approve ${mr!.project}!${mr!.iid}？` }
+				: { title: `把评审意见发到 ${mr!.project}!${mr!.iid}？`, body: d.report, confirmText: "发到 MR" },
+		);
+		if (!ok) return;
+		setBusy(true);
+		try {
+			await post(`/api/drafts/${d.id}/mr/${action}`);
+			setMsg({ text: action === "approve" ? "已在 GitLab approve" : "评审意见已发到 MR" });
+			qc.invalidateQueries({ queryKey: ["state"] });
+		} catch (e) {
+			setMsg({ text: (e as Error).message, bad: true });
+		} finally {
+			setBusy(false);
+		}
+	}
+	if (!d.report && !mr) return null;
+	return (
+		<>
+			{d.report && (
+				<>
+					<div className="label">评审报告（只给你看）</div>
+					<div className="body">{d.report}</div>
+				</>
+			)}
+			{mr && (
+				<>
+					<div className="label">
+						MR{" "}
+						<a href={mr.url} target="_blank" rel="noreferrer">
+							{mr.project}!{mr.iid}
+						</a>
+					</div>
+					<div className="row-inline">
+						{mr.done.includes("approve") ? (
+							<span className="pill sent">已 approve</span>
+						) : (
+							<button className="btn primary" disabled={busy} onClick={() => act("approve")}>
+								GitLab 通过（approve）
+							</button>
+						)}
+						{d.report &&
+							(mr.done.includes("note") ? (
+								<span className="pill sent">评审意见已发到 MR</span>
+							) : (
+								<button className="btn" disabled={busy} onClick={() => act("note")}>
+									评审意见发到 MR
+								</button>
+							))}
+					</div>
+					<MsgLine msg={msg} />
+				</>
+			)}
+		</>
+	);
+}
+
 export function TaskDrawer({ task: t, draft, onClose }: { task: Task; draft?: Draft; onClose: () => void }) {
 	const qc = useQueryClient();
 	const [busy, setBusy] = useState(false);
@@ -227,6 +287,7 @@ export function TaskDrawer({ task: t, draft, onClose }: { task: Task; draft?: Dr
 					<div className="body">{answer}</div>
 				</>
 			)}
+			{draft && <MrPanel d={draft} />}
 			{t.error && (
 				<>
 					<div className="label">错误</div>

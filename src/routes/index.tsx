@@ -12,9 +12,11 @@ import { type DevTask, type Draft, type InboxItem, type Task, fetchState, post }
 import { isLive, money } from "../lib/format";
 import { useLiveUpdates } from "../lib/live";
 import { ChatPage } from "../components/ChatPage";
+import { StoryBoard } from "../components/StoryBoard";
 
 const TITLES = {
 	tasks: "我的任务",
+	stories: "需求",
 	agents: "Agent",
 	todo: "待你处理",
 	drafts: "草稿",
@@ -85,6 +87,11 @@ function Dashboard() {
 				<Nav current={view} v="tasks" badge={attn} hot={attn > 0} />
 				<Nav
 					current={view}
+					v="stories"
+					badge={state?.stories?.filter((x) => x.stage !== "done" && x.stage !== "dropped").length ?? 0}
+				/>
+				<Nav
+					current={view}
 					v="agents"
 					badge={state?.devTasks.filter((t) => t.status === "running" || t.status === "review").length ?? 0}
 					hot={state?.devTasks.some((t) => t.status === "review") ?? false}
@@ -116,6 +123,7 @@ function Dashboard() {
 				</div>
 				{state && !state.auth.authorized && <AuthBanner />}
 				{state && view === "tasks" && <Board state={state} onOpen={openTask} />}
+				{state && view === "stories" && <StoryBoard state={state} onOpenDev={(id) => setOpen({ dev: id })} />}
 				{state && view === "agents" && <AgentBoard state={state} onOpen={(id) => setOpen({ dev: id })} />}
 				{state && view === "todo" && <Inbox items={inbox} now={state.now} onOpen={openInbox} />}
 				{state && view === "drafts" && <DraftList drafts={state.drafts} onOpen={openDraft} />}

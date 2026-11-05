@@ -1,7 +1,8 @@
 // 起草：分派 agent、跑一轮、把草稿私聊给 Yi；进程中断后按同一 requestId 接回
 import { changed } from "../bus.ts";
 import { PATHS } from "../config.ts";
-import { deleteKv, getKv, listKv, setKv } from "../db/index.ts";
+import { and, eq, inArray } from "drizzle-orm";
+import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import type { MeegoCard } from "../db/schema.ts";
 import { imageKeys, imagesNote, saveImage } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
@@ -38,8 +39,8 @@ import { contextBlock, gatherContext } from "./context.ts";
 import { where as whereOf } from "./card.ts";
 import { notifyFailure } from "./failure.ts";
 import { draftLabel, isAckOnly, stickerHint } from "./format.ts";
-import { yiReplied } from "./replied.ts";
-import { type ChatRef, inflight, pushDraft, type Source } from "./store.ts";
+import { staleReason } from "./replied.ts";
+import { type ChatRef, claim, inflight, LIVE, pushDraft, type Source } from "./store.ts";
 
 /**
  * attempt 区分手动重试：同一批消息默认用同一个 requestId，进程重启后重新提交会接回原来那次运行；
@@ -88,6 +89,8 @@ interface Stage {
 	tier?: string;
 	/** ack 档写出文字、升到 answer 档之后的那次运行：requestId 带这个后缀 */
 	suffix?: string;
+	/** 对方在这批之前连着发、Yi 还没回的消息：一起起草，推出去之后它们各自的旧草稿标成已合并 */
+	earlier?: Message[];
 }
 
 /** stage 实际用哪个 agent、哪一档：改版前接回的旧分派（ask、cr…）交给 assistant 的对应档位 */
@@ -163,9 +166,10 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				}
 				return;
 			}
-			if (await yiReplied(chat, msgs)) {
+			const stale = await staleReason(chat, msgs);
+			if (stale) {
 				log(
-					"Yi 已亲自回复，跳过起草",
+					`${stale}，跳过起草`,
 					chat.chat_id,
 					msgs.map((m) => m.message_id),
 				);
@@ -176,18 +180,22 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 					source: source.replyTo,
 					label,
 					question: source.text,
-					reason: "Yi 已亲自回复",
+					reason: stale,
 				});
-				decide(triggerIds, { rule: "跳过：Yi 已亲自回复", actionKind: "none" });
+				decide(triggerIds, { rule: `跳过：${stale}`, actionKind: "none" });
 				return;
 			}
 			try {
 				let ctx: string;
+				let earlier: Message[] = [];
 				if (chat.chat_mode === "meego" && source.meego) {
 					ctx = await meegoContext(source.meego);
 					source.context = ctx.slice(-2000);
 				} else {
-					const { related, recent } = await gatherContext(chat.chat_id, msgs);
+					const got = await gatherContext(chat, msgs);
+					const { related, recent } = got;
+					earlier = got.earlier;
+					if (earlier.length) source.text = [...earlier, ...msgs].map((m) => m.content).join("\n");
 					source.context = related;
 					ctx = contextBlock(recent, related, source.text);
 				}
@@ -259,13 +267,14 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				const stage: Stage = {
 					source: { ...source },
 					tier: info.tier,
-					prompt: info.tier === "ack" ? prompt : `${prompt}${await imageHint(msgs)}`,
+					prompt: info.tier === "ack" ? prompt : `${prompt}${await imageHint([...earlier, ...msgs])}`,
 					basePrompt: prompt,
 					cwd: resolveCwd(agent, info),
 					label,
 					routeId,
 					triggerIds,
 					started,
+					earlier,
 				};
 				setKv(pendingKey, { chat, msgs, attempt, stage } satisfies Pending);
 				await finish(chat, msgs, stage, requestId, pendingKey, attempt);
@@ -333,7 +342,7 @@ async function finish(chat: ChatRef, msgs: Message[], first: Stage, requestId: s
 			...stage,
 			tier: next,
 			source: { ...stage.source, agent: name, session: sid, route: info.rule, routeId },
-			prompt: `${stage.basePrompt}${await imageHint(msgs)}`,
+			prompt: `${stage.basePrompt}${await imageHint([...(stage.earlier ?? []), ...msgs])}`,
 			cwd: resolveCwd(agent, info),
 			routeId,
 			suffix: `:${next}`,
@@ -345,9 +354,11 @@ async function finish(chat: ChatRef, msgs: Message[], first: Stage, requestId: s
 	const { source, label, routeId, started } = stage;
 	const name = source.agent ?? "";
 	source.session = sessionId;
-	// 起草可能跑了好几分钟：这期间 Yi 自己回了，草稿就没用了（轮询看到 Yi 的回复时这张草稿还没推，作废不到它）
-	if (await yiReplied(chat, msgs)) {
-		log("起草期间 Yi 已亲自回复，不推草稿", chat.chat_id, requestId);
+	// 起草可能跑了好几分钟：这期间 Yi 自己回了，草稿就没用了（轮询看到 Yi 的回复时这张草稿还没推，作废不到它）；
+	// 对方又接着发了也不推，后面那条会把这几条一起起草
+	const stale = await staleReason(chat, msgs);
+	if (stale) {
+		log(`起草期间${stale}，不推草稿`, chat.chat_id, requestId);
 		record({
 			kind: "draft",
 			status: "skipped",
@@ -355,13 +366,15 @@ async function finish(chat: ChatRef, msgs: Message[], first: Stage, requestId: s
 			source: source.replyTo,
 			label,
 			question: source.text,
-			reason: "起草期间 Yi 已亲自回复",
+			reason: `起草期间${stale}`,
 		});
-		settle({ actionKind: "draft", routeId, outcome: "expired", effect: "internal", detail: "起草期间 Yi 已亲自回复" });
+		const outcome = stale.startsWith("Yi") ? "expired" : "merged";
+		settle({ actionKind: "draft", routeId, outcome, effect: "internal", detail: `起草期间${stale}` });
 		return;
 	}
 	const dm = await pushDraft(source, draft);
 	linkAction(routeId, dm, sessionId);
+	mergeEarlier(chat, stage.earlier ?? [], dm);
 	record({
 		kind: "draft",
 		status: "drafted",
@@ -376,6 +389,22 @@ async function finish(chat: ChatRef, msgs: Message[], first: Stage, requestId: s
 		question: source.text,
 		answer: draft,
 	});
+}
+
+/** 新草稿已经把前面连着发的几条一起回了：那几条还没处理的旧草稿标成已合并，免得 Yi 对着几张卡片各回一遍 */
+function mergeEarlier(chat: ChatRef, earlier: Message[], into: string) {
+	if (!earlier.length) return;
+	const ids = earlier.map((m) => m.message_id);
+	const old = db()
+		.select()
+		.from(schema.drafts)
+		.where(and(eq(schema.drafts.chatId, chat.chat_id), inArray(schema.drafts.replyTo, ids), inArray(schema.drafts.status, LIVE)))
+		.all();
+	for (const d of old) {
+		if (!claim(d.id, LIVE, "merged")) continue;
+		log("草稿合并到新草稿", d.id, "->", into);
+		settle({ actionKind: "draft", actionId: d.id, routeId: d.routeId, outcome: "merged", effect: "internal", ref: into });
+	}
 }
 
 function failed(chat: ChatRef, msgs: Message[], source: Source, label: string, started: number, routeId: number | undefined, e: unknown) {

@@ -7,6 +7,7 @@ import type { Draft, MeegoCard } from "../db/schema.ts";
 import { queuePatch, sendCardToUserAsBot, sendToUserAsBot } from "../lark/bot.ts";
 import { log, now } from "../util.ts";
 import { draftCard, where } from "./card.ts";
+import { draftMrs } from "./mr.ts";
 import { describeReply, type Kind, NO_REPLY_MARK, parseDraftBody, splitNote } from "./format.ts";
 
 export class DraftError extends Error {}
@@ -86,7 +87,7 @@ export function syncCard(id: string, notice = "") {
 	if (!getKv(cardKey(id), false)) return;
 	queuePatch(id, () => {
 		const d = getDraft(id);
-		return d && draftCard(d, notice);
+		return d && draftCard(d, notice, draftMrs([d]).get(id));
 	});
 }
 
@@ -130,9 +131,10 @@ export async function pushDraft(source: Source, draft: string, replaces?: string
 		status: noReply ? "noreply" : "pending",
 		created: now(),
 	};
-	// 表情回复的草稿不私聊打扰 Yi，只上看板（「待你处理」）；Yi 主动要求改写的结果总要私聊回给他。
+	// 表情回复的草稿（没有评审报告的）不私聊打扰 Yi，只上看板（「待你处理」）；Yi 主动要求改写的结果总要私聊回给他。
 	// 建议不回复的照样私聊：Yi 要确认一下是不是真的不用回
-	const quiet = !replaces && kind === "reaction";
+	// MR 预审即使回个表情也要私聊：评审报告和 approve / 发评论的按钮在卡片上
+	const quiet = !replaces && kind === "reaction" && !report;
 	let dmId: string;
 	let isCard = !quiet;
 	// 带时间后缀：同一条消息改写后又是表情时 id 不能撞上被替换的那条
@@ -141,7 +143,11 @@ export async function pushDraft(source: Source, draft: string, replaces?: string
 		try {
 			dmId = await sendCardToUserAsBot(
 				OWNER_OPEN_ID,
-				draftCard({ id: "", context: "", agent: null, session: null, route: null, ...row } as Draft),
+				draftCard(
+					{ id: "", context: "", agent: null, session: null, route: null, ...row } as Draft,
+					"",
+					draftMrs([{ id: "", routeId: source.routeId ?? null }]).get(""),
+				),
 			);
 		} catch (e) {
 			// 卡片被平台拒了（结构不对、超长）也不能丢草稿：退回富文本

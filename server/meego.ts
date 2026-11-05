@@ -9,7 +9,7 @@ export class MeegoError extends Error {}
 const MEEGO_URL_RE = /https:\/\/project\.feishu\.cn\/([\w-]+)\/(\w+)\/detail\/(\d+)/;
 const cache = new Map<string, any>();
 
-async function meegle(args: string[], timeout = 60): Promise<any> {
+export async function meegle(args: string[], timeout = 60): Promise<any> {
 	return JSON.parse(await exec(MEEGLE_BIN, args, { timeout }));
 }
 

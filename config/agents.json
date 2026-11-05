@@ -30,7 +30,7 @@
 			},
 			"mr": {
 				"desc": "预审 GitLab MR",
-				"model": "claude/claude-opus-5-5",
+				"model": "codex/gpt-6.1-sol",
 				"thinking": "high",
 				"cwd": "repo_of_mr",
 				"session": "mr"

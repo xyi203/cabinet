@@ -25,6 +25,8 @@ export interface Draft {
 	report: string;
 	status: string;
 	created: number;
+	/** MR 预审的草稿：对应的 MR 和已经做过的动作 */
+	mr?: { project: string; iid: string; url: string; done: Array<"approve" | "note"> };
 }
 
 export interface RecordRow {
@@ -77,6 +79,28 @@ export interface DevTask {
 	created: number;
 	updated: number;
 	chat?: boolean;
+	storyId?: string | null;
+}
+
+export interface StoryTicket {
+	key: string;
+	title: string;
+	status: string;
+	url?: string;
+}
+
+/** 需求任务：一张飞书工单（需求 / 缺陷）的进度 */
+export interface Story {
+	id: string;
+	projectKey: string;
+	typeKey: string;
+	title: string;
+	url: string;
+	stage: string;
+	tickets: StoryTicket[];
+	note: string;
+	created: number;
+	updated: number;
 }
 
 export interface DevDiff {
@@ -139,6 +163,7 @@ export interface State {
 	devTasks: DevTask[];
 	/** 对话页里和助手的聊天（底层也是 agent 任务） */
 	chats: DevTask[];
+	stories: Story[];
 	agents: AgentStat[];
 	records: RecordRow[];
 	tasks: Task[];

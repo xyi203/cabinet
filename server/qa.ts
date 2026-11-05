@@ -158,7 +158,7 @@ async function devReply(ev: BotEvent, id: string, text: string) {
 			return void (await react(ev.messageId, "OK"));
 		}
 		if (text === "完成") {
-			closeTask(id);
+			await closeTask(id);
 			return void (await react(ev.messageId, "DONE"));
 		}
 		if (text === "放弃") {

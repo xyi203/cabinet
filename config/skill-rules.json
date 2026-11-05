@@ -1,5 +1,10 @@
 {
 	"_note": "agent 能执行的命令。read 直接放行；write 要 Yi 审批（审批上线前一律拦截）；deny 和没列出的子命令一律拒绝。子命令按词匹配，多个词的要在参数里连续出现。argv0 里的 {skills} 换成 SKILLS_DIR。改完不用重启，下一次运行生效。",
+	"_mcpPreview": [
+		"mcp__devops-mcp-prod__issue_create",
+		"mcp__devops-mcp-prod__issue_update",
+		"mcp__devops-mcp-prod__issue_transit"
+	],
 	"_mcpRead": [
 		"mcp__codegraph__codegraph_search",
 		"mcp__codegraph__codegraph_context",

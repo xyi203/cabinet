@@ -138,3 +138,15 @@ test("执行出错时带上完整输出，不截在前 300 字", async () => {
 	});
 	assert.equal(await run("sh", ["-c", "echo ok"], "/tmp"), "ok");
 });
+
+test("devops 两段式工具：预览放行，真正提交才审批", async () => {
+	const { mcpPreview } = await import("../server/agent/guard.ts");
+	const name = "mcp__devops-mcp-prod__issue_create";
+	mcpPreview.add(name);
+	const g = new Guard({ roots: [], bash: [], skillsDir: "/x", mcp: ["devops-mcp-prod"] });
+	assert.equal(g.verdict(name, { confirmed: false }, "/").kind, "allow");
+	assert.equal(g.verdict(name, {}, "/").kind, "allow");
+	assert.equal(g.verdict(name, { confirmed: true }, "/").kind, "approve");
+	assert.equal(g.verdict("mcp__devops-mcp-prod__apollo_restart_service", { confirmed: false }, "/").kind, "approve");
+});
+

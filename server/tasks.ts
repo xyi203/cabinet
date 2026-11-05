@@ -8,8 +8,10 @@ import type { Approval, DevTask, Draft, RecordRow } from "./db/schema.ts";
 import { describe, pendingApprovals } from "./approvals.ts";
 import { draftLabel } from "./drafts/format.ts";
 import { inflight } from "./drafts/store.ts";
+import { draftMrs } from "./drafts/mr.ts";
 import { PI_MODEL, PI_THINKING } from "./config.ts";
 import { devTasksList } from "./dev.ts";
+import { listStories } from "./stories.ts";
 import { TASK_TIER, loadAgents, withTier } from "./agent/router.ts";
 import { recentRecords } from "./records.ts";
 import { conversationLog, running } from "./agent/driver.ts";
@@ -29,6 +31,7 @@ const DRAFT_TASK_STATUS: Record<string, string> = {
 	discarded: "cancelled",
 	expired: "cancelled",
 	replaced: "cancelled",
+	merged: "cancelled",
 };
 const STATUS_TEXT: Record<string, string> = {
 	pending: "待确认",
@@ -40,6 +43,7 @@ const STATUS_TEXT: Record<string, string> = {
 	discarded: "不发",
 	expired: "已亲自回复",
 	replaced: "已改写",
+	merged: "已合并",
 };
 
 export interface Task {
@@ -360,6 +364,12 @@ export function buildInbox(
 	return items.toSorted((a, b) => LEVEL[a.level] - LEVEL[b.level] || b.at - a.at);
 }
 
+/** MR 预审的草稿带上对应的 MR 和已经做过的动作（approve、发评论），看板上按这个出按钮 */
+function withMr(drafts: Draft[]) {
+	const mrs = draftMrs(drafts);
+	return drafts.map((d) => (mrs.has(d.id) ? { ...d, mr: mrs.get(d.id) } : d));
+}
+
 export function dashboardState() {
 	const drafts = db().select().from(schema.drafts).orderBy(desc(schema.drafts.created)).limit(300).all();
 	const records = recentRecords(1000);
@@ -386,7 +396,7 @@ export function dashboardState() {
 		},
 		running: running.size,
 		inflight: inflight.size,
-		drafts: drafts.slice(0, 200),
+		drafts: withMr(drafts.slice(0, 200)),
 		agents: agentStats(records, today),
 		devTasks: devTasksList()
 			.filter((t) => !t.chat)
@@ -398,6 +408,8 @@ export function dashboardState() {
 			.toSorted((a, b) => b.updated - a.updated)
 			.slice(0, 50),
 		records: records.slice(0, 300),
+		// 需求任务：最近动过的在前
+		stories: listStories().toSorted((a, b) => b.updated - a.updated),
 		tasks,
 		inbox: buildInbox(drafts, tasks, devTasksList(), listMemories(["contested"]), watchdogIssues(), pendingApprovals()),
 	};

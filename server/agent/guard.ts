@@ -10,6 +10,8 @@ export const mcpToolName = (server: string, tool: string) => `mcp__${server}__${
 
 /** 只读的 MCP 工具（声明了 readOnlyHint，或 skill-rules.json 的 _mcpRead 里列了）：mcp.ts 注册时填 */
 export const mcpReadOnly = new Set<string>();
+/** 两段式的 MCP 写工具（skill-rules.json 的 _mcpPreview）：confirmed 不是 true 时只出预览、不落地，放行；真正提交才审批 */
+export const mcpPreview = new Set<string>();
 
 /** 放行；要 Yi 审批（审批上线前当拒绝处理）；拒绝 */
 export type Verdict = { kind: "allow" } | { kind: "approve"; reason: string } | { kind: "deny"; reason: string };
@@ -312,8 +314,10 @@ export class Guard {
 			default:
 				// codemode 只是在沙箱里跑脚本，脚本里调的每个工具会再过一遍这里
 				if (toolName === "codemode" && this.mcp.length) return ALLOW;
-				if (this.mcp.some((prefix) => toolName.startsWith(prefix)))
-					return mcpReadOnly.has(toolName) ? ALLOW : approve(`${toolName} 没有声明只读，按写操作处理`);
+				if (this.mcp.some((prefix) => toolName.startsWith(prefix))) {
+					if (mcpReadOnly.has(toolName) || (mcpPreview.has(toolName) && input.confirmed !== true)) return ALLOW;
+					return approve(`${toolName} 没有声明只读，按写操作处理`);
+				}
 				return deny(`工具 ${toolName} 未在白名单中`);
 		}
 	}

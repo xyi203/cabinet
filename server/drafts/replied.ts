@@ -10,6 +10,7 @@ import { meegoYiReplied } from "../meego.ts";
 import { settle } from "../pipeline.ts";
 import { enqueueMemory } from "../memory/extract.ts";
 import { log } from "../util.ts";
+import { burstAfter } from "./context.ts";
 import { type ChatRef, claim, LIVE } from "./store.ts";
 
 /** Yi 的这条消息算不算回复了 msgs。私聊任何一句都算；群里要有明确指向 */
@@ -23,18 +24,23 @@ export function ownerReplyCovers(chatMode: string, m: Message, msgs: Array<Pick<
 	);
 }
 
-/** 起草前再看一眼：Yi 已经亲自回复了就不起草 */
-export async function yiReplied(chat: ChatRef, msgs: Message[]): Promise<boolean> {
+/**
+ * 起草前、推草稿前再看一眼，这份草稿还要不要：Yi 已经亲自回复了；或者对方又接着发了，
+ * 后面那条起草时会把这几条一起带上（burstBefore），这份就多余了。返回不要的原因，还要就是 null
+ */
+export async function staleReason(chat: ChatRef, msgs: Message[]): Promise<string | null> {
 	const last = msgs.at(-1)!;
-	if (chat.chat_mode === "meego") return meegoYiReplied(last.meego as MeegoCard);
+	if (chat.chat_mode === "meego") return (await meegoYiReplied(last.meego as MeegoCard)) ? "Yi 已亲自回复" : null;
 	let recent: Message[];
 	try {
 		recent = await listMessages({ chatId: chat.chat_id }, { order: "desc", pageSize: 30 });
 	} catch (e) {
 		log("检查是否已回复失败", chat.chat_id, e);
-		return false;
+		return null;
 	}
-	return ownerRepliedIn(chat.chat_mode, recent, msgs);
+	if (ownerRepliedIn(chat.chat_mode, recent, msgs)) return "Yi 已亲自回复";
+	if (burstAfter(chat.chat_mode, recent, msgs)) return "对方又接着发了，合到后面那条一起起草";
+	return null;
 }
 
 export function ownerRepliedIn(chatMode: string, recent: Message[], msgs: Message[]): boolean {

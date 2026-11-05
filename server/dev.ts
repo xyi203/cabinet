@@ -98,6 +98,8 @@ export interface DispatchInput {
 	thinking?: string;
 	/** 看板「对话」页里和助手的聊天：不进任务看板、不私聊卡片 */
 	chat?: boolean;
+	/** 从需求任务（飞书工单）派出来的 */
+	storyId?: string;
 	/** 不是看板派的活（比如一批告警）：挂在这些 trigger 上，按 rule 记分派 */
 	triggers?: string[];
 	rule?: string;
@@ -201,6 +203,7 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 			routeId: routeTask(id, agentName, request, input),
 			notify: Boolean(input.notify),
 			chat: Boolean(input.chat),
+			storyId: input.storyId ?? null,
 		};
 		db().insert(schema.devTasks).values(task).run();
 		changed();
@@ -233,7 +236,7 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 		agent: "dev",
 		...choice,
 		draftId: d?.id ?? null,
-		title: request.slice(0, 200),
+		title: (input.title ?? request).slice(0, 200),
 		request,
 		context: d?.context ?? "",
 		instructions: input.instructions?.trim() ?? "",
@@ -253,6 +256,7 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 		routeId: routeTask(id, "dev", request, input),
 		notify: Boolean(input.notify),
 		chat: false,
+		storyId: input.storyId ?? null,
 	};
 	db().insert(schema.devTasks).values(task).run();
 	changed();
@@ -539,11 +543,22 @@ export async function discardDev(id: string) {
 
 export const devTasksList = () => db().select().from(schema.devTasks).all();
 
-/** 只读 agent 的任务看完了：归档 */
-export function closeTask(id: string) {
+/**
+ * 任务看完了：归档。开发任务也常常只是查清楚、不用改代码，或者 MR 已经提了：
+ * 没有没推送的改动就收掉 worktree（没推送过的连本地分支一起删）；还有改动就让 Yi 先推送或放弃，免得丢
+ */
+export async function closeTask(id: string) {
 	const t = getDevTask(id);
 	if (!t) throw new DraftError("任务不存在");
-	if (t.status === "running") throw new DraftError("任务正在运行");
+	if (t.status === "running" || t.status === "pushing") throw new DraftError("任务正在运行");
+	if (isDev(t) && existsSync(t.worktree)) {
+		if (t.status !== "pushed") {
+			const { commits, uncommitted } = await devDiff(id);
+			if (commits || uncommitted) throw new DraftError("还有没推送的改动：先推送建 MR，或者放弃");
+		}
+		await git(t.repo, ["worktree", "remove", "--force", t.worktree]);
+		if (t.status !== "pushed") await git(t.repo, ["branch", "-D", t.branch]).catch(() => {});
+	}
 	update(id, { status: "done" });
 	settle({ actionKind: "dev", actionId: id, routeId: t.routeId, outcome: "done", effect: "internal" });
 }
