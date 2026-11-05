@@ -5,6 +5,9 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
+/** MCP 工具名：只能是 [A-Za-z0-9_-]，最长 64（部分模型接口的上限）。注册（mcp.ts）和放行（这里）用同一个规则 */
+export const mcpToolName = (server: string, tool: string) => `mcp__${server}__${tool}`.replace(/[^\w-]/g, "_").slice(0, 64);
+
 export interface GuardPolicy {
 	/** 允许读的目录（不存在的会被丢弃） */
 	roots: string[];
@@ -17,6 +20,8 @@ export interface GuardPolicy {
 	writeRoots?: string[];
 	/** 允许执行的构建/测试命令前缀，例如 "go test"；只能在 writeRoots 里执行 */
 	commands?: string[];
+	/** 能用的 MCP server：只放行 mcp__<server>__ 开头的工具 */
+	mcp?: string[];
 }
 
 // 即使在允许的目录里，这些也不读：凭证、密钥、本地配置
@@ -75,7 +80,8 @@ function scriptRules(skillsDir: string): Record<string, ScriptRule> {
 			deny: ["config"],
 		},
 		// analyze 读 Grafana 的状态历史算真实持续时长；aggregate 要读本地导出文件，告警分析用不上
-		oncall: { argv0: [path.join(skillsDir, "oncall/scripts/oncall")], allow: ["analyze"], deny: ["aggregate"] },
+		// pd 只发 GET（读 incident 和 alert body），没有 ack / resolve / snooze
+		oncall: { argv0: [path.join(skillsDir, "oncall/scripts/oncall")], allow: ["analyze", "pd"], deny: ["aggregate"] },
 	};
 }
 
@@ -129,6 +135,8 @@ export class Guard {
 	readonly writeRoots: string[];
 	readonly commands: string[][];
 	readonly lookup: boolean;
+	/** 放行的 MCP 工具名前缀 */
+	readonly mcp: string[];
 
 	constructor(policy: GuardPolicy) {
 		// 根目录不存在时直接丢弃，不能让守卫构造失败
@@ -138,6 +146,7 @@ export class Guard {
 		this.enabled = new Set(policy.bash);
 		this.scripts = scriptRules(policy.skillsDir);
 		this.lookup = Boolean(policy.lookup);
+		this.mcp = (policy.mcp ?? []).map((s) => mcpToolName(s, ""));
 	}
 
 	resolveInside(cwd: string, p: string | undefined, roots = this.roots): string | undefined {
@@ -279,6 +288,9 @@ export class Guard {
 				input.command = this.normalizeScriptPath(String(input.command ?? ""));
 				return this.checkBash(String(input.command), cwd);
 			default:
+				// codemode 只是在沙箱里跑脚本，脚本里调的每个工具会再过一遍这里
+				if (toolName === "codemode" && this.mcp.length) return undefined;
+				if (this.mcp.some((prefix) => toolName.startsWith(prefix))) return undefined;
 				return `工具 ${toolName} 未在白名单中`;
 		}
 	}

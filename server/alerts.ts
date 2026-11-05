@@ -3,7 +3,17 @@
 // - 一批就是一个只读 agent 任务（dev.ts 的 dispatch）：看板上能看到，每轮私聊 Yi，引用通知可以追问，「完成」归档
 // - 同一个群 ALERT_FOLLOW 秒内又来一批、上一批的任务还没归档：并进上一批的会话（运行中插话，空闲开新一轮）
 // - 攒着的批存在 kv 的 pending:alert:*，重启后接着攒；收口时才把消息记成已处理
-import { ALERT_AGENT, ALERT_FOLLOW, ALERT_MAX_WAIT, ALERT_QUIET, ALERT_SENDERS, BOT_OPEN_ID, OWNER_NAME, OWNER_OPEN_ID } from "./config.ts";
+import {
+	ALERT_AGENT,
+	ALERT_CHATS,
+	ALERT_FOLLOW,
+	ALERT_MAX_WAIT,
+	ALERT_QUIET,
+	ALERT_SENDERS,
+	BOT_OPEN_ID,
+	OWNER_NAME,
+	OWNER_OPEN_ID,
+} from "./config.ts";
 import { deleteKv, getKv, listKv, setKv } from "./db/index.ts";
 import { dispatch, getDevTask, messageDev } from "./dev.ts";
 import type { ChatRef } from "./drafts/store.ts";
@@ -16,10 +26,15 @@ import { log, now } from "./util.ts";
 const PER_ALERT = 1500;
 const PER_BATCH = 20_000;
 
-/** 机器人发的、@了 Yi 的群消息就是告警（卡片里的 @ 渲染成 @名字，mentions 里也有） */
-export function isAlert(chat: Pick<ChatRef, "chat_mode">, m: Message): boolean {
+/** PagerDuty 卡片的状态更新：确认、解决，不用再分析 */
+const STATUS_UPDATE = /^<card title="\[(Ack|Res)\]/;
+
+/** 机器人发的、@了 Yi 的群消息就是告警（卡片里的 @ 渲染成 @名字，mentions 里也有）；PagerDuty 卡片里 @ 的是「指派」 */
+export function isAlert(chat: Pick<ChatRef, "chat_mode"> & Partial<Pick<ChatRef, "chat_id">>, m: Message): boolean {
 	if (chat.chat_mode === "p2p" || m.sender.sender_type === "user" || m.sender.id === BOT_OPEN_ID) return false;
+	if (ALERT_CHATS.size && !ALERT_CHATS.has(chat.chat_id ?? "")) return false;
 	if (ALERT_SENDERS.size && !ALERT_SENDERS.has(m.sender.id)) return false;
+	if (STATUS_UPDATE.test(m.content)) return false;
 	return m.mentions.some((x) => x.id === OWNER_OPEN_ID) || m.content.includes(`@${OWNER_NAME}`);
 }
 

@@ -44,9 +44,17 @@ function TaskCard({ t, now, onOpen }: { t: Task; now: number; onOpen: (t: Task) 
 			<div className="head">
 				<span>
 					<span className={`tag ${t.type}`}>
-						{t.type === "dev" ? "开发" : t.chatMode === "meego" ? "飞书项目" : t.type === "draft" ? "草稿" : "问答"}
+						{t.type === "dev"
+							? t.agent && t.agent !== "dev"
+								? "Agent"
+								: "开发"
+							: t.chatMode === "meego"
+								? "飞书项目"
+								: t.type === "draft"
+									? "草稿"
+									: "问答"}
 					</span>
-					{t.agent && t.type !== "dev" && (
+					{t.agent && t.agent !== "dev" && (
 						<>
 							{" "}
 							<span className="tag agent" title={t.route ?? ""}>

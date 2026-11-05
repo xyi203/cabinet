@@ -10,6 +10,8 @@ import {
 	ConversationIdle,
 	createRegistry,
 	defineExtension,
+	type Extension,
+	type ToolRegistration,
 	GenerationTask,
 	Harness,
 	hook,
@@ -19,6 +21,8 @@ import {
 	UsageDoc,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { CODEMODE_TOOL_NAME, createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
+import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool, type ImageProcessor } from "@earendil-works/pi-durable/tools";
@@ -40,10 +44,11 @@ import { type RecallScope, recallBlock } from "../memory/recall.ts";
 import { deleteKv, getKv, listKv, setKv } from "../db/index.ts";
 import { openTursoDurable } from "../db/turso.ts";
 import type { Usage } from "../db/schema.ts";
-import { Guard } from "./guard.ts";
+import { Guard, mcpToolName } from "./guard.ts";
+import { closeMcp, mcpNamespaces, mcpTools } from "./mcp.ts";
 import { QUOTA_RE, log, now } from "../util.ts";
 import { models, resolveModel, textOf } from "./models.ts";
-import type { AgentConfig } from "./router.ts";
+import { type AgentConfig, loadAgents } from "./router.ts";
 import { findTool, grepTool, lookupTool, lsTool, memoryTool } from "./tools.ts";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -151,10 +156,19 @@ interface StoredPolicy {
 	writeRoots?: string[];
 	commands?: string[];
 	lookup?: boolean;
+	mcp?: string[];
 }
 
 const guardOf = (p: StoredPolicy) =>
-	new Guard({ roots: p.roots, bash: p.bash, skillsDir: SKILLS_DIR, writeRoots: p.writeRoots, commands: p.commands, lookup: p.lookup });
+	new Guard({
+		roots: p.roots,
+		bash: p.bash,
+		skillsDir: SKILLS_DIR,
+		writeRoots: p.writeRoots,
+		commands: p.commands,
+		lookup: p.lookup,
+		mcp: p.mcp,
+	});
 const policies = new Map<string, { guard: Guard; cwd: string; runId: string }>();
 
 function policyOf(convId: string) {
@@ -220,11 +234,26 @@ const Cabinet = defineExtension({
 // ---------- Harness ----------
 
 let _harness: Promise<Harness> | undefined;
+/** 已注册的 MCP 工具，按 agent 的 mcp 配置挑给各次运行 */
+let mcp: ToolRegistration[] = [];
+/** mcp 工具和 codemode 扩展：只给配了 mcp 的 agent 选上，其他会话不出现 codemode 段 */
+let mcpExtensions: Extension[] = [];
 
 export function harness(): Promise<Harness> {
 	return (_harness ??= (async () => {
 		const registry = createRegistry();
 		registry.install(Cabinet);
+		// MCP 工具要在打开前注册：resume 接回的运行会按名字找工具
+		const servers = Object.values(loadAgents().agents).flatMap((a) => a.mcp ?? []);
+		if (servers.length) {
+			mcp = await mcpTools(servers);
+			mcpExtensions = [
+				defineExtension({ name: "mcp", tools: mcp }),
+				// models: false：脚本里不给 models.*（分类、生图要另外花钱，也用不上）
+				createCodemodeExtension({ sandbox: new CodemodeSandbox(), namespaces: mcpNamespaces(servers), models: false }),
+			];
+			for (const e of mcpExtensions) registry.install(e);
+		}
 		const h = await Harness.open(
 			await SqliteStorage.open(openTursoDurable(PATHS.agentDb)),
 			{
@@ -253,6 +282,7 @@ export async function closeHarness() {
 	_harness = undefined;
 	policies.clear();
 	if (h) await (await h).close(ctx);
+	await closeMcp();
 }
 
 /** 会话 key -> durable conversation。闲置超过 SESSION_IDLE_DAYS 的换新会话：durable 的记录不可删改，
@@ -319,6 +349,15 @@ async function waitSettled(submission: { wait(c: typeof ctx): Promise<any> }, co
 	}
 }
 
+/** 选哪些扩展、开哪些工具：配了 mcp 的 agent 加上 codemode 工具和它那几个 server 的工具（连接失败没注册上的就没有） */
+function withMcp(agent: AgentConfig, base: ToolRegistration[]) {
+	const prefixes = (agent.mcp ?? []).map((s) => mcpToolName(s, ""));
+	const own = mcp.filter((t) => prefixes.some((p) => t.name.startsWith(p)));
+	if (!own.length) return { extensions: [Cabinet], tools: base };
+	const codemode = mcpExtensions.flatMap((e) => e.tools ?? []).filter((t) => t.name === CODEMODE_TOOL_NAME);
+	return { extensions: [Cabinet, ...mcpExtensions], tools: [...base, ...codemode, ...own] };
+}
+
 export async function runPi(opts: RunOptions): Promise<RunResult> {
 	const agent = opts.agent ?? {};
 	const base = (agent.tools ?? DEFAULT_TOOLS).filter((t): t is ToolName => t in TOOLS && t !== "lookup");
@@ -358,6 +397,7 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 				writeRoots: opts.writeRoots,
 				commands: opts.writeRoots ? agent.commands : undefined,
 				lookup: toolNames.includes("lookup"),
+				mcp: agent.mcp,
 			};
 			setKv(`conv-policy:${String(conv.id)}`, policy);
 			policies.set(String(conv.id), { guard: guardOf(policy), cwd: opts.cwd, runId: key });
@@ -372,7 +412,10 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 				{
 					model: resolveModel(spec),
 					thinkingLevel: (agent.thinking ?? PI_THINKING) as any,
-					tools: toolNames.map((t) => TOOLS[t]),
+					...withMcp(
+						agent,
+						toolNames.map((t) => TOOLS[t]),
+					),
 					cwd: opts.cwd,
 					instructions,
 				},
@@ -500,7 +543,19 @@ export interface TranscriptItem {
 	result?: string;
 	error?: boolean;
 	done?: number;
+	/** 看板预览：工具结果里的图片是 data URL，文字里提到的本地截图是 /api/images/<文件名> */
+	images?: string[];
 }
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const LOCAL_IMAGE_RE = new RegExp(`${escapeRe(PATHS.images)}/([\\w.-]+\\.(?:png|jpe?g|gif|webp))`, "gi");
+
+/** 文字里提到的本地截图（PATHS.images 下的文件），换成看板能取的地址 */
+export function localImageUrls(text: string): string[] {
+	return [...new Set([...text.matchAll(LOCAL_IMAGE_RE)].map((m) => `/api/images/${m[1]}`))];
+}
+
+const withImages = (item: TranscriptItem, urls: string[]) => (urls.length ? { ...item, images: urls } : item);
 
 /** 完整对话：用户消息、agent 回复、工具调用及结果，按时间顺序 */
 export async function conversationTranscript(key: string, limit = 400): Promise<TranscriptItem[]> {
@@ -514,10 +569,12 @@ export async function conversationTranscript(key: string, limit = 400): Promise<
 	for (const e of page.items.toReversed()) {
 		for (const m of (e.model ?? []) as any[]) {
 			const t = (m.timestamp ?? 0) / 1000;
-			if (m.role === "user") items.push({ kind: "user", t, text: textOf(m.content) });
-			else if (m.role === "assistant") {
+			if (m.role === "user") {
+				const text = textOf(m.content);
+				items.push(withImages({ kind: "user", t, text }, localImageUrls(text)));
+			} else if (m.role === "assistant") {
 				for (const c of m.content ?? []) {
-					if (c.type === "text" && c.text?.trim()) items.push({ kind: "assistant", t, text: c.text });
+					if (c.type === "text" && c.text?.trim()) items.push(withImages({ kind: "assistant", t, text: c.text }, localImageUrls(c.text)));
 					else if (c.type === "toolCall") {
 						const item: TranscriptItem = { kind: "tool", t, tool: c.name, args: c.arguments ?? {} };
 						calls.set(c.id, item);
@@ -526,7 +583,16 @@ export async function conversationTranscript(key: string, limit = 400): Promise<
 				}
 			} else if (m.role === "toolResult") {
 				const item = calls.get(m.toolCallId);
-				if (item) Object.assign(item, { result: textOf(m.content).slice(0, 2000), error: Boolean(m.isError), done: t });
+				// read 打开的截图、MCP 返回的图都在工具结果里（read 已压到 300KB 以内），原样给看板
+				const pics = ((m.content ?? []) as any[])
+					.filter((c) => c.type === "image" && c.data)
+					.map((c) => `data:${c.mimeType};base64,${c.data}`);
+				if (item)
+					Object.assign(
+						item,
+						{ result: textOf(m.content).slice(0, 2000), error: Boolean(m.isError), done: t },
+						pics.length ? { images: pics } : {},
+					);
 			}
 		}
 	}

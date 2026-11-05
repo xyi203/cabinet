@@ -71,6 +71,8 @@ const DEV_STATUS: Record<string, [string, string]> = {
 	review: ["in_review", "待审核"],
 	failed: ["blocked", "失败"],
 	pushed: ["done", "已提 MR"],
+	// 查询类 agent 任务看完点「完成」就是 done；漏了这一项会被兜底成审核中、一直挂在需介入里
+	done: ["done", "已完成"],
 	discarded: ["cancelled", "已放弃"],
 };
 
@@ -193,7 +195,9 @@ export function buildTasks(drafts: Draft[], records: RecordRow[]): Task[] {
 		});
 	}
 	for (const d of devTasksList()) {
-		const [status, sub] = DEV_STATUS[d.status] ?? ["in_review", d.status];
+		const [status, devSub] = DEV_STATUS[d.status] ?? ["in_review", d.status];
+		// 查询类 agent 的结果是给 Yi 看的，不是审代码
+		const sub = d.agent !== "dev" && d.status === "review" ? "待看" : devSub;
 		if ((status === "done" || status === "cancelled") && !recent(d.updated)) continue;
 		const runId = d.status === "running" ? `dev-${d.id}` : undefined;
 		tasks.push({
@@ -209,7 +213,7 @@ export function buildTasks(drafts: Draft[], records: RecordRow[]): Task[] {
 			end: d.updated,
 			usage: d.usage,
 			error: d.error,
-			agent: "dev",
+			agent: d.agent,
 			dev: d.id,
 			runId,
 		});
@@ -295,7 +299,8 @@ export function buildInbox(drafts: Draft[], tasks: Task[], devTasks: DevTask[], 
 		});
 	}
 	for (const t of tasks) {
-		if (t.status !== "blocked") continue;
+		// agent 任务失败在下面按 devTasks 列，这里只管起草和问答
+		if (t.status !== "blocked" || t.type === "dev") continue;
 		items.push({
 			kind: "failure",
 			ref: t.id,

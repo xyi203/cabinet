@@ -142,6 +142,12 @@ function imageExt(b: Buffer): string | undefined {
 	if (b.subarray(0, 4).toString() === "RIFF" && b.subarray(8, 12).toString() === "WEBP") return ".webp";
 }
 
+/** 附在提示后面的图片清单：agent 用 read 打开（read 的允许目录里有 PATHS.images） */
+export function imagesNote(saved: ReadonlyArray<readonly [string, string | undefined]>): string {
+	const lines = saved.filter(([, file]) => file).map(([key, file]) => `- [图片 ${key}]：${file}`);
+	return lines.length ? `\n\n消息里的图片已存到本地，先用 read 工具打开看清内容再回复：\n${lines.join("\n")}` : "";
+}
+
 /** 把消息里的图片存到本地，返回文件路径；已下载过的直接复用。机器人不在 Yi 的大多数会话里：先 user 后 bot */
 export async function saveImage(messageId: string, key: string, dir: string): Promise<string | undefined> {
 	mkdirSync(dir, { recursive: true });

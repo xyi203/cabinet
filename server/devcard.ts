@@ -92,7 +92,8 @@ export function devCard(t: DevTask, round: Round, latest = true, notice = ""): o
 					},
 					{
 						tag: "button",
-						name: "say",
+						// 卡片里 name 不能重复（和外面的 form 撞名飞书直接拒发）；回调看的是 value.a，不看 name
+						name: "say_submit",
 						text: plain("发给 agent"),
 						type: "primary",
 						form_action_type: "submit",

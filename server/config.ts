@@ -56,6 +56,8 @@ export const DRAFT_SKIP_CHATS = new Set(list("DRAFT_SKIP_CHATS"));
 export const ALERT_ENABLED = env("ALERT_ENABLED", "true") !== "false";
 /** 只认这些机器人（发送者 id）；为空时任何机器人 @Yi 都算 */
 export const ALERT_SENDERS = new Set(list("ALERT_SENDERS"));
+/** 只认这些群里的告警；为空时任何群都算 */
+export const ALERT_CHATS = new Set(list("ALERT_CHATS"));
 /** 一批收口：这么多秒没有新告警，或者从第一条起满 ALERT_MAX_WAIT 秒 */
 export const ALERT_QUIET = Number(env("ALERT_QUIET", "120"));
 export const ALERT_MAX_WAIT = Number(env("ALERT_MAX_WAIT", "600"));
@@ -78,6 +80,8 @@ export const MEEGO_ENABLED = env("MEEGO_ENABLED", "1") === "1";
 export const MEEGO_CHAT = env("MEEGO_CHAT");
 
 export const SKILLS_DIR = expand(env("SKILLS_DIR", "~/.pi/agent/skills"));
+// MCP server 定义，沿用 pi 的 mcp.json；agent 在 agents.json 的 mcp 里选用（server/agent/mcp.ts）
+export const MCP_CONFIG = expand(env("MCP_CONFIG", "~/.pi/agent/mcp.json"));
 
 // 长期记忆：约定每次都带，线索按关键词 + 向量召回、过门槛才带；草稿反馈和工具结果自动提取
 export const MEMORY = {

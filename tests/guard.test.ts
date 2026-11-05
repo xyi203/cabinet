@@ -134,6 +134,7 @@ test("告警 agent 的 grafana / oncall：只放查询，不放改配置", () =>
 	allow("scripts/grafana alerts", ga);
 	allow("scripts/grafana query --expr 'rate(http_requests_total[5m])' --from now-1h --to now", ga);
 	allow("scripts/oncall analyze --card-text '告警 A'", ga);
+	allow("scripts/oncall pd alerts --id Q2J7M19NFMR8DY", ga);
 	deny("scripts/grafana config set --name x --url y --cookie z", ga);
 	deny("scripts/oncall aggregate --file a.ndjson", ga);
 	// 没给这个 agent 的 skill 不放
@@ -144,4 +145,14 @@ test("lookup 只给允许的会话：群里问答的会话拦下", () => {
 	assert.ok(guard([]).check("lookup", { id: "lark:om_x" }, repo));
 	const allowed = new Guard({ roots: [repo], bash: [], skillsDir: skills, lookup: true });
 	assert.equal(allowed.check("lookup", { id: "lark:om_x" }, repo), undefined);
+});
+
+test("MCP：只放行 agent 配了的 server 的工具，codemode 只给配了 MCP 的会话", () => {
+	const withMcp = new Guard({ roots: [], bash: [], skillsDir: "/nonexistent", mcp: ["prometheus-saas-cluster"] });
+	assert.equal(withMcp.check("mcp__prometheus-saas-cluster__execute_query", {}, "/"), undefined);
+	assert.equal(withMcp.check("codemode", { code: "1" }, "/"), undefined);
+	assert.match(withMcp.check("mcp__devops-mcp-prod__issue_create", {}, "/") ?? "", /未在白名单/);
+	const plain = new Guard({ roots: [], bash: [], skillsDir: "/nonexistent" });
+	assert.match(plain.check("codemode", { code: "1" }, "/") ?? "", /未在白名单/);
+	assert.match(plain.check("mcp__prometheus-saas-cluster__execute_query", {}, "/") ?? "", /未在白名单/);
 });

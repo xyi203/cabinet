@@ -142,6 +142,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 				return send(res, 409, { error: (e as Error).message });
 			}
 		}
+		if (p.startsWith("/api/images/")) {
+			// 只给 PATHS.images 下的文件：消息截图，过期会被定期清理
+			const name = path.basename(decodeURIComponent(p.slice("/api/images/".length)));
+			const ext = path.extname(name).slice(1).toLowerCase();
+			const file = path.join(PATHS.images, name);
+			if (!["png", "jpg", "jpeg", "gif", "webp"].includes(ext) || !existsSync(file)) return send(res, 404, { error: "not found" });
+			return send(res, 200, readFileSync(file), `image/${ext === "jpg" ? "jpeg" : ext}`);
+		}
 		if (p === "/api/stickers") return send(res, 200, { stickers: listStickers(), emoji: COMMON_EMOJI });
 		if (p.startsWith("/api/stickers/")) {
 			const name = decodeURIComponent(p.slice("/api/stickers/".length));

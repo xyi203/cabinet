@@ -248,6 +248,8 @@ export interface TranscriptItem {
 	result?: string;
 	error?: boolean;
 	done?: number;
+	/** 工具结果里的图片（data URL）、文字里提到的本地截图（/api/images/…） */
+	images?: string[];
 }
 
 export const fetchDevTranscript = (id: string) => getJson<{ items: TranscriptItem[] }>(`/api/dev/${id}/transcript`).then((d) => d.items);

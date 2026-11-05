@@ -16,6 +16,8 @@ export interface AgentConfig {
 	tools?: string[];
 	skills?: string[];
 	bash?: string[];
+	/** 能用的 MCP server（MCP_CONFIG 里的名字），工具名是 mcp__<server>__<tool> */
+	mcp?: string[];
 	cwd?: "default" | "repo_of_mr";
 	session?: "chat" | "mr" | "none";
 	prompt?: string;

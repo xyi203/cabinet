@@ -183,6 +183,16 @@ test("agent 任务卡片：按状态给操作，只有最新一张带按钮", ()
 	for (const status of ["done", "discarded"]) assert.deepEqual(buttonsOf(devCard({ ...task, status }, round)), []);
 });
 
+test("agent 任务卡片：元素 name 不重复（飞书会拒发整张卡）", () => {
+	const round = { what: "第 1 轮完成", body: "改好了" };
+	for (const status of ["review", "running", "pushed"]) {
+		const names = walk(devCard({ ...task, status }, round))
+			.map((e) => e.name)
+			.filter(Boolean);
+		assert.equal(new Set(names).size, names.length, `${status}: ${names}`);
+	}
+});
+
 test("起草失败卡片：重试 / 忽略，处理过后没有按钮", () => {
 	const f = { taskId: "fail-om_x", where: "私聊 · 张三", text: "在吗", error: "pi 超时" };
 	assert.deepEqual(buttonsOf(failureCard(f)), ["retry", "ignore"]);

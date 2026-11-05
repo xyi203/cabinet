@@ -5,11 +5,11 @@ import { eq } from "drizzle-orm";
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { abortRun, forgetRun, runPi, steer } from "./agent/driver.ts";
-import { modelOptions } from "./agent/models.ts";
+import { complete, modelOptions } from "./agent/models.ts";
 import { changed } from "./bus.ts";
-import { DATA_DIR, DEFAULT_CWD, GLAB_BIN, OWNER_OPEN_ID, PORT } from "./config.ts";
+import { DATA_DIR, DEFAULT_CWD, GLAB_BIN, OWNER_OPEN_ID, PATHS, PI_MODEL, PORT } from "./config.ts";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "./db/index.ts";
-import { queuePatch, sendCardToUserAsBot, sendToUserAsBot } from "./lark/bot.ts";
+import { imageKeys, imagesNote, queuePatch, saveImage, sendCardToUserAsBot, sendToUserAsBot } from "./lark/bot.ts";
 import { devCard, devTitle, type Round } from "./devcard.ts";
 import { decide, receive, settle } from "./pipeline.ts";
 import type { DevTask } from "./db/schema.ts";
@@ -122,6 +122,42 @@ function routeTask(id: string, agent: string, request: string, input: DispatchIn
 	return decide([tid], { agent, rule: input.draftId ? `草稿转任务（${input.draftId}）` : "看板派活", actionKind: "dev", actionId: id });
 }
 
+const branchExists = (repo: string, branch: string) =>
+	git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).then(
+		() => true,
+		() => false,
+	);
+
+export const BRANCH_SYSTEM = `你给开发任务起 git 分支名。只输出分支名本身，不要解释、不要引号。
+格式：修缺陷用 fix/<一个单词>，新功能、改进、重构用 feature/<一个单词>。
+单词只用小写英文字母和数字，不加连字符，不把需求描述拼进去；挑最能代表改动对象的那个词，例如 fix/embeds、feature/commentfilter。`;
+
+/** 模型的回答里取分支名：去掉引号、反引号和句末标点，不合规返回 undefined */
+export function branchFrom(raw: string): string | undefined {
+	const picked =
+		raw
+			.trim()
+			.split(/\s+/)[0]
+			?.replace(/^[`'"]+|[`'".,，。]+$/g, "")
+			.toLowerCase() ?? "";
+	return BRANCH_RE.test(picked) ? picked : undefined;
+}
+
+/** 让分诊模型按需求起分支名；起得不合规或模型不可用就用 feature/task<时间>。重名就在单词后面加数字 */
+export async function nameBranch(
+	request: string,
+	taken: (b: string) => Promise<boolean>,
+	ask = (text: string) => complete(loadAgents().router.model ?? PI_MODEL, BRANCH_SYSTEM, text),
+): Promise<string> {
+	const raw = await ask(request.slice(0, 2000)).catch(() => "");
+	const name = branchFrom(raw) ?? `feature/task${Date.now().toString(36)}`;
+	for (let i = 1; i < 100; i++) {
+		const b = i === 1 ? name : `${name}${i}`;
+		if (!(await taken(b))) return b;
+	}
+	throw new DraftError(`分支 ${name} 及其编号都已存在，请手动填一个`);
+}
+
 export async function dispatch(input: DispatchInput): Promise<DevTask> {
 	const agentName = input.agent || "dev";
 	const agentConfig = loadAgents().agents[agentName];
@@ -169,22 +205,23 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 		return task;
 	}
 	if (!input.repo) throw new DraftError("开发任务要选仓库");
-	if (!input.branch || !BRANCH_RE.test(input.branch))
-		throw new DraftError("分支名只能是 feature/<一个单词> 或 fix/<一个单词>，单词里只用小写字母和数字");
+	// 没填（或只留了看板预填的 feature/）就由模型按需求起名；填了就按填的来
+	const given = input.branch?.trim().replace(/^(feature|fix)\/$/, "") || "";
+	if (given && !BRANCH_RE.test(given)) throw new DraftError("分支名只能是 feature/<一个单词> 或 fix/<一个单词>，单词里只用小写字母和数字");
 	if (!listRepos().includes(input.repo)) throw new DraftError(`${DEFAULT_CWD} 下没有仓库 ${input.repo}`);
 	const repo = path.join(DEFAULT_CWD, input.repo);
 	const base = await baseBranch(repo);
 	// 基于远端最新的基准分支开新分支，不动本地工作区
 	await git(repo, ["fetch", "origin", base], 120);
-	const exists = await git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${input.branch}`]).then(
-		() => true,
-		() => false,
-	);
-	if (exists) throw new DraftError(`本地已经有分支 ${input.branch}，换个名字`);
-	const worktree = path.join(WORKTREES, `${input.repo}-${input.branch.split("/")[1]}`);
+	const worktreeOf = (b: string) => path.join(WORKTREES, `${input.repo}-${b.split("/")[1]}`);
+	const taken = async (b: string) => existsSync(worktreeOf(b)) || (await branchExists(repo, b));
+	let branch = given;
+	if (!branch) branch = await nameBranch(`${request}\n${input.instructions ?? ""}`, taken);
+	else if (await branchExists(repo, branch)) throw new DraftError(`本地已经有分支 ${branch}，换个名字`);
+	const worktree = worktreeOf(branch);
 	if (existsSync(worktree)) throw new DraftError(`目录已存在：${worktree}`);
 	mkdirSync(WORKTREES, { recursive: true });
-	await git(repo, ["worktree", "add", "-b", input.branch, worktree, `origin/${base}`], 120);
+	await git(repo, ["worktree", "add", "-b", branch, worktree, `origin/${base}`], 120);
 	const t = now();
 	const id = `dev-${Date.now()}`;
 	const task: DevTask = {
@@ -198,7 +235,7 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 		instructions: input.instructions?.trim() ?? "",
 		repo,
 		base,
-		branch: input.branch,
+		branch: branch,
 		worktree,
 		status: "running",
 		summary: "",
@@ -214,7 +251,7 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 	};
 	db().insert(schema.devTasks).values(task).run();
 	changed();
-	log("开发任务", task.id, input.repo, input.branch);
+	log("开发任务", task.id, input.repo, branch);
 	void runDev(task.id);
 	return task;
 }
@@ -222,6 +259,25 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 // Yi 点了「停止」的任务：这次运行以失败返回时不算失败
 const stoppedByYi = new Set<string>();
 const sessionOf = (id: string) => `dev-${id}`;
+
+const MAX_IMAGES = 4;
+
+/** 从草稿指派的任务：前文和需求里的截图交给 agent。起草时一般已经存过；没存过（比如 chat agent 起草的）就从需求那条消息下载，
+ * 下不到（图片在前文的其他消息里）就算了，前文里还留着 [图片 key] */
+async function taskImages(task: DevTask): Promise<string> {
+	const keys = [...new Set(imageKeys(`${task.context}\n${task.request}`))].slice(-MAX_IMAGES);
+	if (!keys.length) return "";
+	const messageId = task.draftId ? getDraft(task.draftId)?.replyTo : undefined;
+	const saved = await Promise.all(
+		keys.map(async (key) => {
+			const cached = readdirSync(PATHS.images).find((f) => f.startsWith(`${key}.`));
+			if (cached) return [key, path.join(PATHS.images, cached)] as const;
+			const file = messageId ? await saveImage(messageId, key, PATHS.images).catch(() => undefined) : undefined;
+			return [key, file] as const;
+		}),
+	);
+	return imagesNote(saved);
+}
 
 /** 跑一轮 dev agent：首轮按需求实现，之后是 Yi 发来的消息（要求、问题、纠偏） */
 async function runDev(id: string, opinion?: string, from = "Yi") {
@@ -236,29 +292,31 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 	const agent = base && { ...base, ...(task.model ? { model: task.model } : {}), ...(task.thinking ? { thinking: task.thinking } : {}) };
 	const dev = isDev(task);
 	const where = task.repo ? `仓库 \`${path.basename(task.repo)}\`（当前目录）` : `\`${DEFAULT_CWD}\`（各仓库都在这下面）`;
-	const prompt = !dev
-		? opinion
-			? `${from}：${opinion}`
-			: [
-					`${base?.brief ?? "[Agent 任务] 这是 Yi 本人在看板上直接交给你的任务，直接回答 Yi，不是替他起草回复。"}工作目录：${where}。`,
-					task.context ? `相关前文：\n${task.context}` : "",
-					`任务：\n${task.request}`,
-					task.instructions ? `补充说明：\n${task.instructions}` : "",
-					`（这个任务的 ID：${task.id}${task.routeId ? `，分派 route:${task.routeId}` : ""}；需要以前的来龙去脉时用 lookup 沿 ID 查）`,
-				]
-					.filter(Boolean)
-					.join("\n\n")
-		: opinion
-			? `Yi：${opinion}\n\n（这是 Yi 的消息：是问题就直接回答；要改代码就改完提交，并在回复末尾给出更新后的总结。）`
-			: [
-					`[开发任务] 仓库 \`${path.basename(task.repo)}\`，分支 \`${task.branch}\`（基于 origin/${task.base}），工作目录就是这个仓库的 worktree。`,
-					task.context ? `需求的相关前文：\n${task.context}` : "",
-					task.draftId ? `同事提给 Yi 的需求：\n${task.request}` : `Yi 的需求：\n${task.request}`,
-					task.instructions ? `Yi 的补充说明（以这个为准）：\n${task.instructions}` : "",
-					"请按 dev agent 的规则实现并提交。",
-				]
-					.filter(Boolean)
-					.join("\n\n");
+	const images = opinion ? "" : await taskImages(task).catch(() => "");
+	const prompt =
+		(!dev
+			? opinion
+				? `${from}：${opinion}`
+				: [
+						`${base?.brief ?? "[Agent 任务] 这是 Yi 本人在看板上直接交给你的任务，直接回答 Yi，不是替他起草回复。"}工作目录：${where}。`,
+						task.context ? `相关前文：\n${task.context}` : "",
+						`任务：\n${task.request}`,
+						task.instructions ? `补充说明：\n${task.instructions}` : "",
+						`（这个任务的 ID：${task.id}${task.routeId ? `，分派 route:${task.routeId}` : ""}；需要以前的来龙去脉时用 lookup 沿 ID 查）`,
+					]
+						.filter(Boolean)
+						.join("\n\n")
+			: opinion
+				? `Yi：${opinion}\n\n（这是 Yi 的消息：是问题就直接回答；要改代码就改完提交，并在回复末尾给出更新后的总结。）`
+				: [
+						`[开发任务] 仓库 \`${path.basename(task.repo)}\`，分支 \`${task.branch}\`（基于 origin/${task.base}），工作目录就是这个仓库的 worktree。`,
+						task.context ? `需求的相关前文：\n${task.context}` : "",
+						task.draftId ? `同事提给 Yi 的需求：\n${task.request}` : `Yi 的需求：\n${task.request}`,
+						task.instructions ? `Yi 的补充说明（以这个为准）：\n${task.instructions}` : "",
+						"请按 dev agent 的规则实现并提交。",
+					]
+						.filter(Boolean)
+						.join("\n\n")) + images;
 	let interrupted = false;
 	try {
 		if (!agent) throw new Error(`agents.json 里没有 ${task.agent} agent`);

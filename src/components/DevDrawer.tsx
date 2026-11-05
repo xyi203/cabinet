@@ -36,7 +36,7 @@ export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => vo
 	const thinking = pick?.thinking ?? devConf?.thinking ?? "high";
 	const { data: repos } = useQuery({ queryKey: ["repos"], queryFn: fetchRepos });
 	const [repo, setRepo] = useState("");
-	const [branch, setBranch] = useState("feature/");
+	const [branch, setBranch] = useState("");
 	const [instructions, setInstructions] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [msg, setMsg] = useState<Msg>(null);
@@ -62,8 +62,8 @@ export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => vo
 					</option>
 				))}
 			</select>
-			<div className="label">分支（feature/ 或 fix/ 加一个单词，基于远端默认分支新建）</div>
-			<input value={branch} onChange={(e) => setBranch(e.target.value.trim())} placeholder="feature/commentfilter" />
+			<div className="label">分支（留空由 agent 按需求起名；自己填就是 feature/ 或 fix/ 加一个单词，基于远端默认分支新建）</div>
+			<input value={branch} onChange={(e) => setBranch(e.target.value.trim())} placeholder="留空自动起名，例如 feature/commentfilter" />
 			<div className="label">模型与 effort</div>
 			<div className="row-inline">
 				<ModelPicker model={model} thinking={thinking} onChange={(m, t) => setPick({ model: m, thinking: t })} />
@@ -85,6 +85,26 @@ export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => vo
 	);
 }
 
+/** 图片缩略图，点开看大图。截图过期被清理后取不到的直接不显示 */
+function Thumbs({ images }: { images?: string[] }) {
+	const [big, setBig] = useState<string | null>(null);
+	const [broken, setBroken] = useState<string[]>([]);
+	const shown = (images ?? []).filter((src) => !broken.includes(src));
+	if (!shown.length) return null;
+	return (
+		<div className="chat-images" onClick={(e) => e.stopPropagation()}>
+			{shown.map((src) => (
+				<img key={src} src={src} alt="" loading="lazy" onClick={() => setBig(src)} onError={() => setBroken((b) => [...b, src])} />
+			))}
+			{big && (
+				<div className="lightbox" onClick={() => setBig(null)}>
+					<img src={big} alt="" />
+				</div>
+			)}
+		</div>
+	);
+}
+
 function ToolLine({ item }: { item: TranscriptItem }) {
 	const [open, setOpen] = useState(false);
 	const a = item.args ?? {};
@@ -99,20 +119,28 @@ function ToolLine({ item }: { item: TranscriptItem }) {
 				{item.error ? " · 被拦截/出错" : ""}
 			</span>
 			{open && item.result && <pre>{item.result}</pre>}
+			<Thumbs images={item.images} />
 		</div>
 	);
 }
 
-function UserBubble({ text, first }: { text: string; first: boolean }) {
+function UserBubble({ text, first, images }: { text: string; first: boolean; images?: string[] }) {
 	const [open, setOpen] = useState(!first);
-	// 第一条是 cabinet 拼的任务说明，很长：默认折叠
-	if (!open)
-		return (
-			<div className="chat-user collapsed" onClick={() => setOpen(true)}>
-				任务说明（点击展开）
+	// 第一条是 cabinet 拼的任务说明，很长：默认折叠；里面的截图折叠时也露出来
+	return (
+		<>
+			{open ? (
+				<div className="chat-user">{text.replace(/^Yi：/, "").replace(/\n\n（这是 Yi 的消息：[\s\S]*$/, "")}</div>
+			) : (
+				<div className="chat-user collapsed" onClick={() => setOpen(true)}>
+					任务说明（点击展开）
+				</div>
+			)}
+			<div className="chat-user-images">
+				<Thumbs images={images} />
 			</div>
-		);
-	return <div className="chat-user">{text.replace(/^Yi：/, "").replace(/\n\n（这是 Yi 的消息：[\s\S]*$/, "")}</div>;
+		</>
+	);
 }
 
 /** 开发任务的对话：你说的话、agent 的回复、每一步工具调用；运行中实时追加 */
@@ -135,10 +163,11 @@ function Chat({ dev }: { dev: DevTask }) {
 		<div className="chat">
 			{items.map((it, i) =>
 				it.kind === "user" ? (
-					<UserBubble key={i} text={it.text ?? ""} first={i === firstUser} />
+					<UserBubble key={i} text={it.text ?? ""} first={i === firstUser} images={it.images} />
 				) : it.kind === "assistant" ? (
 					<div key={i} className="chat-agent">
 						{it.text}
+						<Thumbs images={it.images} />
 					</div>
 				) : (
 					<ToolLine key={i} item={it} />

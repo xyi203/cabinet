@@ -31,3 +31,57 @@ test("待你处理：有人在等的排最前，建议不回和有冲突的记�
 	);
 	assert.equal(items.find((i) => i.ref === "dev-1")!.why, "告警结论待看");
 });
+
+test("失败的 agent 任务只列一次（按 agent 任务列，不当成问答失败）", () => {
+	const items = buildInbox(
+		[],
+		[{ id: "dev-9", type: "dev", status: "blocked", title: "查数据", label: "general", created: 5, error: "超时" } as any],
+		[{ id: "dev-9", agent: "general", status: "failed", title: "查数据", updated: 6 } as any],
+		[],
+	);
+	assert.deepEqual(
+		items.map((i) => [i.kind, i.ref, i.why]),
+		[["dev", "dev-9", "agent 任务失败"]],
+	);
+});
+
+test("看板任务：查询类 agent 任务点了完成算已完成，不再挂在审核中；卡片按真实 agent 显示", async () => {
+	const { db, schema } = await import("../server/db/index.ts");
+	const { buildTasks } = await import("../server/tasks.ts");
+	const t = Math.floor(Date.now() / 1000);
+	const row = (id: string, agent: string, status: string) => ({
+		id,
+		agent,
+		model: null,
+		thinking: null,
+		draftId: null,
+		title: id,
+		request: id,
+		context: "",
+		instructions: "",
+		repo: "",
+		base: "",
+		branch: "",
+		worktree: "",
+		status,
+		summary: "",
+		error: null,
+		mrUrl: null,
+		session: null,
+		runs: 1,
+		usage: null,
+		created: t,
+		updated: t,
+		routeId: null,
+		notify: false,
+	});
+	db()
+		.insert(schema.devTasks)
+		.values([row("dev-a", "general", "done"), row("dev-b", "general", "review")] as any)
+		.run();
+	const tasks = buildTasks([], []);
+	const a = tasks.find((x) => x.id === "dev-a")!;
+	const b = tasks.find((x) => x.id === "dev-b")!;
+	assert.deepEqual([a.status, a.sub, a.agent], ["done", "已完成", "general"]);
+	assert.deepEqual([b.status, b.sub], ["in_review", "待看"]);
+});

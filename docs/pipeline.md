@@ -66,7 +66,7 @@ Trigger ──▶ Route ──▶ Action ──▶ Result
 
 做法（`server/alerts.ts`）：
 
-1. **识别**：群里、发送者不是真人也不是 cabinet 自己、@了 Yi（mentions 里有，或卡片渲染出 `@名字`）。`ALERT_SENDERS` 配了就只认这些机器人。p2p 的机器人会话（比如飞书项目通知）不算。
+1. **识别**：群里、发送者不是真人也不是 cabinet 自己、@了 Yi（mentions 里有，或卡片渲染出 `@名字`）。`ALERT_SENDERS` 配了就只认这些机器人，`ALERT_CHATS` 配了就只认这些群。PagerDuty 卡片里 @ 的是「指派」，`[Ack]` / `[Res]` 状态更新不算。p2p 的机器人会话（比如飞书项目通知）不算。
 2. **按群攒一批**（文章 2.1 的 batching）：第一条进来起算，`ALERT_QUIET`（120）秒没有新告警、或满 `ALERT_MAX_WAIT`（600）秒就收口。攒着的批存在 kv 的 `pending:alert:*`，重启后接着攒；收口时才把消息记进 `handled`。
 3. **一批一次分派**：每条告警记一个 `alert` trigger（thread `alert:<chat_id>`），整批一个 route，交给 `alert` agent（`config/agents.json`，只读，带 grafana / oncall / superset / archery），开一个 agent 任务。
 4. **结果私聊给 Yi**：agent 任务每轮结束都私聊（agent 配置 `notify: true`），引用通知可以追问，「完成」归档；看板「Agent」页能看到。不以 Yi 的身份发出任何东西。

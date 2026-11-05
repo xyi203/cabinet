@@ -3,7 +3,7 @@ import { changed } from "../bus.ts";
 import { PATHS } from "../config.ts";
 import { deleteKv, getKv, listKv, setKv } from "../db/index.ts";
 import type { MeegoCard } from "../db/schema.ts";
-import { imageKeys, saveImage } from "../lark/bot.ts";
+import { imageKeys, imagesNote, saveImage } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import { glabRepo, loadAgents, mrBrief, resolveCwd, route, type RouteInfo, sessionKey } from "../agent/router.ts";
 import { meegoContext } from "../meego.ts";
@@ -361,8 +361,7 @@ const MAX_IMAGES = 4;
 async function imageHint(msgs: Message[]): Promise<string> {
 	const wanted = msgs.flatMap((m) => imageKeys(m.content).map((key) => ({ id: m.message_id, key }))).slice(-MAX_IMAGES);
 	const saved = await Promise.all(wanted.map(async ({ id, key }) => [key, await saveImage(id, key, PATHS.images)] as const));
-	const lines = saved.filter(([, file]) => file).map(([key, file]) => `- [图片 ${key}]：${file}`);
-	return lines.length ? `\n\n消息里的图片已存到本地，先用 read 工具打开看清内容再回复：\n${lines.join("\n")}` : "";
+	return imagesNote(saved);
 }
 
 /** 启动时接回上次进程没起草完的消息 */

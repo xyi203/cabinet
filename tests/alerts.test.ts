@@ -5,6 +5,7 @@ process.env.OWNER_NAME = "向懿";
 process.env.BOT_OPEN_ID = "ou_cabinet";
 process.env.ALERT_QUIET = "120";
 process.env.ALERT_MAX_WAIT = "600";
+process.env.ALERT_CHATS = "oc_alert";
 const { openDb, useDb } = await import("../server/db/index.ts");
 useDb(openDb(":memory:"));
 const { addAlert, alertText, batching, isAlert, stopAlerts } = await import("../server/alerts.ts");
@@ -32,6 +33,15 @@ test("机器人在群里 @Yi 的才是告警", () => {
 	assert.equal(isAlert(group, msg("om_4", { mentions: [], content: "【P2】磁盘 80%" }) as any), false);
 	assert.equal(isAlert({ chat_mode: "p2p" }, msg("om_5") as any), false);
 	assert.equal(isAlert(group, msg("om_6", { sender: { id: "ou_cabinet", name: "", sender_type: "app" } }) as any), false);
+});
+
+test("只认 ALERT_CHATS 里的群；PagerDuty 的确认、解决卡片不算", () => {
+	assert.equal(isAlert({ ...group, chat_id: "oc_other" }, msg("om_7") as any), false);
+	const card = (tag: string) =>
+		msg(`om_${tag}`, { content: `<card title="[${tag}]order-api 5xx > 25">\n◾ **指派**: @向懿(ou_yi)\n</card>` });
+	assert.equal(isAlert(group, card("Trigger][Error][Medium") as any), true);
+	assert.equal(isAlert(group, card("Ack") as any), false);
+	assert.equal(isAlert(group, card("Res") as any), false);
 });
 
 test("按群攒一批：没有新告警 2 分钟收口，最多等 10 分钟", () => {

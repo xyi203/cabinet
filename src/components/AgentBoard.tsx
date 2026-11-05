@@ -55,7 +55,7 @@ function NewTask({ agents, onCreated }: { agents: AgentStat[]; onCreated: (t: De
 	const [agent, setAgent] = useState(choices.find((a) => a.name === "ask")?.name ?? choices[0]?.name ?? "");
 	const [request, setRequest] = useState("");
 	const [repo, setRepo] = useState("");
-	const [branch, setBranch] = useState("feature/");
+	const [branch, setBranch] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [msg, setMsg] = useState<Msg>(null);
 	const dev = agent === "dev";
@@ -104,7 +104,7 @@ function NewTask({ agents, onCreated }: { agents: AgentStat[]; onCreated: (t: De
 						</option>
 					))}
 				</select>
-				{dev && <input value={branch} onChange={(e) => setBranch(e.target.value.trim())} placeholder="feature/xxx" />}
+				{dev && <input value={branch} onChange={(e) => setBranch(e.target.value.trim())} placeholder="分支：留空由 agent 起名" />}
 			</div>
 			<div className="row">
 				<ModelPicker model={model} thinking={thinking} onChange={(m, t) => setPick({ agent, model: m, thinking: t })} />
