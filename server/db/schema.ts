@@ -212,6 +212,8 @@ export const devTasks = sqliteTable("dev_tasks", {
 	routeId: integer("route_id"),
 	/** 每轮结束都私聊 Yi（定时任务、告警这类不是 Yi 在看板上派的活） */
 	notify: integer("notify", { mode: "boolean" }).notNull().default(false),
+	/** 看板「对话」页里和助手的聊天：不进任务看板和待你处理，不私聊卡片，不用点完成 */
+	chat: integer("chat", { mode: "boolean" }).notNull().default(false),
 });
 
 /** 定时任务（借鉴 multica 的 Autopilots）：到点交给一个只读 agent 跑一次，结论私聊给 Yi */

@@ -1096,3 +1096,120 @@ dialog.confirm::backdrop {
 	border-color: var(--bad);
 	color: #fff;
 }
+
+.chatpage {
+	display: grid;
+	grid-template-columns: 240px 1fr;
+	gap: 16px;
+	height: calc(100vh - 120px);
+	min-height: 420px;
+}
+.chatpage aside {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-height: 0;
+}
+.chatpage aside .new {
+	width: 100%;
+}
+.chatpage .sessions {
+	flex: 1;
+	overflow: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.chatpage .session {
+	padding: 8px 10px;
+	border-radius: 8px;
+	cursor: pointer;
+}
+.chatpage .session:hover {
+	background: var(--soft);
+}
+.chatpage .session.on {
+	background: var(--accent-soft);
+}
+.chatpage .session .t {
+	font-size: 13px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.chatpage .session .m {
+	font-size: 12px;
+	color: var(--muted);
+	margin-top: 2px;
+}
+.chatpage .qa-records {
+	max-height: 40%;
+	overflow: auto;
+	font-size: 13px;
+}
+.chatpage .qa-records summary {
+	cursor: pointer;
+	color: var(--muted);
+	padding: 4px 0;
+}
+.chatpage main {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	background: var(--panel);
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	overflow: hidden;
+}
+.chatpage .thread {
+	flex: 1;
+	overflow: auto;
+	padding: 16px;
+}
+.chatpage .thread .empty {
+	color: var(--muted);
+	text-align: center;
+	margin-top: 20vh;
+	line-height: 1.8;
+}
+.chatpage .composer {
+	border-top: 1px solid var(--line);
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.chatpage .composer textarea {
+	width: 100%;
+	resize: none;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	padding: 8px 10px;
+	font: inherit;
+	background: var(--panel);
+	color: var(--text);
+	box-sizing: border-box;
+}
+.chatpage .composer .row {
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	gap: 8px;
+}
+.chatpage .composer .err {
+	color: var(--bad);
+	font-size: 13px;
+	margin-right: auto;
+}
+@media (max-width: 720px) {
+	.chatpage {
+		grid-template-columns: 1fr;
+		height: auto;
+	}
+	.chatpage aside .sessions {
+		max-height: 30vh;
+	}
+	.chatpage main {
+		height: 70vh;
+	}
+}

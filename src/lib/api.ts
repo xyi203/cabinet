@@ -76,6 +76,7 @@ export interface DevTask {
 	usage: Usage | null;
 	created: number;
 	updated: number;
+	chat?: boolean;
 }
 
 export interface DevDiff {
@@ -136,6 +137,8 @@ export interface State {
 	inflight: number;
 	drafts: Draft[];
 	devTasks: DevTask[];
+	/** 对话页里和助手的聊天（底层也是 agent 任务） */
+	chats: DevTask[];
 	agents: AgentStat[];
 	records: RecordRow[];
 	tasks: Task[];
@@ -261,6 +264,8 @@ export const createAgentTask = (input: {
 	branch?: string;
 	model?: string;
 	thinking?: string;
+	/** 对话页的聊天 */
+	chat?: boolean;
 }) => post<{ task: DevTask }>("/api/agent-tasks", input).then((d) => d.task);
 
 export interface ModelOption {

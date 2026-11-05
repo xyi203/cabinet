@@ -1,0 +1,1 @@
+ALTER TABLE `dev_tasks` ADD `chat` integer DEFAULT false NOT NULL;

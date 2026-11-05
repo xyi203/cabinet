@@ -96,6 +96,8 @@ export interface DispatchInput {
 	/** 不填用 agent 配置 */
 	model?: string;
 	thinking?: string;
+	/** 看板「对话」页里和助手的聊天：不进任务看板、不私聊卡片 */
+	chat?: boolean;
 	/** 不是看板派的活（比如一批告警）：挂在这些 trigger 上，按 rule 记分派 */
 	triggers?: string[];
 	rule?: string;
@@ -198,6 +200,7 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 			updated: t,
 			routeId: routeTask(id, agentName, request, input),
 			notify: Boolean(input.notify),
+			chat: Boolean(input.chat),
 		};
 		db().insert(schema.devTasks).values(task).run();
 		changed();
@@ -249,6 +252,7 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 		updated: t,
 		routeId: routeTask(id, "dev", request, input),
 		notify: Boolean(input.notify),
+		chat: false,
 	};
 	db().insert(schema.devTasks).values(task).run();
 	changed();
@@ -351,7 +355,8 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 				}
 			: usage;
 		update(id, { status: "review", summary: text, session: sessionId, usage: total });
-		if (dev || base?.notify || task.notify || now() - started > 60) void notify(id, `第 ${run} 轮完成`, text);
+		// 对话页的聊天 Yi 就在看板上看着，不私聊卡片
+		if (!task.chat && (dev || base?.notify || task.notify || now() - started > 60)) void notify(id, `第 ${run} 轮完成`, text);
 	} catch (e) {
 		if (isStopping()) interrupted = true;
 		else if (stoppedByYi.delete(id)) update(id, { status: "review", error: "已按你的要求停止" });
@@ -359,7 +364,7 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 			log("开发任务失败", id, e);
 			const error = String((e as Error).message).slice(0, 500);
 			update(id, { status: "failed", error });
-			void notify(id, `第 ${run} 轮失败`, error, true);
+			if (!task.chat) void notify(id, `第 ${run} 轮失败`, error, true);
 		}
 	} finally {
 		if (!interrupted) {

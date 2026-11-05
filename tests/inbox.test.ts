@@ -85,3 +85,45 @@ test("看板任务：查询类 agent 任务点了完成算已完成，不再挂�
 	assert.deepEqual([a.status, a.sub, a.agent], ["done", "已完成", "general"]);
 	assert.deepEqual([b.status, b.sub], ["in_review", "待看"]);
 });
+
+test("对话页的聊天不进任务看板，也不进待你处理", async () => {
+	const { db, schema } = await import("../server/db/index.ts");
+	const { buildTasks, buildInbox } = await import("../server/tasks.ts");
+	const t = Math.floor(Date.now() / 1000);
+	const base = {
+		agent: "assistant",
+		model: null,
+		thinking: null,
+		draftId: null,
+		request: "查一下",
+		context: "",
+		instructions: "",
+		repo: "",
+		base: "",
+		branch: "",
+		worktree: "",
+		summary: "",
+		error: null,
+		mrUrl: null,
+		session: null,
+		runs: 1,
+		usage: null,
+		created: t,
+		updated: t,
+		routeId: null,
+		notify: false,
+	};
+	db()
+		.insert(schema.devTasks)
+		.values({ ...base, id: "dev-chat", title: "聊天", status: "review", chat: true } as any)
+		.run();
+	assert.equal(
+		buildTasks([], []).some((x) => x.id === "dev-chat"),
+		false,
+	);
+	const chat = { ...base, id: "dev-chat", title: "聊天", status: "failed", chat: true } as any;
+	assert.equal(
+		buildInbox([], [], [chat], []).some((i) => i.ref === "dev-chat"),
+		false,
+	);
+});

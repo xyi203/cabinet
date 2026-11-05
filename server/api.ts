@@ -255,6 +255,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 						request: String(body.request ?? ""),
 						repo: body.repo ? String(body.repo) : undefined,
 						branch: body.branch ? String(body.branch) : undefined,
+						chat: Boolean(body.chat),
 						...modelChoice(body),
 					}),
 				});

@@ -11,6 +11,7 @@ import { MemoryBoard } from "../components/MemoryBoard";
 import { type DevTask, type Draft, type InboxItem, type Task, fetchState, post } from "../lib/api";
 import { isLive, money } from "../lib/format";
 import { useLiveUpdates } from "../lib/live";
+import { ChatPage } from "../components/ChatPage";
 
 const TITLES = {
 	tasks: "我的任务",
@@ -118,7 +119,9 @@ function Dashboard() {
 				{state && view === "agents" && <AgentBoard state={state} onOpen={(id) => setOpen({ dev: id })} />}
 				{state && view === "todo" && <Inbox items={inbox} now={state.now} onOpen={openInbox} />}
 				{state && view === "drafts" && <DraftList drafts={state.drafts} onOpen={openDraft} />}
-				{state && view === "qa" && <RecordList records={state.records.filter((r) => r.kind !== "draft")} />}
+				{state && view === "qa" && (
+					<ChatPage chats={state.chats ?? []} records={state.records.filter((r) => r.kind !== "draft")} now={state.now} />
+				)}
 				{state && view === "failed" && <RecordList records={state.records.filter((r) => r.status === "failed")} />}
 				{view === "memory" && <MemoryBoard />}
 			</main>

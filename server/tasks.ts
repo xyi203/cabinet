@@ -196,6 +196,8 @@ export function buildTasks(drafts: Draft[], records: RecordRow[]): Task[] {
 		});
 	}
 	for (const d of devTasksList()) {
+		// 对话页的聊天不进任务看板
+		if (d.chat) continue;
 		const [status, devSub] = DEV_STATUS[d.status] ?? ["in_review", d.status];
 		// 查询类 agent 的结果是给 Yi 看的，不是审代码
 		const sub = d.agent !== "dev" && d.status === "review" ? "待看" : devSub;
@@ -333,7 +335,7 @@ export function buildInbox(
 		});
 	}
 	for (const t of devTasks) {
-		if (t.status !== "review" && t.status !== "failed") continue;
+		if (t.chat || (t.status !== "review" && t.status !== "failed")) continue;
 		const alert = t.agent === ALERT_AGENT;
 		items.push({
 			kind: "dev",
@@ -387,8 +389,14 @@ export function dashboardState() {
 		drafts: drafts.slice(0, 200),
 		agents: agentStats(records, today),
 		devTasks: devTasksList()
+			.filter((t) => !t.chat)
 			.toSorted((a, b) => b.created - a.created)
 			.slice(0, 100),
+		// 对话页：最近说过话的在前
+		chats: devTasksList()
+			.filter((t) => t.chat && t.status !== "discarded")
+			.toSorted((a, b) => b.updated - a.updated)
+			.slice(0, 50),
 		records: records.slice(0, 300),
 		tasks,
 		inbox: buildInbox(drafts, tasks, devTasksList(), listMemories(["contested"]), watchdogIssues(), pendingApprovals()),

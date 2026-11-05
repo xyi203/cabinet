@@ -125,8 +125,18 @@ function ToolLine({ item }: { item: TranscriptItem }) {
 	);
 }
 
-function UserBubble({ text, first, images }: { text: string; first: boolean; images?: string[] }) {
+function UserBubble({ text, first, images, shown }: { text: string; first: boolean; images?: string[]; shown?: string }) {
 	const [open, setOpen] = useState(!first);
+	// 对话页：第一条显示 Yi 自己写的话，cabinet 拼的任务说明不展示
+	if (first && shown !== undefined)
+		return (
+			<>
+				<div className="chat-user">{shown}</div>
+				<div className="chat-user-images">
+					<Thumbs images={images} />
+				</div>
+			</>
+		);
 	// 第一条是 cabinet 拼的任务说明，很长：默认折叠；里面的截图折叠时也露出来
 	return (
 		<>
@@ -144,8 +154,8 @@ function UserBubble({ text, first, images }: { text: string; first: boolean; ima
 	);
 }
 
-/** 开发任务的对话：你说的话、agent 的回复、每一步工具调用；运行中实时追加 */
-function Chat({ dev }: { dev: DevTask }) {
+/** 开发任务的对话：你说的话、agent 的回复、每一步工具调用；运行中实时追加。chatMode：对话页里第一条显示原话 */
+export function Chat({ dev, chatMode = false }: { dev: DevTask; chatMode?: boolean }) {
 	const live = useLiveSteps(dev.status === "running" ? `dev-${dev.id}` : undefined);
 	const { data: items } = useQuery({
 		queryKey: ["devtranscript", dev.id, dev.updated, live?.length ?? 0, live?.filter((s) => s.done).length ?? 0],
@@ -164,7 +174,7 @@ function Chat({ dev }: { dev: DevTask }) {
 		<div className="chat">
 			{items.map((it, i) =>
 				it.kind === "user" ? (
-					<UserBubble key={i} text={it.text ?? ""} first={i === firstUser} images={it.images} />
+					<UserBubble key={i} text={it.text ?? ""} first={i === firstUser} images={it.images} shown={chatMode ? dev.request : undefined} />
 				) : it.kind === "assistant" ? (
 					<div key={i} className="chat-agent">
 						{it.text}
