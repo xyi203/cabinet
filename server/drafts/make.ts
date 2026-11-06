@@ -1,10 +1,10 @@
 // 起草：分派 agent、跑一轮、把草稿私聊给 Yi；进程中断后按同一 requestId 接回
 import { changed } from "../bus.ts";
-import { PATHS } from "../config.ts";
+import { PATHS, SESSION_MAX_TOKENS, YI_ACTIVE_DELAY, YI_ACTIVE_WINDOW } from "../config.ts";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import type { MeegoCard } from "../db/schema.ts";
-import { imageKeys, imagesNote, saveImage } from "../lark/bot.ts";
+import { imageKeys, imagesNote, listMessages, saveImage } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import {
 	ASSISTANT,
@@ -32,14 +32,14 @@ import {
 	type TriggerInput,
 } from "../pipeline.ts";
 import { record } from "../records.ts";
-import { forgetRun, hasRun, runPi } from "../agent/driver.ts";
+import { abortRun, forgetRun, hasRun, runKeyFor, runPi, running } from "../agent/driver.ts";
 import { isStopping, log, now } from "../util.ts";
 import { locks, sem } from "../agent/slots.ts";
 import { contextBlock, gatherContext } from "./context.ts";
 import { where as whereOf } from "./card.ts";
 import { notifyFailure } from "./failure.ts";
 import { draftLabel, isAckOnly, stickerHint } from "./format.ts";
-import { staleReason } from "./replied.ts";
+import { ownerActive, ownerReplyCovers, staleReason } from "./replied.ts";
 import { type ChatRef, claim, inflight, LIVE, pushDraft, type Source } from "./store.ts";
 
 /**
@@ -107,6 +107,43 @@ interface Pending {
 	stage?: Stage;
 }
 
+/**
+ * 正在起草的（按聊天，同一聊天的起草排队，最多一条）：轮询看到 Yi 亲自回了就中止这次运行，不再花钱把用不上的草稿写完。
+ * key 是当前那次运行的会话 key，交给 agent 之后才有
+ */
+interface Drafting {
+	msgs: Message[];
+	key?: string;
+	aborted?: boolean;
+}
+const drafting = new Map<string, Drafting>();
+
+/** 轮询看到 Yi 在这个聊天里发了消息：正在起草、而且这条算回复了那几条消息，就中止起草 */
+export function abortIfYiReplied(chat: ChatRef, m: Message) {
+	const d = drafting.get(chat.chat_id);
+	if (!d?.key || d.aborted || m.create_time < d.msgs.at(-1)!.create_time || !ownerReplyCovers(chat.chat_mode, m, d.msgs)) return;
+	// 订阅接续的会话可能被别的聊天共用：只停这个聊天自己的那次运行
+	if (running.get(d.key)?.chatId !== chat.chat_id) return;
+	d.aborted = true;
+	log("起草期间 Yi 已亲自回复，中止运行", chat.chat_id, d.key);
+	abortRun(d.key).catch((e) => log("中止起草失败", d.key, e));
+}
+
+/** Yi 正在这个聊天里聊：先等一会儿再起草，多半他自己就回了（之后起草前照常再查一次是否已回复） */
+async function waitIfYiActive(chat: ChatRef, msgs: Message[]) {
+	if (YI_ACTIVE_DELAY <= 0 || chat.chat_mode === "meego") return;
+	let recent: Message[];
+	try {
+		recent = await listMessages({ chatId: chat.chat_id }, { order: "desc", pageSize: 30 });
+	} catch (e) {
+		log("检查 Yi 是否在聊失败", chat.chat_id, e);
+		return;
+	}
+	if (!ownerActive(recent, msgs, YI_ACTIVE_WINDOW * 1000)) return;
+	log(`Yi 正在聊，等 ${YI_ACTIVE_DELAY}s 再起草`, chat.chat_id);
+	await new Promise((r) => setTimeout(r, YI_ACTIVE_DELAY * 1000));
+}
+
 /** 同一批消息默认同一个 requestId，进程重启后接回原来那次运行；手动重试带 attempt，换一个 */
 const requestIdOf = (msgs: Message[], attempt?: string) => `draft:${msgs.at(-1)!.message_id}${attempt ? `:${attempt}` : ""}`;
 
@@ -143,147 +180,163 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 	};
 	const label = draftLabel(source);
 	const started = now();
-	await locks.run(`draft-${chat.chat_id}`, () =>
-		sem.run(async () => {
-			const open = openRoute(triggerIds, "draft");
-			// 上次进程已经把草稿推给 Yi，只是没来得及记成已处理：不再推第二张
-			if (open?.actionId) {
-				log("已经起草过，跳过", chat.chat_id, open.actionId);
-				return;
-			}
-			const requestId = requestIdOf(msgs, attempt);
-			const saved = getKv<Pending | null>(pendingKey, null)?.stage;
-			if (saved && hasRun(`${requestId}${saved.suffix ?? ""}`)) {
-				// 重启接回：上次已经交给 agent 了，直接挂回那次运行
-				log("接回起草", chat.chat_id, requestId);
-				routeId = saved.routeId;
-				Object.assign(source, saved.source);
-				try {
-					await finish(chat, msgs, saved, requestId, pendingKey, attempt);
-				} catch (e) {
-					if (isStopping()) throw e;
-					failed(chat, msgs, source, label, started, routeId, e);
-				}
-				return;
-			}
-			const stale = await staleReason(chat, msgs);
-			if (stale) {
-				log(
-					`${stale}，跳过起草`,
-					chat.chat_id,
-					msgs.map((m) => m.message_id),
-				);
-				record({
-					kind: "draft",
-					status: "skipped",
-					chatId: chat.chat_id,
-					source: source.replyTo,
-					label,
-					question: source.text,
-					reason: stale,
-				});
-				decide(triggerIds, { rule: `跳过：${stale}`, actionKind: "none" });
-				return;
-			}
+	const requestId = requestIdOf(msgs, attempt);
+	await locks.run(`draft-${chat.chat_id}`, async () => {
+		const saved = getKv<Pending | null>(pendingKey, null)?.stage;
+		const resuming = Boolean(saved && hasRun(`${requestId}${saved.suffix ?? ""}`));
+		// 重启接回、手动重试不等：前者已经在跑，后者是 Yi 自己点的。等的时候不占并发名额
+		if (!resuming && !attempt) await waitIfYiActive(chat, msgs);
+		const self: Drafting = { msgs };
+		drafting.set(chat.chat_id, self);
+		try {
+			await sem.run(() => draftLocked(self));
+		} finally {
+			drafting.delete(chat.chat_id);
+		}
+	});
+
+	/** 拿到聊天锁和并发名额之后的起草 */
+	async function draftLocked(self: Drafting) {
+		const onError = (e: unknown) => {
+			if (isStopping()) throw e;
+			if (self.aborted) yiRepliedMidway(chat, source, label, routeId);
+			else failed(chat, msgs, source, label, started, routeId, e);
+		};
+		const open = openRoute(triggerIds, "draft");
+		// 上次进程已经把草稿推给 Yi，只是没来得及记成已处理：不再推第二张
+		if (open?.actionId) {
+			log("已经起草过，跳过", chat.chat_id, open.actionId);
+			return;
+		}
+		const saved = getKv<Pending | null>(pendingKey, null)?.stage;
+		if (saved && hasRun(`${requestId}${saved.suffix ?? ""}`)) {
+			// 重启接回：上次已经交给 agent 了，直接挂回那次运行
+			log("接回起草", chat.chat_id, requestId);
+			routeId = saved.routeId;
+			Object.assign(source, saved.source);
 			try {
-				let ctx: string;
-				let earlier: Message[] = [];
-				if (chat.chat_mode === "meego" && source.meego) {
-					ctx = await meegoContext(source.meego);
-					source.context = ctx.slice(-2000);
-				} else {
-					const got = await gatherContext(chat, msgs);
-					const { related, recent } = got;
-					earlier = got.earlier;
-					if (earlier.length) source.text = [...earlier, ...msgs].map((m) => m.content).join("\n");
-					source.context = related;
-					ctx = contextBlock(recent, related, source.text);
-				}
-				// 订阅接续：同一个话题 / 工作项、或提到的 MR 已经挂在某个会话上，档位照常分诊，会话接着用
-				const thread = triggerOf(chat, last).thread;
-				const keys = subscribable(thread, refsOf(source.text));
-				const agents = loadAgents().agents;
-				const sub = subscriber(keys);
-				let name: string;
-				let info: RouteInfo;
-				let sid: string | null;
-				const openName = open?.agent && (LEGACY_TIER[open.agent] ? ASSISTANT : open.agent);
-				if (open && openName && agents[openName]) {
-					// 重启接回：沿用上次的分派（同一个会话），durable 才接得回原来那次运行；改版前的旧 agent 名换成 assistant 的对应档位
-					name = openName;
-					info = { ...open.info, rule: open.rule, tier: open.info?.tier ?? LEGACY_TIER[open.agent!] };
-					sid = open.session;
-				} else {
-					[name, info] = await route(source);
-					// 寒暄档看不到图：消息带截图时至少按 answer 档，把图交给 agent 看（否则只能回「看不到图」）
-					if (info.tier === "ack" && msgs.some((m) => imageKeys(m.content).length))
-						info = { ...info, tier: "answer", rule: `${info.rule}（带截图，升到 answer）` };
-					// 寒暄确认不需要前文，不接续也不挂订阅
-					if (sub && info.tier !== "ack") {
-						const { mrProject, mrIid } = (sub.info ?? {}) as Record<string, string>;
-						// 挂在 MR 上的会话：后续消息按 MR 预审档接着看
-						if (mrIid) info = { ...info, tier: "mr", mrProject, mrIid };
-						info = { ...info, rule: `${info.rule}；接续 ${sub.key}` };
-						sid = sub.session;
-					} else sid = sessionKey(name, withTier(agents[name] ?? {}, info.tier), chat.chat_id, info);
-				}
-				const agent = withTier(agents[name] ?? {}, info.tier);
-				const { rule: _rule, ...routeExtra } = info;
-				routeId =
-					open?.id ??
-					decide(triggerIds, {
-						agent: name,
-						rule: info.rule,
-						session: sid,
-						info: routeExtra as Record<string, string>,
-						actionKind: "draft",
-					});
-				// 之后同一件事（这个话题、这个 MR）的消息都进这个会话，跨渠道也接得上
-				if (sid && info.tier !== "ack") subscribe(keys, { agent: name, session: sid, info: routeExtra as Record<string, string>, routeId });
-				Object.assign(source, { agent: name, session: sid, route: info.rule, routeId });
-				log("分派", chat.chat_id, "->", name, info.rule);
-				let where: string;
-				let hint: string;
-				if (chat.chat_mode === "meego" && source.meego) {
-					const mg = source.meego;
-					ctx = `${ctx}\n\n需要回复的新评论：\n${source.text}`;
-					where = `飞书项目「${source.chatName}」（${mg.url}）的评论里 @Yi`;
-					hint =
-						"这是飞书项目工作项下的评论，回复会以 Yi 的身份发成一条新评论，只能是文字，不要用【表情】【表情包】；" +
-						`可以用 meegle 只读命令查更多信息，例如 \`meegle workitem get --project-key ${mg.projectKey} --work-item-id ${mg.workItemId}\`。`;
-				} else {
-					where = chat.chat_mode === "p2p" ? "私聊" : `群「${source.chatName}」里 @Yi`;
-					hint = stickerHint();
-				}
-				const extra = info.mrIid
-					? `\n\n要预审的 MR：项目 \`${info.mrProject}\`，iid \`${info.mrIid}\`，glab 的 -R 参数用 \`${glabRepo(info.mrProject!)}\`。\nMR 概要（glab mr view）：\n${await mrBrief(info)}`
-					: "";
-				// 链式召回的起点：这条消息和它所在事件流的 ID，需要以前的来龙去脉时用 lookup 查
-				const ids = `（这条消息的 ID：${triggerIds.at(-1)}；所在事件流：thread:${thread}${refsOf(source.text)
-					.map((r) => `；提到 ${r}`)
-					.join("")}）`;
-				const prompt = `[代回复草稿] ${where}，来自 ${source.senderName}\n\n${ctx}${extra}\n\n${hint}\n\n${ids}\n\n请按草稿规则起草 Yi 的回复。`;
-				// 截图常常就是问题本身：存到本地，把路径给 agent 用 read 查看；chat 没有工具、只回表情，不用看
-				const stage: Stage = {
-					source: { ...source },
-					tier: info.tier,
-					prompt: info.tier === "ack" ? prompt : `${prompt}${await imageHint([...earlier, ...msgs])}`,
-					basePrompt: prompt,
-					cwd: resolveCwd(agent, info),
-					label,
-					routeId,
-					triggerIds,
-					started,
-					earlier,
-				};
-				setKv(pendingKey, { chat, msgs, attempt, stage } satisfies Pending);
-				await finish(chat, msgs, stage, requestId, pendingKey, attempt);
+				await finish(chat, msgs, saved, requestId, pendingKey, attempt);
 			} catch (e) {
-				if (isStopping()) throw e;
-				failed(chat, msgs, source, label, started, routeId, e);
+				onError(e);
 			}
-		}),
-	);
+			return;
+		}
+		const stale = await staleReason(chat, msgs);
+		if (stale) {
+			log(
+				`${stale}，跳过起草`,
+				chat.chat_id,
+				msgs.map((m) => m.message_id),
+			);
+			record({
+				kind: "draft",
+				status: "skipped",
+				chatId: chat.chat_id,
+				source: source.replyTo,
+				label,
+				question: source.text,
+				reason: stale,
+			});
+			decide(triggerIds, { rule: `跳过：${stale}`, actionKind: "none" });
+			return;
+		}
+		try {
+			let ctx: string;
+			let earlier: Message[] = [];
+			if (chat.chat_mode === "meego" && source.meego) {
+				ctx = await meegoContext(source.meego);
+				source.context = ctx.slice(-2000);
+			} else {
+				const got = await gatherContext(chat, msgs);
+				const { related, recent } = got;
+				earlier = got.earlier;
+				if (earlier.length) source.text = [...earlier, ...msgs].map((m) => m.content).join("\n");
+				source.context = related;
+				ctx = contextBlock(recent, related, source.text);
+			}
+			// 订阅接续：同一个话题 / 工作项、或提到的 MR 已经挂在某个会话上，档位照常分诊，会话接着用
+			const thread = triggerOf(chat, last).thread;
+			const keys = subscribable(thread, refsOf(source.text));
+			const agents = loadAgents().agents;
+			const sub = subscriber(keys);
+			let name: string;
+			let info: RouteInfo;
+			let sid: string | null;
+			const openName = open?.agent && (LEGACY_TIER[open.agent] ? ASSISTANT : open.agent);
+			if (open && openName && agents[openName]) {
+				// 重启接回：沿用上次的分派（同一个会话），durable 才接得回原来那次运行；改版前的旧 agent 名换成 assistant 的对应档位
+				name = openName;
+				info = { ...open.info, rule: open.rule, tier: open.info?.tier ?? LEGACY_TIER[open.agent!] };
+				sid = open.session;
+			} else {
+				[name, info] = await route(source);
+				// 寒暄档看不到图：消息带截图时至少按 answer 档，把图交给 agent 看（否则只能回「看不到图」）
+				if (info.tier === "ack" && msgs.some((m) => imageKeys(m.content).length))
+					info = { ...info, tier: "answer", rule: `${info.rule}（带截图，升到 answer）` };
+				// 寒暄确认不需要前文，不接续也不挂订阅
+				if (sub && info.tier !== "ack") {
+					const { mrProject, mrIid } = (sub.info ?? {}) as Record<string, string>;
+					// 挂在 MR 上的会话：后续消息按 MR 预审档接着看
+					if (mrIid) info = { ...info, tier: "mr", mrProject, mrIid };
+					info = { ...info, rule: `${info.rule}；接续 ${sub.key}` };
+					sid = sub.session;
+				} else sid = sessionKey(name, withTier(agents[name] ?? {}, info.tier), chat.chat_id, info);
+			}
+			const agent = withTier(agents[name] ?? {}, info.tier);
+			const { rule: _rule, ...routeExtra } = info;
+			routeId =
+				open?.id ??
+				decide(triggerIds, {
+					agent: name,
+					rule: info.rule,
+					session: sid,
+					info: routeExtra as Record<string, string>,
+					actionKind: "draft",
+				});
+			// 之后同一件事（这个话题、这个 MR）的消息都进这个会话，跨渠道也接得上
+			if (sid && info.tier !== "ack") subscribe(keys, { agent: name, session: sid, info: routeExtra as Record<string, string>, routeId });
+			Object.assign(source, { agent: name, session: sid, route: info.rule, routeId });
+			log("分派", chat.chat_id, "->", name, info.rule);
+			let where: string;
+			let hint: string;
+			if (chat.chat_mode === "meego" && source.meego) {
+				const mg = source.meego;
+				ctx = `${ctx}\n\n需要回复的新评论：\n${source.text}`;
+				where = `飞书项目「${source.chatName}」（${mg.url}）的评论里 @Yi`;
+				hint =
+					"这是飞书项目工作项下的评论，回复会以 Yi 的身份发成一条新评论，只能是文字，不要用【表情】【表情包】；" +
+					`可以用 meegle 只读命令查更多信息，例如 \`meegle workitem get --project-key ${mg.projectKey} --work-item-id ${mg.workItemId}\`。`;
+			} else {
+				where = chat.chat_mode === "p2p" ? "私聊" : `群「${source.chatName}」里 @Yi`;
+				hint = stickerHint();
+			}
+			const extra = info.mrIid
+				? `\n\n要预审的 MR：项目 \`${info.mrProject}\`，iid \`${info.mrIid}\`，glab 的 -R 参数用 \`${glabRepo(info.mrProject!)}\`。\nMR 概要（glab mr view）：\n${await mrBrief(info)}`
+				: "";
+			// 链式召回的起点：这条消息和它所在事件流的 ID，需要以前的来龙去脉时用 lookup 查
+			const ids = `（这条消息的 ID：${triggerIds.at(-1)}；所在事件流：thread:${thread}${refsOf(source.text)
+				.map((r) => `；提到 ${r}`)
+				.join("")}）`;
+			const prompt = `[代回复草稿] ${where}，来自 ${source.senderName}\n\n${ctx}${extra}\n\n${hint}\n\n${ids}\n\n请按草稿规则起草 Yi 的回复。`;
+			// 截图常常就是问题本身：存到本地，把路径给 agent 用 read 查看；chat 没有工具、只回表情，不用看
+			const stage: Stage = {
+				source: { ...source },
+				tier: info.tier,
+				prompt: info.tier === "ack" ? prompt : `${prompt}${await imageHint([...earlier, ...msgs])}`,
+				basePrompt: prompt,
+				cwd: resolveCwd(agent, info),
+				label,
+				routeId,
+				triggerIds,
+				started,
+				earlier,
+			};
+			setKv(pendingKey, { chat, msgs, attempt, stage } satisfies Pending);
+			await finish(chat, msgs, stage, requestId, pendingKey, attempt);
+		} catch (e) {
+			onError(e);
+		}
+	}
 }
 
 /** 审批卡片上的来源：谁、在哪发的消息 */
@@ -297,6 +350,12 @@ export function originLabel(chat: Pick<ChatRef, "chat_mode" | "name">, source: P
 function runStage(chat: ChatRef, stage: Stage, requestId: string) {
 	const { source } = stage;
 	const { name, tier } = stageAgent(stage);
+	const d = drafting.get(chat.chat_id);
+	if (d) {
+		// ack 档升到 answer 之前 Yi 已经回了：不再起第二次运行
+		if (d.aborted) throw new Error("起草期间 Yi 已亲自回复");
+		d.key = runKeyFor(source.session, requestId);
+	}
 	return runPi({
 		cwd: stage.cwd,
 		sessionId: source.session,
@@ -309,6 +368,7 @@ function runStage(chat: ChatRef, stage: Stage, requestId: string) {
 		origin: { label: originLabel(chat, source), draftReplyTo: source.replyTo },
 		chatId: chat.chat_id,
 		lookup: true,
+		maxContext: SESSION_MAX_TOKENS,
 		memory: {
 			// 只有 @ 的消息意思在前文里，召回也带上最后一段前文
 			query: `${source.text}\n${(source.context ?? "").slice(-300)}`,
@@ -405,6 +465,14 @@ function mergeEarlier(chat: ChatRef, earlier: Message[], into: string) {
 		log("草稿合并到新草稿", d.id, "->", into);
 		settle({ actionKind: "draft", actionId: d.id, routeId: d.routeId, outcome: "merged", effect: "internal", ref: into });
 	}
+}
+
+/** 运行被 abortIfYiReplied 中止：和起草完才发现 Yi 已回复一样记成跳过、草稿作废，不当失败提醒 */
+function yiRepliedMidway(chat: ChatRef, source: Source, label: string, routeId: number | undefined) {
+	const reason = "起草期间Yi 已亲自回复";
+	log(`${reason}，已中止`, chat.chat_id, source.replyTo);
+	record({ kind: "draft", status: "skipped", chatId: chat.chat_id, source: source.replyTo, label, question: source.text, reason });
+	settle({ actionKind: "draft", routeId, outcome: "expired", effect: "internal", detail: reason });
 }
 
 function failed(chat: ChatRef, msgs: Message[], source: Source, label: string, started: number, routeId: number | undefined, e: unknown) {

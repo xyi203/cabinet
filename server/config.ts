@@ -38,6 +38,12 @@ export const READ_ROOTS = [DEFAULT_CWD];
 // 截图在 data/images 保留的天数；会话闲置超过这么多天，下次换新会话（旧会话里的长上下文和图片不再每轮重发）。0 = 不清理 / 不换
 export const IMAGE_RETAIN_DAYS = Number(env("IMAGE_RETAIN_DAYS", "7"));
 export const SESSION_IDLE_DAYS = Number(env("SESSION_IDLE_DAYS", "7"));
+// 起草复用按聊天划分的会话，上下文会越滚越大（每次调用整段重发，缓存写入是大头）：上一轮结束时超过这么多 tokens 就换新会话。
+// 前文、记忆每次起草都另外带上，换会话只丢掉旧的工具输出和截图。0 = 不换
+export const SESSION_MAX_TOKENS = Number(env("SESSION_MAX_TOKENS", "50000"));
+// Yi 正在会话里聊（触发消息前 YI_ACTIVE_WINDOW 秒内说过话）时先等 YI_ACTIVE_DELAY 秒再起草：多半他自己就回了。0 = 不等
+export const YI_ACTIVE_WINDOW = Number(env("YI_ACTIVE_WINDOW", "300"));
+export const YI_ACTIVE_DELAY = Number(env("YI_ACTIVE_DELAY", "90"));
 
 export const DRAFT_ENABLED = env("DRAFT_ENABLED", "1") === "1";
 export const POLL_INTERVAL = Number(env("POLL_INTERVAL", "30"));

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 process.env.OWNER_OPEN_ID = "ou_owner";
 const { splitNote, parseDraftBody } = await import("../server/drafts/format.ts");
-const { ownerReplyCovers, ownerRepliedIn } = await import("../server/drafts/replied.ts");
+const { ownerActive, ownerReplyCovers, ownerRepliedIn } = await import("../server/drafts/replied.ts");
 const { onlyMentions, burstBefore, burstAfter } = await import("../server/drafts/context.ts");
 const { parseMeegoCard, meegoMention, plainComment } = await import("../server/meego.ts");
 const { messageText } = await import("../server/lark/bot.ts");
@@ -47,6 +47,16 @@ test("只有在对方消息之后的回复才算", () => {
 	const after = msg({ message_id: "y1", message_position: 11, sender: { id: "ou_owner" } });
 	assert.ok(!ownerRepliedIn("p2p", [target, before], [target]));
 	assert.ok(ownerRepliedIn("p2p", [target, before, after], [target]));
+});
+
+test("Yi 正在聊：对方消息前几分钟内（或之后）Yi 说过话", () => {
+	const min = 60_000;
+	const q = msg({ message_id: "q", create_time: 10 * min });
+	const yi = (t: number) => msg({ message_id: `y${t}`, create_time: t * min, sender: { id: "ou_owner", name: "yi", sender_type: "user" } });
+	const other = msg({ message_id: "o", create_time: 9 * min });
+	assert.ok(ownerActive([yi(7), q], [q], 5 * min));
+	assert.ok(ownerActive([q, yi(11)], [q], 5 * min));
+	assert.ok(!ownerActive([yi(2), other, q], [q], 5 * min));
 });
 
 test("对方连着发、Yi 还没回的几条合成一段：之前的并进来，之后还有的这一份不推", () => {

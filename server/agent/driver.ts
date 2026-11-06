@@ -74,7 +74,12 @@ export interface RunOptions {
 	memory?: { query: string; scope: RecallScope };
 	/** 这次运行是谁引起的：写操作审批卡片上给 Yi 看，执行结果按它回到原处 */
 	origin?: Origin;
+	/** 复用的会话上一轮结束时上下文超过这么多 tokens 就换新会话（0 = 不换）；只给起草这类前文另外带齐的运行 */
+	maxContext?: number;
 }
+
+/** runPi 用的会话 key：不复用会话的按 requestId 固定，durable 在同一个 conversation 里认 requestId，重启后才接得回 */
+export const runKeyFor = (sessionId: string | null | undefined, requestId: string) => sessionId || `once-${requestId}`;
 
 export interface Origin {
 	/** 例如「张三在群「xx」的消息」「看板任务：xxx」 */
@@ -329,22 +334,26 @@ export async function closeHarness() {
 	await closeMcp();
 }
 
-/** 会话 key -> durable conversation。闲置超过 SESSION_IDLE_DAYS 的换新会话：durable 的记录不可删改，
- * 旧会话留在库里（看板的执行日志按时间段取，不受影响），只是不再接着用，免得早已过时的上下文和图片每轮重发 */
-async function conversationFor(key: string): Promise<Conversation> {
+/** 会话 key -> durable conversation。闲置超过 SESSION_IDLE_DAYS、或上下文超过 maxContext 的换新会话：durable 的记录不可删改，
+ * 旧会话留在库里（看板的执行日志按时间段取，不受影响），只是不再接着用，免得过时或过长的上下文和图片每次调用都重发 */
+async function conversationFor(key: string, maxContext = 0): Promise<Conversation> {
 	const h = await harness();
 	const id = getKv<number | null>(`conv:${key}`, null);
 	// 没有记录的老会话当作刚用过，不在升级后第一次就被换掉
 	const last = getKv<number | null>(`conv-at:${key}`, null) ?? now();
 	const stale = SESSION_IDLE_DAYS > 0 && now() - last > SESSION_IDLE_DAYS * 86400;
+	const size = getKv<number>(`conv-ctx:${key}`, 0);
+	const big = maxContext > 0 && size > maxContext;
 	setKv(`conv-at:${key}`, now());
-	if (id && !stale) {
+	if (id && !stale && !big) {
 		const conv = await h.conversation(id as any, ctx);
 		if (conv) return conv;
 	}
 	if (id && stale) log(`会话 ${key} 闲置超过 ${SESSION_IDLE_DAYS} 天，换新会话`);
+	else if (id && big) log(`会话 ${key} 上下文 ${size} tokens，超过 ${maxContext}，换新会话`);
 	const conv = await h.createConversation({ ownership: { kind: "ownerless" } }, ctx);
 	setKv(`conv:${key}`, conv.id);
+	deleteKv(`conv-ctx:${key}`);
 	return conv;
 }
 
@@ -425,8 +434,9 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 	const base = (agent.tools ?? DEFAULT_TOOLS).filter((t): t is ToolName => t in TOOLS && t !== "lookup");
 	// agent 显式配成不带工具（tools: []）的不加
 	const toolNames: ToolName[] = opts.lookup && base.length ? [...base, "lookup"] : base;
-	// 不复用会话的 agent 也要按 requestId 固定 key：durable 在同一个 conversation 里认 requestId，重启后才接得回
-	const key = opts.sessionId || (opts.requestId ? `once-${opts.requestId}` : `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+	const key = opts.requestId
+		? runKeyFor(opts.sessionId, opts.requestId)
+		: opts.sessionId || `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 	const info: RunningInfo = { label: opts.label ?? "", started: now(), chatId: opts.chatId, agent: opts.agentName, sessionId: key };
 	running.set(key, info);
 	emit({ type: "run_start", runId: key, label: info.label, chatId: opts.chatId, agent: opts.agentName, t: now() });
@@ -439,7 +449,7 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 		const rec = opts.requestId ? getKv<RunRecord | null>(runKey(opts.requestId), null) : null;
 		const resumed = rec?.key === key ? await h.submission((rec.continueId ?? rec.submissionId) as any, ctx) : undefined;
 		const recConv = resumed && rec?.convId ? await h.conversation(rec.convId as any, ctx) : undefined;
-		const conv = recConv ?? (await conversationFor(key));
+		const conv = recConv ?? (await conversationFor(key, opts.maxContext));
 		let submission: NonNullable<typeof resumed>;
 		let record: RunRecord;
 		if (resumed && rec) {
@@ -511,8 +521,11 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 			throw new Error(`pi 失败 ${settled.reason ?? settled.status} ${failure?.detail ?? ""}`.trim());
 		}
 		const entry = await conv.commit((tx) => tx.entry(AssistantEntry, settled.answer), ctx);
-		const text = textOf((entry?.model?.[0] as AssistantMessage | undefined)?.content).trim();
+		const answer = entry?.model?.[0] as AssistantMessage | undefined;
+		const text = textOf(answer?.content).trim();
 		if (!text) throw new Error("pi 无输出");
+		// 最后一次调用的上下文约等于整段会话：下次按 maxContext 判断要不要换新会话
+		if (answer?.usage) setKv(`conv-ctx:${key}`, answer.usage.input + answer.usage.cacheRead + answer.usage.cacheWrite);
 		const after = await usageNow(h, conv.id);
 		const usage: Usage = {
 			input: after.input - before.input,

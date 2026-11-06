@@ -43,6 +43,12 @@ export async function staleReason(chat: ChatRef, msgs: Message[]): Promise<strin
 	return null;
 }
 
+/** Yi 正在这个会话里聊：要回复的第一条消息之前 windowMs 内（或之后）他说过话 */
+export function ownerActive(recent: Message[], msgs: Message[], windowMs: number): boolean {
+	const first = msgs[0].create_time;
+	return recent.some((m) => m.sender.id === OWNER_OPEN_ID && m.create_time >= first - windowMs);
+}
+
 export function ownerRepliedIn(chatMode: string, recent: Message[], msgs: Message[]): boolean {
 	const pos = new Map(recent.map((m) => [m.message_id, m.message_position]));
 	const base = Math.max(0, ...msgs.map((m) => pos.get(m.message_id) ?? 0));

@@ -125,7 +125,8 @@ export function tokenize(cmd: string): string[] | string {
 			has = false;
 			continue;
 		}
-		if (/[;&|<>`$\\(){}\n*?]/.test(ch)) return "bash 只允许单条命令，不支持管道、重定向、变量和通配符";
+		if (/[;&|<>`$\\(){}\n*?]/.test(ch))
+			return "bash 只允许单条命令，不支持管道、重定向、变量和通配符：去掉 `| head`、`2>&1`、`&&`、`cd`（长输出会自动存成文件），看文件、搜代码改用 read / grep / find / ls 工具";
 		cur += ch;
 	}
 	if (quote) return "引号没有闭合";
@@ -280,7 +281,7 @@ export class Guard {
 			return this.ruleVerdict(name, rule, args.slice(rule.argv0.length));
 		}
 		const allowed = [...this.enabled, ...this.commands.map((c) => c.join(" "))];
-		return deny(`这个 agent 不允许执行: ${args[0]}（可用：${allowed.join(", ")}）`);
+		return deny(`这个 agent 不允许执行: ${args[0]}（可用：${allowed.join(", ")}；看文件、搜代码用 read / grep / find / ls 工具）`);
 	}
 
 	checkBash(cmd: string, cwd: string): string | undefined {

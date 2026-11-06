@@ -6,7 +6,7 @@ import { ALERT_ENABLED, DRAFT_ENABLED, DRAFT_SKIP_CHATS, OWNER_OPEN_ID, PATHS, P
 import type { Draft } from "../db/schema.ts";
 import { resolveSticker } from "../drafts/format.ts";
 import { asksYi } from "../drafts/context.ts";
-import { makeDraft } from "../drafts/make.ts";
+import { abortIfYiReplied, makeDraft } from "../drafts/make.ts";
 import { expireDrafts } from "../drafts/replied.ts";
 import { type ChatRef, DraftError, inflight } from "../drafts/store.ts";
 import { isHandled, markHandled } from "../handled.ts";
@@ -50,7 +50,10 @@ async function poll(since: number) {
 				fresh.push(m);
 			} else {
 				skip.push(m.message_id);
-				if (m.sender.id === OWNER_OPEN_ID) expireDrafts(chat, m);
+				if (m.sender.id === OWNER_OPEN_ID) {
+					expireDrafts(chat, m);
+					abortIfYiReplied(chat, m);
+				}
 			}
 		}
 		markHandled(skip);
