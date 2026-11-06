@@ -48,6 +48,11 @@ export const YI_ACTIVE_DELAY = Number(env("YI_ACTIVE_DELAY", "90"));
 export const PATROL_MODEL = env("PATROL_MODEL", "claude/claude-sonnet-5-5");
 export const PATROL_CRON = env("PATROL_CRON", "*/30 * * * *");
 export const PATROL_DAYS = Number(env("PATROL_DAYS", "3"));
+// Claude 订阅额度：每隔这么多分钟经 magpie 用这个模型发一个 1 token 的请求，读它转发的 anthropic-ratelimit-unified-* 响应头。0 = 不查
+export const QUOTA_INTERVAL = Number(env("QUOTA_INTERVAL", "10"));
+export const QUOTA_MODEL = env("QUOTA_MODEL", "claude/claude-haiku-5-5");
+// 5 小时窗口用量到这个比例就暂停巡检（跳过这一轮），把额度留给起草
+export const PATROL_PAUSE_AT = Number(env("PATROL_PAUSE_AT", "0.8"));
 
 export const DRAFT_ENABLED = env("DRAFT_ENABLED", "1") === "1";
 export const POLL_INTERVAL = Number(env("POLL_INTERVAL", "30"));

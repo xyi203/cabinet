@@ -41,12 +41,12 @@ import {
 	SKILLS_DIR,
 } from "../config.ts";
 import { type RecallScope, recallBlock } from "../memory/recall.ts";
-import { deleteKv, getKv, listKv, setKv } from "../db/index.ts";
+import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import { openTursoDurable } from "../db/turso.ts";
 import type { Usage } from "../db/schema.ts";
 import { Guard, mcpToolName } from "./guard.ts";
 import { closeMcp, loadServers, mcpNamespaces, mcpTools } from "./mcp.ts";
-import { QUOTA_RE, log, now } from "../util.ts";
+import { QUOTA_RE, isStopping, log, now } from "../util.ts";
 import { models, resolveModel, textOf } from "./models.ts";
 import { type AgentConfig, loadAgents } from "./router.ts";
 import { findTool, grepTool, lookupTool, lsTool, memoryTool, scheduleTool } from "./tools.ts";
@@ -76,6 +76,33 @@ export interface RunOptions {
 	origin?: Origin;
 	/** 复用的会话上一轮结束时上下文超过这么多 tokens 就换新会话（0 = 不换）；只给起草这类前文另外带齐的运行 */
 	maxContext?: number;
+	/** 记进 runs 表的档位（assistant 的 ack / answer / deep / mr，agent 任务是 task），统计页按它拆分 */
+	tier?: string;
+}
+
+/** 每次运行记一条，统计页用；记账失败不影响运行 */
+function logRun(opts: RunOptions, model: string, started: number, ok: boolean, usage?: Usage) {
+	try {
+		db()
+			.insert(schema.runs)
+			.values({
+				ts: now(),
+				agent: opts.agentName ?? null,
+				tier: opts.tier ?? null,
+				model,
+				request: opts.requestId ?? null,
+				label: opts.label ?? null,
+				seconds: now() - started,
+				ok,
+				input: usage?.input ?? 0,
+				output: usage?.output ?? 0,
+				cacheRead: usage?.cacheRead ?? 0,
+				cost: usage?.cost ?? 0,
+			})
+			.run();
+	} catch (e) {
+		log("记录运行失败", opts.label ?? "", e);
+	}
 }
 
 /** runPi 用的会话 key：不复用会话的按 requestId 固定，durable 在同一个 conversation 里认 requestId，重启后才接得回 */
@@ -441,9 +468,10 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 	running.set(key, info);
 	emit({ type: "run_start", runId: key, label: info.label, chatId: opts.chatId, agent: opts.agentName, t: now() });
 	let ok = false;
+	let model = agent.model ?? PI_MODEL;
 	try {
 		const h = await harness();
-		const spec = agent.model ?? PI_MODEL;
+		const spec = model;
 		const fallback = agent.fallbackModel ?? PI_FALLBACK_MODEL;
 		// 重启接回：上次已经提交过，直接挂回那次提交，不重新配置、不重新召回、不重新提交（见 RunRecord）
 		const rec = opts.requestId ? getKv<RunRecord | null>(runKey(opts.requestId), null) : null;
@@ -512,6 +540,7 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 				// continue 没有 requestId：记下它的 ID，这一段里重启也接得回
 				record = { ...record, continueId: String(cont.id) };
 				if (opts.requestId) setKv(runKey(opts.requestId), record);
+				model = fallback;
 				settled = await waitSettled(cont, conv);
 			}
 		}
@@ -534,8 +563,11 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 			cost: after.cost - before.cost,
 		};
 		ok = true;
+		logRun(opts, record.continueId && fallback ? fallback : model, info.started, true, usage);
 		return { text, usage, sessionId: key };
 	} finally {
+		// 失败（含被中止）也记一条：用量拿不到记 0；进程退出打断的下次接回，不记
+		if (!ok && !isStopping()) logRun(opts, model, info.started, false);
 		running.delete(key);
 		emit({ type: "run_end", runId: key, ok, t: now() });
 	}

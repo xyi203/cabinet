@@ -351,6 +351,7 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 				prompt,
 				agent,
 				agentName: task.agent,
+				tier: task.patrol ? "patrol" : "task",
 				label: dev ? `开发 · ${path.basename(task.repo)}` : `${task.agent} · ${task.title.slice(0, 20)}`,
 				chatId: id,
 				// 只有 dev agent 能写，而且只能写自己的 worktree

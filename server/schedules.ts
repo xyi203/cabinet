@@ -5,6 +5,8 @@
 import { eq } from "drizzle-orm";
 import { loadAgents } from "./agent/router.ts";
 import { changed } from "./bus.ts";
+import { PATROL_PAUSE_AT } from "./config.ts";
+import { fiveHourUsed } from "./quota.ts";
 import { db, schema } from "./db/index.ts";
 import type { Schedule } from "./db/schema.ts";
 import { dispatch, getDevTask } from "./dev.ts";
@@ -159,6 +161,13 @@ export async function fire(s: Schedule, at = now(), manual = false): Promise<str
 		text: s.prompt,
 		at,
 	});
+	// 巡检一天几十轮：Claude 5 小时额度快用完时跳过，把额度留给起草；手动触发不拦
+	const used = fiveHourUsed();
+	if (s.patrol && !manual && used != null && used >= PATROL_PAUSE_AT) {
+		decide([tid], { rule: `跳过：Claude 5 小时额度已用 ${Math.round(used * 100)}%`, actionKind: "none" });
+		log("巡检跳过：额度紧张", s.id, used);
+		return;
+	}
 	const prev = s.lastTask ? getDevTask(s.lastTask) : undefined;
 	if (prev?.status === "running") {
 		decide([tid], { rule: `跳过：上一次（${prev.id}）还在跑`, actionKind: "none" });

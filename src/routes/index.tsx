@@ -13,17 +13,36 @@ import { isLive, money } from "../lib/format";
 import { useLiveUpdates } from "../lib/live";
 import { ChatPage } from "../components/ChatPage";
 import { StoryBoard } from "../components/StoryBoard";
+import { Overview } from "../components/Overview";
+import { StatsPage } from "../components/Stats";
+import { ToastHost } from "../components/Toast";
 
 const TITLES = {
+	home: "概览",
+	todo: "待办",
+	stats: "统计",
 	tasks: "我的任务",
 	stories: "需求",
 	agents: "Agent",
-	todo: "待你处理",
 	drafts: "草稿",
 	qa: "对话",
 	failed: "失败",
 	memory: "记忆",
 } as const;
+
+/** 悬停在导航上看到的说明：这个入口管什么 */
+const HINTS: Record<View, string> = {
+	home: "额度、今日消耗、等你处理的事和最近动态",
+	todo: "所有等你处理的事：审批、待确认草稿、失败、待看任务、有冲突的记忆",
+	stats: "消耗趋势（按小时 / 天），按 agent、档位、模型拆分，草稿结果分布",
+	tasks: "草稿、问答、agent 任务按进度排成的看板",
+	stories: "飞书工单（需求、缺陷）按开发 → 测试 → 发布推进，发布工单、观察文档、巡检",
+	agents: "agent 任务看板、新建任务、定时任务",
+	drafts: "替你起草的回复：待确认、已发、你自己回了的",
+	qa: "直接和助手聊天；私聊机器人的问答记录",
+	failed: "失败的起草和问答，可以重试或忽略",
+	memory: "长期记忆：约定和线索，确认、改分类、遗忘",
+};
 type View = keyof typeof TITLES;
 
 // 当前视图放在地址栏（?view=todo），刷新和收藏都能回到原处
@@ -36,14 +55,14 @@ export const Route = createFileRoute("/")({
 
 function Nav({ v, current, badge, hot }: { v: View; current: View; badge?: number; hot?: boolean }) {
 	return (
-		<Link to="/" search={v === "tasks" ? {} : { view: v }} className={`nav${current === v ? " on" : ""}`}>
+		<Link to="/" search={v === "home" ? {} : { view: v }} className={`nav${current === v ? " on" : ""}`} title={HINTS[v]}>
 			{TITLES[v]} {badge != null && <span className={`badge${hot ? " hot" : ""}`}>{badge}</span>}
 		</Link>
 	);
 }
 
 function Dashboard() {
-	const view = Route.useSearch().view ?? "tasks";
+	const view = Route.useSearch().view ?? "home";
 	const [open, setOpen] = useState<{ draft?: Draft; task?: Task; dev?: string } | null>(null);
 	const [connected, setConnected] = useState(true);
 	// 有实时推送时轮询只作兜底；断线时加快
@@ -58,7 +77,8 @@ function Dashboard() {
 	const openDraft = (d: Draft) => setOpen({ draft: d, task: state?.tasks.find((t) => t.draft === d.id) });
 	const navigate = useNavigate();
 	const openInbox = (it: InboxItem) => {
-		if (it.kind === "watch" || it.kind === "approval") return;
+		// 审批和系统问题要在待办里就地处理（从概览点过来时跳过去）
+		if (it.kind === "watch" || it.kind === "approval") return void navigate({ to: "/", search: { view: "todo" } });
 		if (it.kind === "dev") return setOpen({ dev: it.ref });
 		if (it.kind === "memory") return void navigate({ to: "/", search: { view: "memory" } });
 		if (it.kind === "draft") {
@@ -84,23 +104,22 @@ function Dashboard() {
 					<div className="logo">阁</div>Cabinet
 				</div>
 				<div className="group">概览</div>
+				<Nav current={view} v="home" />
+				<Nav current={view} v="todo" badge={inbox.length} hot={inboxNow > 0} />
+				<Nav current={view} v="stats" />
+				<div className="group">会话与消息</div>
+				<Nav current={view} v="drafts" />
+				<Nav current={view} v="qa" />
+				<Nav current={view} v="failed" badge={s?.failed ?? 0} />
+				<div className="group">自动化</div>
+				<Nav current={view} v="stories" badge={state?.stories?.filter((x) => x.stage !== "done" && x.stage !== "dropped").length ?? 0} />
 				<Nav current={view} v="tasks" badge={attn} hot={attn > 0} />
-				<Nav
-					current={view}
-					v="stories"
-					badge={state?.stories?.filter((x) => x.stage !== "done" && x.stage !== "dropped").length ?? 0}
-				/>
 				<Nav
 					current={view}
 					v="agents"
 					badge={state?.devTasks.filter((t) => t.status === "running" || t.status === "review").length ?? 0}
 					hot={state?.devTasks.some((t) => t.status === "review") ?? false}
 				/>
-				<Nav current={view} v="todo" badge={inbox.length} hot={inboxNow > 0} />
-				<div className="group">会话与消息</div>
-				<Nav current={view} v="drafts" />
-				<Nav current={view} v="qa" />
-				<Nav current={view} v="failed" badge={s?.failed ?? 0} />
 				<div className="group">知识</div>
 				<Nav current={view} v="memory" />
 			</aside>
@@ -122,10 +141,12 @@ function Dashboard() {
 					</span>
 				</div>
 				{state && !state.auth.authorized && <AuthBanner />}
+				{state && view === "home" && <Overview state={state} onOpenInbox={openInbox} onOpenTask={openTask} />}
+				{view === "stats" && <StatsPage />}
 				{state && view === "tasks" && <Board state={state} onOpen={openTask} />}
 				{state && view === "stories" && <StoryBoard state={state} onOpenDev={(id) => setOpen({ dev: id })} />}
 				{state && view === "agents" && <AgentBoard state={state} onOpen={(id) => setOpen({ dev: id })} />}
-				{state && view === "todo" && <Inbox items={inbox} now={state.now} onOpen={openInbox} />}
+				{state && view === "todo" && <Inbox items={inbox} drafts={state.drafts} now={state.now} onOpen={openInbox} />}
 				{state && view === "drafts" && <DraftList drafts={state.drafts} onOpen={openDraft} />}
 				{state && view === "qa" && (
 					<ChatPage chats={state.chats ?? []} records={state.records.filter((r) => r.kind !== "draft")} now={state.now} />
@@ -145,6 +166,7 @@ function Dashboard() {
 			) : open?.task ? (
 				<TaskDrawer key={open.task.id} task={open.task} draft={open.draft} onClose={() => setOpen(null)} />
 			) : null}
+			<ToastHost />
 		</div>
 	);
 }

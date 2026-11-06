@@ -218,6 +218,7 @@ export async function handle(ev: BotEvent, attempt?: string) {
 					cwd,
 					sessionId: key,
 					requestId,
+					tier: "qa",
 					prompt: await buildPrompt(ev, text),
 					agent,
 					agentName,

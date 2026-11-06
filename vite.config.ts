@@ -1,3 +1,4 @@
+import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -8,5 +9,5 @@ export default defineConfig({
 		port: 5173,
 		proxy: { "/api": { target: "http://127.0.0.1:10086", changeOrigin: true } },
 	},
-	plugins: [tanstackStart(), viteReact()],
+	plugins: [tailwindcss(), tanstackStart(), viteReact()],
 });

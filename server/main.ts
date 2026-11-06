@@ -17,6 +17,7 @@ import { scheduleVectors } from "./memory/store.ts";
 import { log, markStopping } from "./util.ts";
 import { startSchedules, stopSchedules } from "./schedules.ts";
 import { startStories } from "./stories.ts";
+import { startQuota, stopQuota } from "./quota.ts";
 import { startWatchdog, stopWatchdog } from "./watchdog.ts";
 
 const missing = missingConfig();
@@ -48,6 +49,7 @@ resumePendingAlerts(markHandled);
 startWatchdog();
 startSchedules();
 startStories();
+startQuota();
 if (DRAFT_ENABLED) void pollForever();
 
 function shutdown() {
@@ -57,6 +59,7 @@ function shutdown() {
 	stopAlerts();
 	stopWatchdog();
 	stopSchedules();
+	stopQuota();
 	stopEvents();
 	server.close();
 	// 正在跑的运行已经落库，下次启动接着跑

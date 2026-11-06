@@ -13,6 +13,7 @@ import { applyDraftAction } from "./drafts/actions.ts";
 import { ApprovalError, decideApproval } from "./approvals.ts";
 import { lineage, recentLineage } from "./pipeline.ts";
 import { deleteSchedule, listSchedules, runNow, saveSchedule } from "./schedules.ts";
+import { RANGES, type Range, stats } from "./stats.ts";
 import {
 	addStory,
 	bindTickets,
@@ -140,6 +141,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		}
 		if (p === "/api/repos") return send(res, 200, { repos: listRepos() });
 		if (p === "/api/schedules") return send(res, 200, { items: listSchedules() });
+		if (p === "/api/stats") {
+			const range = url.searchParams.get("range") as Range | null;
+			return send(res, 200, stats(range && RANGES.includes(range) ? range : "today"));
+		}
 		// 四段模型：最近的 trigger 分派给了谁、产出了什么、结果如何；带 id 时只看这一条
 		if (p === "/api/pipeline") {
 			const id = url.searchParams.get("id");

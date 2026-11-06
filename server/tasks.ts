@@ -20,6 +20,7 @@ import { ALERT_AGENT } from "./config.ts";
 import { now } from "./util.ts";
 import { type Issue, watchdogIssues } from "./watchdog.ts";
 import { count, desc, gte } from "drizzle-orm";
+import { quotaNow } from "./quota.ts";
 
 const DRAFT_TASK_STATUS: Record<string, string> = {
 	pending: "in_review",
@@ -411,6 +412,7 @@ export function dashboardState() {
 		// 需求任务：最近动过的在前
 		stories: listStories().toSorted((a, b) => b.updated - a.updated),
 		tasks,
+		quota: quotaNow(),
 		inbox: buildInbox(drafts, tasks, devTasksList(), listMemories(["contested"]), watchdogIssues(), pendingApprovals()),
 	};
 }

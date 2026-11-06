@@ -177,6 +177,8 @@ export interface State {
 	records: RecordRow[];
 	tasks: Task[];
 	inbox: InboxItem[];
+	/** Claude 订阅额度（经 magpie 响应头查到的）；没查到过为 null */
+	quota?: Quota | null;
 	auth: { authorized: boolean; refreshExpiresAt?: number };
 	pollSince: number | null;
 }
@@ -326,3 +328,44 @@ export const saveSchedule = (s: Partial<Schedule> & Pick<Schedule, "name" | "cro
 	post<{ item: Schedule }>("/api/schedules", s).then((d) => d.item);
 export const runSchedule = (id: string) => post<{ task: string }>(`/api/schedules/${id}/run`).then((d) => d.task);
 export const deleteSchedule = (id: string) => post(`/api/schedules/${id}/delete`);
+
+export interface QuotaWindow {
+	/** 0~1 */
+	utilization: number;
+	resetsAt: number;
+}
+export interface Quota {
+	at: number;
+	windows: Record<string, QuotaWindow>;
+	error?: string;
+}
+
+export type StatsRange = "today" | "7d" | "30d";
+export interface StatsBucket {
+	t: number;
+	label: string;
+	runs: number;
+	failed: number;
+	cost: number;
+	tokens: number;
+}
+export interface StatsGroup {
+	name: string;
+	runs: number;
+	failed: number;
+	cost: number;
+	tokens: number;
+	seconds: number;
+}
+export interface Stats {
+	range: StatsRange;
+	series: StatsBucket[];
+	total: { runs: number; failed: number; cost: number; tokens: number };
+	byAgent: StatsGroup[];
+	byTier: StatsGroup[];
+	byModel: StatsGroup[];
+	drafts: Array<{ status: string; name: string; count: number }>;
+	/** 草稿用上（发了、标记完成）占已有结果的比例 */
+	hitRate: number | null;
+}
+export const fetchStats = (range: StatsRange) => getJson<Stats>(`/api/stats?range=${range}`);

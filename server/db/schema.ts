@@ -382,3 +382,26 @@ export const approvals = sqliteTable(
 );
 
 export type Approval = typeof approvals.$inferSelect;
+
+/** 每次 agent 运行（起草、改写、问答、agent 任务、巡检…）一条：统计页按它算趋势和按 agent / 档位 / 模型的拆分 */
+export const runs = sqliteTable(
+	"runs",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		ts: real("ts").notNull(),
+		agent: text("agent"),
+		/** assistant 的档位（ack / answer / deep / mr），agent 任务是 task */
+		tier: text("tier"),
+		/** 实际用的模型；额度用完换了备用模型的记备用模型。补录的老数据为空 */
+		model: text("model"),
+		request: text("request"),
+		label: text("label"),
+		seconds: real("seconds"),
+		ok: integer("ok", { mode: "boolean" }).notNull().default(true),
+		input: integer("input").notNull().default(0),
+		output: integer("output").notNull().default(0),
+		cacheRead: integer("cache_read").notNull().default(0),
+		cost: real("cost").notNull().default(0),
+	},
+	(t) => [index("runs_ts").on(t.ts)],
+);

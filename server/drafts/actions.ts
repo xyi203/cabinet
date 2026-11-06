@@ -80,6 +80,7 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 						cwd: DEFAULT_CWD,
 						sessionId: d.session,
 						requestId: `revise:${id}`,
+						tier: "rewrite",
 						// 附上原文和当前草稿，不依赖会话里还留着上一版（会话可能被压缩）
 						prompt: `${context ? `相关前文：\n${context}\n\n` : ""}需要回复的消息：\n${d.text}\n\n当前草稿：\n${describeReply(d.kind, d.draft)}\n\n${stickerHint()}\n\nYi 的修改意见：${arg}\n\n（当前草稿的 ID：draft:${id}）\n\n请按意见重写，只输出新的草稿。`,
 						extraSystem: [PATHS.draftRules],

@@ -369,6 +369,7 @@ function runStage(chat: ChatRef, stage: Stage, requestId: string) {
 		chatId: chat.chat_id,
 		lookup: true,
 		maxContext: SESSION_MAX_TOKENS,
+		tier,
 		memory: {
 			// 只有 @ 的消息意思在前文里，召回也带上最后一段前文
 			query: `${source.text}\n${(source.context ?? "").slice(-300)}`,

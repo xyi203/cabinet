@@ -1,3 +1,6 @@
+import { useEffect } from "react";
+import { toast } from "./Toast";
+
 export function Drawer({
 	title,
 	onClose,
@@ -27,8 +30,10 @@ export function Drawer({
 }
 
 export type Msg = { text: string; bad?: boolean } | null;
-export const MsgLine = ({ msg }: { msg: Msg }) => (
-	<div className="msg" style={{ color: msg?.bad ? "var(--bad)" : "var(--ok)" }}>
-		{msg?.text}
-	</div>
-);
+/** 操作结果：统一走右下角的全局提示条（ToastHost），不再在按钮旁边显示一行小字 */
+export function MsgLine({ msg }: { msg: Msg }) {
+	useEffect(() => {
+		if (msg?.text) toast(msg.text, msg.bad);
+	}, [msg]);
+	return null;
+}

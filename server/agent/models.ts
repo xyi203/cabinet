@@ -56,6 +56,12 @@ export function models(): MutableModels {
 	return (_models = m);
 }
 
+/** 直接调网关要用的地址和 key（额度探测读响应头，pi-ai 拿不到） */
+export function providerEndpoint(id: string): { baseUrl: string; apiKey: string } | undefined {
+	const p = JSON.parse(readFileSync(MODELS_JSON, "utf8")).providers?.[id];
+	return p?.baseUrl ? { baseUrl: String(p.baseUrl).replace(/\/$/, ""), apiKey: String(p.apiKey ?? "") } : undefined;
+}
+
 /** 测试用：换成假模型 */
 export const useModels = (m: MutableModels) => void (_models = m);
 

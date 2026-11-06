@@ -1,3 +1,29 @@
+/*
+ * Tailwind CSS 4：只引入 theme 和 utilities，不引入 preflight（基础样式重置），免得改动现有页面的默认样式。
+ * 下面手写的样式不在任何 layer 里，优先级高于 Tailwind 工具类：新页面用工具类，老页面逐步迁过来。
+ * 颜色沿用下方 :root 的变量（自动跟随暗色模式），写成 bg-panel、text-muted、border-line 这样。
+ */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@theme inline {
+	--color-bg: var(--bg);
+	--color-panel: var(--panel);
+	--color-text: var(--text);
+	--color-muted: var(--muted);
+	--color-line: var(--line);
+	--color-soft: var(--soft);
+	--color-accent: var(--accent);
+	--color-accent-soft: var(--accent-soft);
+	--color-ok: var(--ok);
+	--color-ok-soft: var(--ok-soft);
+	--color-warn: var(--warn);
+	--color-warn-soft: var(--warn-soft);
+	--color-bad: var(--bad);
+	--color-bad-soft: var(--bad-soft);
+}
+
 :root {
 	--bg: #f4f5f8;
 	--panel: #fff;
