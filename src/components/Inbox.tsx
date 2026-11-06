@@ -68,10 +68,12 @@ function ApprovalActions({ id, what }: { id: string; what: string }) {
 	);
 }
 
+/** 按钮区的点击不冒泡到整行（整行点击是打开抽屉） */
+const stop = (e: React.MouseEvent) => e.stopPropagation();
+
 /** 每一类就地能做的事；更复杂的（改写、指派）点开抽屉 */
 function QuickActions({ it, draft, onOpen }: { it: InboxItem; draft?: Draft; onOpen: () => void }) {
 	const { busy, act } = useAct();
-	const stop = (e: React.MouseEvent) => e.stopPropagation();
 	if (it.kind === "draft" && draft)
 		return (
 			<div className="flex shrink-0 gap-1.5" onClick={stop}>

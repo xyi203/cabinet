@@ -14,6 +14,7 @@ import { ApprovalError, decideApproval } from "./approvals.ts";
 import { lineage, recentLineage } from "./pipeline.ts";
 import { deleteSchedule, listSchedules, runNow, saveSchedule } from "./schedules.ts";
 import { RANGES, type Range, stats } from "./stats.ts";
+import { dispatchState } from "./dispatch.ts";
 import {
 	addStory,
 	bindTickets,
@@ -31,7 +32,7 @@ import { type Kind, listStickers, resolveSticker } from "./drafts/format.ts";
 import { DraftError, getDraft, LIVE } from "./drafts/store.ts";
 import { LarkError, authorizeUrl, exchangeCode, userAuthStatus } from "./lark/bot.ts";
 import { lastPoll } from "./poller.ts";
-import { conversationTranscript } from "./agent/driver.ts";
+import { abortRun, conversationTranscript, running } from "./agent/driver.ts";
 import { modelOptions } from "./agent/models.ts";
 import { closeTask, devDiff, discardDev, dispatch, getDevTask, listRepos, messageDev, pushDev, stopDev } from "./dev.ts";
 import { dismissTask, retryTask } from "./retry.ts";
@@ -141,6 +142,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		}
 		if (p === "/api/repos") return send(res, 200, { repos: listRepos() });
 		if (p === "/api/schedules") return send(res, 200, { items: listSchedules() });
+		if (p === "/api/dispatch") return send(res, 200, dispatchState());
 		if (p === "/api/stats") {
 			const range = url.searchParams.get("range") as Range | null;
 			return send(res, 200, stats(range && RANGES.includes(range) ? range : "today"));
@@ -259,6 +261,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			log("定时任务操作失败", p, e);
 			return send(res, 500, { error: String((e as Error).message).slice(0, 300) });
 		}
+	}
+	// 分发页的「停止」：agent 任务走 stopDev（记成按你的要求停止），其他运行直接中止（起草、问答会记成失败，可以重试）
+	if (p === "/api/runs/stop") {
+		const key = String(body.key ?? "");
+		if (!running.has(key)) return send(res, 409, { error: "这次运行已经结束了" });
+		const devId = /^dev-(dev-\d+)$/.exec(key)?.[1];
+		if (devId && getDevTask(devId)) await stopDev(devId);
+		else await abortRun(key);
+		return send(res, 200, { ok: true });
 	}
 	// 需求任务：从飞书同步、手动加飞书工单、推阶段、绑 / 解绑 / 刷新发布工单、派开发 / 查询 / 提发布工单
 	const storyM = /^\/api\/stories(?:\/(\d+)\/(stage|task|bind|unbind|doc|patrol|unpatrol))?(\/sync|\/tickets|\/add)?$/.exec(p);

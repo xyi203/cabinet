@@ -22,6 +22,9 @@ export function span(sec: number) {
 
 export const pct = (x: number) => `${Math.round(x * 100)}%`;
 
+/** 耗时：不到一分钟按秒，之后同 span */
+export const dur = (sec: number) => (sec < 60 ? `${Math.max(0, Math.round(sec))}s` : span(sec));
+
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
 	return <div className={`rounded-xl border border-line bg-panel ${className}`}>{children}</div>;
 }

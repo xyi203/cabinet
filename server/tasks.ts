@@ -85,8 +85,8 @@ const DEV_STATUS: Record<string, [string, string]> = {
 export function buildTasks(drafts: Draft[], records: RecordRow[]): Task[] {
 	const tasks: Task[] = [];
 	const t = now();
-	// 已结束的只看最近 24 小时，免得看板越堆越长
-	const recent = (ts: number) => ts >= t - 86400;
+	// 已结束的只看最近 7 天：任务页默认折叠已结束，可以搜；更早的去统计页看
+	const recent = (ts: number) => ts >= t - 7 * 86400;
 	const drafted = new Map(records.filter((r) => r.kind === "draft" && r.status === "drafted" && r.dm).map((r) => [r.dm!, r]));
 	const busy = new Map([...running].filter(([, r]) => r.chatId).map(([id, r]) => [r.chatId!, id]));
 

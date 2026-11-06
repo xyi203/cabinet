@@ -1,12 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
-import { AgentBoard } from "../components/AgentBoard";
-import { Board } from "../components/Board";
 import { DevDrawer } from "../components/DevDrawer";
 import { DraftDrawer, TaskDrawer } from "../components/Drawers";
 import { Inbox } from "../components/Inbox";
-import { DraftList, RecordList } from "../components/Lists";
+import { RecordList } from "../components/Lists";
+import { DispatchPage } from "../components/Dispatch";
+import { Schedules } from "../components/Schedules";
+import { TasksPage } from "../components/Tasks";
 import { MemoryBoard } from "../components/MemoryBoard";
 import { type DevTask, type Draft, type InboxItem, type Task, fetchState, post } from "../lib/api";
 import { isLive, money } from "../lib/format";
@@ -21,24 +22,26 @@ const TITLES = {
 	home: "概览",
 	todo: "待办",
 	stats: "统计",
-	tasks: "我的任务",
-	stories: "需求",
-	agents: "Agent",
-	drafts: "草稿",
 	qa: "对话",
+	dispatch: "分发",
 	failed: "失败",
+	stories: "需求",
+	tasks: "任务",
+	schedules: "定时任务",
 	memory: "记忆",
 } as const;
+/** 合并掉的旧页面：收藏的链接跳到新地方 */
+const ALIASES: Record<string, View> = { agents: "tasks", drafts: "tasks" };
 
 /** 悬停在导航上看到的说明：这个入口管什么 */
 const HINTS: Record<View, string> = {
 	home: "额度、今日消耗、等你处理的事和最近动态",
 	todo: "所有等你处理的事：审批、待确认草稿、失败、待看任务、有冲突的记忆",
 	stats: "消耗趋势（按小时 / 天），按 agent、档位、模型拆分，草稿结果分布",
-	tasks: "草稿、问答、agent 任务按进度排成的看板",
+	tasks: "草稿、问答、agent 任务合在一处：按来源筛、搜索、新建任务",
 	stories: "飞书工单（需求、缺陷）按开发 → 测试 → 发布推进，发布工单、观察文档、巡检",
-	agents: "agent 任务看板、新建任务、定时任务",
-	drafts: "替你起草的回复：待确认、已发、你自己回了的",
+	schedules: "到点派给 agent 的任务：周期提醒、发布工单巡检",
+	dispatch: "现在谁在跑、谁在排队、可疑的会话，最近每次分派去了哪、用了多久",
 	qa: "直接和助手聊天；私聊机器人的问答记录",
 	failed: "失败的起草和问答，可以重试或忽略",
 	memory: "长期记忆：约定和线索，确认、改分类、遗忘",
@@ -49,7 +52,7 @@ type View = keyof typeof TITLES;
 export const Route = createFileRoute("/")({
 	component: Dashboard,
 	validateSearch: (search: Record<string, unknown>): { view?: View } => ({
-		view: typeof search.view === "string" && search.view in TITLES ? (search.view as View) : undefined,
+		view: typeof search.view !== "string" ? undefined : search.view in TITLES ? (search.view as View) : ALIASES[search.view],
 	}),
 });
 
@@ -108,18 +111,13 @@ function Dashboard() {
 				<Nav current={view} v="todo" badge={inbox.length} hot={inboxNow > 0} />
 				<Nav current={view} v="stats" />
 				<div className="group">会话与消息</div>
-				<Nav current={view} v="drafts" />
 				<Nav current={view} v="qa" />
+				<Nav current={view} v="dispatch" badge={state ? state.running + state.inflight : undefined} hot={false} />
 				<Nav current={view} v="failed" badge={s?.failed ?? 0} />
 				<div className="group">自动化</div>
 				<Nav current={view} v="stories" badge={state?.stories?.filter((x) => x.stage !== "done" && x.stage !== "dropped").length ?? 0} />
 				<Nav current={view} v="tasks" badge={attn} hot={attn > 0} />
-				<Nav
-					current={view}
-					v="agents"
-					badge={state?.devTasks.filter((t) => t.status === "running" || t.status === "review").length ?? 0}
-					hot={state?.devTasks.some((t) => t.status === "review") ?? false}
-				/>
+				<Nav current={view} v="schedules" />
 				<div className="group">知识</div>
 				<Nav current={view} v="memory" />
 			</aside>
@@ -143,11 +141,11 @@ function Dashboard() {
 				{state && !state.auth.authorized && <AuthBanner />}
 				{state && view === "home" && <Overview state={state} onOpenInbox={openInbox} onOpenTask={openTask} />}
 				{view === "stats" && <StatsPage />}
-				{state && view === "tasks" && <Board state={state} onOpen={openTask} />}
+				{state && view === "tasks" && <TasksPage state={state} onOpen={openTask} onOpenDev={(id) => setOpen({ dev: id })} />}
+				{state && view === "dispatch" && <DispatchPage state={state} onOpenDev={(id) => setOpen({ dev: id })} />}
+				{state && view === "schedules" && <Schedules agents={state.agents} onOpen={(id) => setOpen({ dev: id })} />}
 				{state && view === "stories" && <StoryBoard state={state} onOpenDev={(id) => setOpen({ dev: id })} />}
-				{state && view === "agents" && <AgentBoard state={state} onOpen={(id) => setOpen({ dev: id })} />}
 				{state && view === "todo" && <Inbox items={inbox} drafts={state.drafts} now={state.now} onOpen={openInbox} />}
-				{state && view === "drafts" && <DraftList drafts={state.drafts} onOpen={openDraft} />}
 				{state && view === "qa" && (
 					<ChatPage chats={state.chats ?? []} records={state.records.filter((r) => r.kind !== "draft")} now={state.now} />
 				)}

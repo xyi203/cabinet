@@ -23,6 +23,14 @@ export class Semaphore {
 	constructor(n: number) {
 		this.#free = n;
 	}
+	/** 空闲名额 */
+	get free() {
+		return this.#free;
+	}
+	/** 排队等名额的 */
+	get waiting() {
+		return this.#queue.length;
+	}
 	async run<T>(fn: () => Promise<T>): Promise<T> {
 		if (this.#free > 0) this.#free--;
 		else await new Promise<void>((r) => this.#queue.push(r));

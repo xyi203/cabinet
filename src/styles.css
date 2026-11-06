@@ -859,42 +859,6 @@ pre.diff {
 	gap: 8px;
 	flex-wrap: wrap;
 }
-.agent-cards {
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-	gap: 10px;
-	margin-bottom: 14px;
-}
-.agent-card {
-	background: var(--panel);
-	border: 1px solid var(--line);
-	border-radius: 10px;
-	padding: 10px 12px;
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-}
-.agent-card .head {
-	display: flex;
-	justify-content: space-between;
-	align-items: center;
-}
-.agent-card .desc {
-	font-size: 12.5px;
-	color: var(--muted);
-	display: -webkit-box;
-	-webkit-line-clamp: 2;
-	-webkit-box-orient: vertical;
-	overflow: hidden;
-}
-.agent-card .stats {
-	font-size: 12.5px;
-	color: var(--muted);
-	margin-top: 2px;
-}
-.agent-card .stats b {
-	color: var(--text);
-}
 .newtask {
 	display: flex;
 	flex-direction: column;
@@ -931,40 +895,7 @@ pre.diff {
 .newtask select {
 	max-width: 100%;
 }
-/* 待你处理 */
-.inbox-group h2 {
-	font-size: 14px;
-	margin: 18px 0 8px;
-}
-.inbox-group h2 span {
-	color: var(--muted);
-	font-weight: 400;
-	margin-left: 4px;
-}
-.inbox-group h2 small {
-	color: var(--muted);
-	font-weight: 400;
-	font-size: 12px;
-	margin-left: 8px;
-}
-.inbox-group .tag {
-	border-radius: 5px;
-	padding: 0 6px;
-	font-size: 12px;
-	background: var(--soft);
-}
-.inbox-group .tag.draft {
-	background: var(--accent-soft);
-	color: var(--accent);
-}
-.inbox-group .tag.failed {
-	background: var(--bad-soft);
-	color: var(--bad);
-}
-.inbox-group .tag.dev {
-	background: var(--warn-soft);
-	color: var(--warn);
-}
+
 /* 定时任务 */
 .schedules {
 	margin-bottom: 12px;
@@ -1049,29 +980,6 @@ pre.diff {
 	max-height: 100%;
 	border-radius: 6px;
 	background: #fff;
-}
-
-.approval-what {
-	margin: 6px 0;
-	padding: 8px 10px;
-	background: var(--soft);
-	border-radius: 6px;
-	white-space: pre-wrap;
-	word-break: break-all;
-	font:
-		12px/1.5 ui-monospace,
-		Menlo,
-		monospace;
-}
-.approval-actions {
-	display: flex;
-	gap: 8px;
-	align-items: center;
-	flex-wrap: wrap;
-}
-.approval-actions input {
-	flex: 1;
-	min-width: 160px;
 }
 .tag.approval {
 	background: var(--warn-soft);

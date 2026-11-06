@@ -369,3 +369,33 @@ export interface Stats {
 	hitRate: number | null;
 }
 export const fetchStats = (range: StatsRange) => getJson<Stats>(`/api/stats?range=${range}`);
+
+export interface DispatchSuspect {
+	key: string;
+	title: string;
+	detail: string;
+	action?: { kind: "stop" | "retry" | "open"; ref: string };
+}
+export interface DispatchRoute {
+	id: number;
+	received: number | null;
+	routed: number;
+	settled: number | null;
+	channel: string;
+	actor: string;
+	text: string;
+	agent: string | null;
+	tier: string | null;
+	rule: string;
+	actionKind: string;
+	outcome: string | null;
+}
+export interface DispatchState {
+	now: number;
+	queue: { capacity: number; free: number; waiting: number };
+	running: Array<{ key: string; label: string; agent: string | null; chatId: string | null; started: number; suspicious: boolean }>;
+	inflight: Array<{ id: string; label: string; text: string; since: number }>;
+	suspects: DispatchSuspect[];
+	routes: DispatchRoute[];
+}
+export const fetchDispatch = () => getJson<DispatchState>("/api/dispatch");
