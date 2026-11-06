@@ -73,3 +73,6 @@ export const where = (d: { chatMode: string; chatName: string; senderName: strin
 		: d.chatMode === "meego"
 			? `飞书项目「${d.chatName}」· ${d.senderName} @你`
 			: `群「${d.chatName}」· ${d.senderName} @你`;
+
+/** 发布工单（GD-*）在发布系统里的详情页 */
+export const ticketUrl = (key: string) => `https://publish.shoplazza.site/issue-view?issueKey=${encodeURIComponent(key)}`;

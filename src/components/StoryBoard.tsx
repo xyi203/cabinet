@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { type DevTask, type State, type Story, fetchRepos, post } from "../lib/api";
-import { AGENT_NAME, ago } from "../lib/format";
+import { AGENT_NAME, ago, ticketUrl } from "../lib/format";
 import { Drawer, type Msg, MsgLine } from "./Drawer";
 
 /** 需求任务的四个阶段，加一个「不跟了」收起来 */
@@ -38,6 +38,19 @@ function StoryCard({ s, state, onOpen }: { s: Story; state: State; onOpen: (s: S
 		<div className="tcard" onClick={() => onOpen(s)}>
 			<div className="head">
 				<span className={`tag ${s.typeKey === "issue" ? "draft" : "dev"}`}>{TYPE_NAME[s.typeKey] ?? s.typeKey}</span>
+				{s.url && (
+					// 直接打开飞书工单，不弹抽屉
+					<a
+						href={s.url}
+						target="_blank"
+						rel="noreferrer"
+						onClick={(e) => e.stopPropagation()}
+						className="rounded px-1.5 text-[12px] text-accent no-underline hover:bg-accent-soft"
+						title="在新标签页打开飞书工单"
+					>
+						飞书 ↗
+					</a>
+				)}
 			</div>
 			<div className="t">{s.title}</div>
 			<div className="foot2">
@@ -271,12 +284,21 @@ function StoryDrawer({
 				<span className="pill pending">{STAGE_NAME[s.stage] ?? s.stage}</span>
 				{s.url && (
 					<a href={s.url} target="_blank" rel="noreferrer">
-						打开飞书工单
+						在飞书打开 ↗
 					</a>
 				)}
+				<span className="text-[12px] text-muted">ID {s.id}</span>
 			</div>
 			<div className="label">{TYPE_NAME[s.typeKey] ?? "工单"}</div>
-			<blockquote>{s.title}</blockquote>
+			<blockquote>
+				{s.url ? (
+					<a href={s.url} target="_blank" rel="noreferrer" className="text-text no-underline hover:underline" title="在飞书打开">
+						{s.title}
+					</a>
+				) : (
+					s.title
+				)}
+			</blockquote>
 			<div className="label">阶段（以这边为准，不看也不改飞书项目的节点）</div>
 			<div className="row-inline">
 				{[...STAGES, ["dropped", "不跟了"] as [string, string]].map(([k, name]) => (
@@ -317,7 +339,15 @@ function StoryDrawer({
 						return (
 							<div key={t.key} className="story-ticket">
 								<div className="story-item" title={`来源：${SOURCE_NAME[t.source ?? "auto"]}`}>
-									<span className="tag dev">{t.key}</span>
+									<a
+										href={ticketUrl(t.key)}
+										target="_blank"
+										rel="noreferrer"
+										className="tag dev no-underline hover:underline"
+										title="在发布系统打开这张工单"
+									>
+										{t.key} ↗
+									</a>
 									<span className="t">{t.title || "（标题待刷新）"}</span>
 									<span className="m">
 										{t.status || "—"} · {SOURCE_NAME[t.source ?? "auto"]}
