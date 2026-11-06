@@ -35,6 +35,7 @@ import { record } from "../records.ts";
 import { abortRun, forgetRun, hasRun, runKeyFor, runPi, running } from "../agent/driver.ts";
 import { isStopping, log, now } from "../util.ts";
 import { locks, sem } from "../agent/slots.ts";
+import { audienceBlock } from "../audience.ts";
 import { contextBlock, gatherContext } from "./context.ts";
 import { where as whereOf } from "./card.ts";
 import { notifyFailure } from "./failure.ts";
@@ -317,7 +318,9 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			const ids = `（这条消息的 ID：${triggerIds.at(-1)}；所在事件流：thread:${thread}${refsOf(source.text)
 				.map((r) => `；提到 ${r}`)
 				.join("")}）`;
-			const prompt = `[代回复草稿] ${where}，来自 ${source.senderName}\n\n${ctx}${extra}\n\n${hint}\n\n${ids}\n\n请按草稿规则起草 Yi 的回复。`;
+			// Yi 在受众页给这个人 / 这个群设的口径
+			const aud = audienceBlock(source.senderId, chat.chat_mode === "group" ? chat.chat_id : undefined);
+			const prompt = `[代回复草稿] ${where}，来自 ${source.senderName}\n\n${aud ? `${aud}\n\n` : ""}${ctx}${extra}\n\n${hint}\n\n${ids}\n\n请按草稿规则起草 Yi 的回复。`;
 			// 截图常常就是问题本身：存到本地，把路径给 agent 用 read 查看；chat 没有工具、只回表情，不用看
 			const stage: Stage = {
 				source: { ...source },

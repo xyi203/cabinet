@@ -399,3 +399,56 @@ export interface DispatchState {
 	routes: DispatchRoute[];
 }
 export const fetchDispatch = () => getJson<DispatchState>("/api/dispatch");
+
+export interface PromptFile {
+	path: string;
+	name: string;
+	usedBy: string;
+	json: boolean;
+	updated: number;
+	dirty: boolean;
+}
+export const fetchPrompts = () => getJson<{ items: PromptFile[] }>("/api/prompts").then((d) => d.items);
+export const fetchPrompt = (path: string) =>
+	getJson<{ content: string; head: string | null }>(`/api/prompts/file?path=${encodeURIComponent(path)}`);
+export const fetchPromptHistory = (path: string) =>
+	getJson<{ items: Array<{ rev: string; at: number; subject: string }> }>(`/api/prompts/history?path=${encodeURIComponent(path)}`).then(
+		(d) => d.items,
+	);
+export const fetchPromptVersion = (path: string, rev: string) =>
+	getJson<{ content: string }>(`/api/prompts/version?path=${encodeURIComponent(path)}&rev=${rev}`).then((d) => d.content);
+
+export interface SkillView {
+	name: string;
+	desc: string;
+	broken: boolean;
+	hidden: boolean;
+	agents: string[];
+	rules: Array<{ name: string; read: string[]; write: string[]; deny: string[] }>;
+}
+export const fetchSkills = () => getJson<{ items: SkillView[] }>("/api/skills").then((d) => d.items);
+export const fetchSkillDoc = (name: string) =>
+	getJson<{ text: string }>(`/api/skills/doc?name=${encodeURIComponent(name)}`).then((d) => d.text);
+
+export type AudienceLevel = "trusted" | "normal" | "careful";
+export interface Audience {
+	id: string;
+	kind: "person" | "chat";
+	name: string;
+	level: AudienceLevel;
+	note: string;
+	updated: number;
+}
+export interface AudienceData {
+	items: Audience[];
+	candidates: Array<{ id: string; kind: "person" | "chat"; name: string; n: number }>;
+	levels: Record<AudienceLevel, { name: string; prompt: string }>;
+}
+export const fetchAudience = () => getJson<AudienceData>("/api/audience");
+
+export interface Journal {
+	date: string;
+	markdown: string;
+	summary: { text: string; at: number; model: string } | null;
+}
+export const fetchJournal = (date: string) => getJson<Journal>(`/api/journal?date=${date}`);

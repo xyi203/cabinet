@@ -45,6 +45,7 @@ import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import { openTursoDurable } from "../db/turso.ts";
 import type { Usage } from "../db/schema.ts";
 import { Guard, mcpToolName } from "./guard.ts";
+import { hiddenSkills } from "../skills.ts";
 import { closeMcp, loadServers, mcpNamespaces, mcpTools } from "./mcp.ts";
 import { QUOTA_RE, isStopping, log, now } from "../util.ts";
 import { models, resolveModel, textOf } from "./models.ts";
@@ -404,11 +405,12 @@ async function usageNow(h: Harness, convId: Conversation["id"]) {
 }
 
 /** skills: "*" 展开成 SKILLS_DIR 下全部有 SKILL.md 的目录 */
-export function expandSkills(skills: AgentConfig["skills"], dir = SKILLS_DIR): string[] {
+export function expandSkills(skills: AgentConfig["skills"], dir = SKILLS_DIR, hidden: Set<string> = new Set()): string[] {
 	if (skills !== "*") return skills ?? [];
+	// hidden：技能页里隐藏的不给 agent（系统提示里不列，也不放进可读目录）；显式列名字的照给
 	try {
 		return readdirSync(dir)
-			.filter((s) => existsSync(path.join(dir, s, "SKILL.md")))
+			.filter((s) => !hidden.has(s) && existsSync(path.join(dir, s, "SKILL.md")))
 			.toSorted();
 	} catch {
 		return [];
@@ -485,7 +487,7 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 			submission = resumed;
 			record = rec;
 		} else {
-			const skills = toolNames.includes("read") ? expandSkills(agent.skills) : [];
+			const skills = toolNames.includes("read") ? expandSkills(agent.skills, SKILLS_DIR, hiddenSkills()) : [];
 			// agent 用到的 skill 目录也要能读，否则连 SKILL.md 都打不开
 			// 消息里的截图存在 PATHS.images，agent 用 read 打开
 			const roots = [...READ_ROOTS, PATHS.images, ...skills.map((s) => path.join(SKILLS_DIR, s))];

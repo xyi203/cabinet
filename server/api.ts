@@ -15,6 +15,10 @@ import { lineage, recentLineage } from "./pipeline.ts";
 import { deleteSchedule, listSchedules, runNow, saveSchedule } from "./schedules.ts";
 import { RANGES, type Range, stats } from "./stats.ts";
 import { dispatchState } from "./dispatch.ts";
+import { listPrompts, promptHistory, promptVersion, readPrompt, savePrompt } from "./prompts.ts";
+import { listSkills, readSkill, setSkillHidden } from "./skills.ts";
+import { LEVELS, audienceCandidates, listAudience, removeAudience, saveAudience } from "./audience.ts";
+import { generateJournal, journal } from "./journal.ts";
 import {
 	addStory,
 	bindTickets,
@@ -143,6 +147,20 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		if (p === "/api/repos") return send(res, 200, { repos: listRepos() });
 		if (p === "/api/schedules") return send(res, 200, { items: listSchedules() });
 		if (p === "/api/dispatch") return send(res, 200, dispatchState());
+		// 第三期：提示词、技能、受众、日报（只读的部分）
+		const qp = (k: string) => url.searchParams.get(k) ?? "";
+		try {
+			if (p === "/api/prompts") return send(res, 200, { items: await listPrompts() });
+			if (p === "/api/prompts/file") return send(res, 200, await readPrompt(qp("path")));
+			if (p === "/api/prompts/history") return send(res, 200, { items: await promptHistory(qp("path")) });
+			if (p === "/api/prompts/version") return send(res, 200, { content: await promptVersion(qp("path"), qp("rev")) });
+			if (p === "/api/skills") return send(res, 200, { items: listSkills() });
+			if (p === "/api/skills/doc") return send(res, 200, { text: readSkill(qp("name")) });
+			if (p === "/api/audience") return send(res, 200, { items: listAudience(), candidates: audienceCandidates(), levels: LEVELS });
+			if (p === "/api/journal") return send(res, 200, journal(qp("date") || new Date().toLocaleDateString("sv-SE")));
+		} catch (e) {
+			return send(res, e instanceof DraftError ? 409 : 500, { error: String((e as Error).message).slice(0, 300) });
+		}
 		if (p === "/api/stats") {
 			const range = url.searchParams.get("range") as Range | null;
 			return send(res, 200, stats(range && RANGES.includes(range) ? range : "today"));
@@ -260,6 +278,19 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			if (e instanceof DraftError) return send(res, 409, { error: e.message });
 			log("定时任务操作失败", p, e);
 			return send(res, 500, { error: String((e as Error).message).slice(0, 300) });
+		}
+	}
+	// 第三期的写操作：保存提示词、隐藏 skill、受众增改删、生成日报总结
+	if (["/api/prompts/save", "/api/skills/hide", "/api/audience/save", "/api/audience/remove", "/api/journal/generate"].includes(p)) {
+		try {
+			if (p === "/api/prompts/save") savePrompt(String(body.path ?? ""), String(body.content ?? ""));
+			else if (p === "/api/skills/hide") setSkillHidden(String(body.name ?? ""), Boolean(body.hidden));
+			else if (p === "/api/audience/save") return send(res, 200, { ok: true, item: saveAudience({ ...body, id: String(body.id ?? "") }) });
+			else if (p === "/api/audience/remove") removeAudience(String(body.id ?? ""));
+			else return send(res, 200, { ok: true, summary: await generateJournal(String(body.date ?? "")) });
+			return send(res, 200, { ok: true });
+		} catch (e) {
+			return send(res, e instanceof DraftError ? 409 : 500, { error: String((e as Error).message).slice(0, 300) });
 		}
 	}
 	// 分发页的「停止」：agent 任务走 stopDev（记成按你的要求停止），其他运行直接中止（起草、问答会记成失败，可以重试）

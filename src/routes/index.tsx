@@ -8,6 +8,10 @@ import { RecordList } from "../components/Lists";
 import { DispatchPage } from "../components/Dispatch";
 import { Schedules } from "../components/Schedules";
 import { TasksPage } from "../components/Tasks";
+import { PromptsPage } from "../components/Prompts";
+import { SkillsPage } from "../components/Skills";
+import { AudiencePage } from "../components/Audience";
+import { JournalPage } from "../components/Journal";
 import { MemoryBoard } from "../components/MemoryBoard";
 import { type DevTask, type Draft, type InboxItem, type Task, fetchState, post } from "../lib/api";
 import { isLive, money } from "../lib/format";
@@ -24,11 +28,15 @@ const TITLES = {
 	stats: "统计",
 	qa: "对话",
 	dispatch: "分发",
+	audience: "受众",
 	failed: "失败",
 	stories: "需求",
 	tasks: "任务",
 	schedules: "定时任务",
+	prompts: "提示词",
 	memory: "记忆",
+	skills: "技能",
+	journal: "日报",
 } as const;
 /** 合并掉的旧页面：收藏的链接跳到新地方 */
 const ALIASES: Record<string, View> = { agents: "tasks", drafts: "tasks" };
@@ -45,6 +53,10 @@ const HINTS: Record<View, string> = {
 	qa: "直接和助手聊天；私聊机器人的问答记录",
 	failed: "失败的起草和问答，可以重试或忽略",
 	memory: "长期记忆：约定和线索，确认、改分类、遗忘",
+	audience: "给人或群设披露等级和处理说明，起草时按这个口径",
+	prompts: "给 agent 的规则和配置：编辑、和已提交的对比、看历史、回滚",
+	skills: "agent 能用哪些 skill、命令规则；用不上的可以隐藏",
+	journal: "每天的消息、草稿、任务、需求和消耗汇总，可以生成文字总结",
 };
 type View = keyof typeof TITLES;
 
@@ -113,13 +125,17 @@ function Dashboard() {
 				<div className="group">会话与消息</div>
 				<Nav current={view} v="qa" />
 				<Nav current={view} v="dispatch" badge={state ? state.running + state.inflight : undefined} hot={false} />
+				<Nav current={view} v="audience" />
 				<Nav current={view} v="failed" badge={s?.failed ?? 0} />
 				<div className="group">自动化</div>
 				<Nav current={view} v="stories" badge={state?.stories?.filter((x) => x.stage !== "done" && x.stage !== "dropped").length ?? 0} />
 				<Nav current={view} v="tasks" badge={attn} hot={attn > 0} />
 				<Nav current={view} v="schedules" />
+				<Nav current={view} v="prompts" />
 				<div className="group">知识</div>
 				<Nav current={view} v="memory" />
+				<Nav current={view} v="skills" />
+				<Nav current={view} v="journal" />
 			</aside>
 			<main>
 				<div className="top">
@@ -151,6 +167,10 @@ function Dashboard() {
 				)}
 				{state && view === "failed" && <RecordList records={state.records.filter((r) => r.status === "failed")} />}
 				{view === "memory" && <MemoryBoard />}
+				{view === "prompts" && <PromptsPage />}
+				{view === "skills" && <SkillsPage />}
+				{view === "audience" && <AudiencePage />}
+				{view === "journal" && <JournalPage />}
 			</main>
 			{open?.dev && state?.devTasks.find((x) => x.id === open.dev) ? (
 				<DevDrawer
