@@ -99,6 +99,13 @@
       "when": 1793870050656,
       "tag": "0013_wild_dagger",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1793936201756,
+      "tag": "0014_sharp_human_torch",
+      "breakpoints": true
     }
   ]
 }

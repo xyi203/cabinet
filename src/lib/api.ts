@@ -87,6 +87,15 @@ export interface StoryTicket {
 	title: string;
 	status: string;
 	url?: string;
+	/** auto 按工单里的飞书工单 ID 对上 / manual 手动绑 / created 从需求提的单 */
+	source?: "auto" | "manual" | "created";
+	/** 解绑了，不显示 */
+	removed?: boolean;
+	ended?: boolean;
+	/** 生成发布观察文档的助手任务 */
+	doc?: { taskId: string };
+	/** 巡检：stopped 有值就是停了 */
+	patrol?: { observeTaskId: string; scheduleId: string; started: number; stopped?: string };
 }
 
 /** 需求任务：一张飞书工单（需求 / 缺陷）的进度 */

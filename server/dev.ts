@@ -106,7 +106,12 @@ export interface DispatchInput {
 	title?: string;
 	/** 每轮结束都私聊 Yi（不是 Yi 在看板上派的活） */
 	notify?: boolean;
+	/** 发布工单巡检的一轮（见 dev_tasks.patrol） */
+	patrol?: boolean;
 }
+
+/** 巡检这一轮没发现异常时回复的第一行：看到它就直接归档、不私聊 */
+export const PATROL_OK = "本轮巡查正常";
 
 /** 校验新建时选的模型和思考强度 */
 function checkModel(model?: string, thinking?: string) {
@@ -204,6 +209,7 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 			notify: Boolean(input.notify),
 			chat: Boolean(input.chat),
 			storyId: input.storyId ?? null,
+			patrol: Boolean(input.patrol),
 		};
 		db().insert(schema.devTasks).values(task).run();
 		changed();
@@ -257,6 +263,7 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 		notify: Boolean(input.notify),
 		chat: false,
 		storyId: input.storyId ?? null,
+		patrol: false,
 	};
 	db().insert(schema.devTasks).values(task).run();
 	changed();
@@ -299,7 +306,13 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 	const raw = loadAgents().agents[LEGACY_TIER[task.agent] ? ASSISTANT : task.agent];
 	// agent 任务按 deep 档跑；新建时选的模型和思考强度覆盖配置，之后每一轮都沿用
 	const base = raw && withTier(raw, TASK_TIER);
-	const agent = base && { ...base, ...(task.model ? { model: task.model } : {}), ...(task.thinking ? { thinking: task.thinking } : {}) };
+	const agent = base && {
+		...base,
+		...(task.model ? { model: task.model } : {}),
+		...(task.thinking ? { thinking: task.thinking } : {}),
+		// 巡检一天几十轮：额度用完这轮就失败、下轮再跑，不去占备用模型（codex）的额度
+		...(task.patrol ? { fallbackModel: "" } : {}),
+	};
 	const dev = isDev(task);
 	const where = task.repo ? `仓库 \`${path.basename(task.repo)}\`（当前目录）` : `\`${DEFAULT_CWD}\`（各仓库都在这下面）`;
 	const images = opinion ? "" : await taskImages(task).catch(() => "");
@@ -358,9 +371,11 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 					cost: prev.cost + usage.cost,
 				}
 			: usage;
-		update(id, { status: "review", summary: text, session: sessionId, usage: total });
+		// 巡检没发现异常：直接归档，不进「待你处理」也不私聊（一天几十轮）
+		const quiet = task.patrol && text.trimStart().startsWith(PATROL_OK);
+		update(id, { status: quiet ? "done" : "review", summary: text, session: sessionId, usage: total });
 		// 对话页的聊天 Yi 就在看板上看着，不私聊卡片
-		if (!task.chat && (dev || base?.notify || task.notify || now() - started > 60)) void notify(id, `第 ${run} 轮完成`, text);
+		if (!quiet && !task.chat && (dev || base?.notify || task.notify || now() - started > 60)) void notify(id, `第 ${run} 轮完成`, text);
 	} catch (e) {
 		if (isStopping()) interrupted = true;
 		else if (stoppedByYi.delete(id)) update(id, { status: "review", error: "已按你的要求停止" });

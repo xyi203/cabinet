@@ -1242,3 +1242,51 @@ dialog.confirm::backdrop {
 	color: var(--muted);
 	white-space: nowrap;
 }
+.story-item .linkbtn {
+	white-space: nowrap;
+}
+.story-ticket .story-item {
+	border-radius: 6px 6px 0 0;
+	cursor: default;
+}
+.story-ticket-ops {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px 4px;
+	padding: 4px 8px;
+	border: 1px solid var(--line);
+	border-top: 0;
+	border-radius: 0 0 6px 6px;
+	font-size: 12px;
+	color: var(--muted);
+}
+.story-ticket-ops a {
+	color: var(--accent);
+	padding-left: 6px;
+}
+.story-ticket-ops .sep {
+	margin-left: 12px;
+}
+.story-ticket-ops .muted {
+	padding-left: 6px;
+}
+.story-bind {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+.story-bind input {
+	flex: 1;
+	min-width: 0;
+}
+.filters .story-add {
+	font: inherit;
+	color: var(--text);
+	background: var(--bg);
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	padding: 4px 12px;
+	width: 220px;
+	max-width: 100%;
+}

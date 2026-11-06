@@ -16,6 +16,7 @@ import { messageDev } from "./dev.ts";
 import { applyDraftAction } from "./drafts/actions.ts";
 import { queuePatch, sendCardToUserAsBot } from "./lark/bot.ts";
 import { CronError, nextRun, parseCron, saveSchedule } from "./schedules.ts";
+import { ticketsCreated } from "./stories.ts";
 import { execFile } from "node:child_process";
 import { log, now } from "./util.ts";
 
@@ -288,6 +289,7 @@ export async function decideApproval(id: string, action: "approve" | "reject", w
 		db().update(schema.approvals).set({ status, result }).where(eq(schema.approvals.id, id)).run();
 		log("审批执行", id, status);
 		sync(id);
+		if (status === "done") ticketsCreated(a.tool, a.devTaskId, result);
 		await followUp(
 			a,
 			status === "done"

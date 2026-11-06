@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 const { openDb, useDb } = await import("../server/db/index.ts");
 useDb(openDb(":memory:"));
-const { CronError, nextRun, parseCron, saveSchedule, listSchedules, deleteSchedule } = await import("../server/schedules.ts");
+const { CronError, nextRun, parseCron, saveSchedule, listSchedules, deleteSchedule, due } = await import("../server/schedules.ts");
 const { DraftError } = await import("../server/drafts/store.ts");
 
 const at = (s: string) => new Date(s).getTime() / 1000;
@@ -41,4 +41,28 @@ test("定时任务：校验 cron、agent 和内容，停用后没有下次", () 
 	assert.equal(listSchedules().length, 1);
 	deleteSchedule(s.id);
 	assert.equal(listSchedules().length, 0);
+});
+
+test("巡检定时任务：记下模型和到期时间，过期后到点不跑、直接停用", async () => {
+	const s = saveSchedule({
+		name: "巡检 GD-1",
+		cron: "*/30 * * * *",
+		agent: "assistant",
+		prompt: "巡检",
+		model: "claude/claude-sonnet-5-5",
+		until: Date.now() / 1000 - 1,
+		patrol: true,
+	});
+	assert.equal(s.model, "claude/claude-sonnet-5-5");
+	assert.equal(s.patrol, true);
+	// 改名不带这些字段时保留原值
+	assert.equal(
+		saveSchedule({ id: s.id, name: "巡检 GD-1 改", cron: s.cron, agent: "assistant", prompt: "巡检" }).model,
+		"claude/claude-sonnet-5-5",
+	);
+	await due((s.nextRun ?? 0) + 1);
+	const after = listSchedules().find((x) => x.id === s.id)!;
+	assert.equal(after.enabled, false);
+	assert.equal(after.nextRun, null);
+	assert.equal(after.lastTask, null);
 });

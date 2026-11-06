@@ -44,6 +44,10 @@ export const SESSION_MAX_TOKENS = Number(env("SESSION_MAX_TOKENS", "50000"));
 // Yi 正在会话里聊（触发消息前 YI_ACTIVE_WINDOW 秒内说过话）时先等 YI_ACTIVE_DELAY 秒再起草：多半他自己就回了。0 = 不等
 export const YI_ACTIVE_WINDOW = Number(env("YI_ACTIVE_WINDOW", "300"));
 export const YI_ACTIVE_DELAY = Number(env("YI_ACTIVE_DELAY", "90"));
+// 发布工单巡检：首次观察用 agent 默认模型（Opus），之后每轮用便宜些的模型、每轮新会话；最多巡检这么多天
+export const PATROL_MODEL = env("PATROL_MODEL", "claude/claude-sonnet-5-5");
+export const PATROL_CRON = env("PATROL_CRON", "*/30 * * * *");
+export const PATROL_DAYS = Number(env("PATROL_DAYS", "3"));
 
 export const DRAFT_ENABLED = env("DRAFT_ENABLED", "1") === "1";
 export const POLL_INTERVAL = Number(env("POLL_INTERVAL", "30"));
@@ -76,7 +80,8 @@ export const OAUTH_REDIRECT = env("OAUTH_REDIRECT", "http://127.0.0.1:9768/callb
 export const MEEGO_ENABLED = env("MEEGO_ENABLED", "1") === "1";
 export const MEEGO_CHAT = env("MEEGO_CHAT");
 
-export const SKILLS_DIR = expand(env("SKILLS_DIR", "~/.pi/agent/skills"));
+// ~/.agents/skills 是维护中的那份；~/.pi/agent/skills 只是指过去的软链接，已有不少失效
+export const SKILLS_DIR = expand(env("SKILLS_DIR", "~/.agents/skills"));
 // MCP server 定义，沿用 pi 的 mcp.json；agent 在 agents.json 的 mcp 里选用（server/agent/mcp.ts）
 export const MCP_CONFIG = expand(env("MCP_CONFIG", "~/.pi/agent/mcp.json"));
 

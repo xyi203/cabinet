@@ -13,7 +13,18 @@ import { applyDraftAction } from "./drafts/actions.ts";
 import { ApprovalError, decideApproval } from "./approvals.ts";
 import { lineage, recentLineage } from "./pipeline.ts";
 import { deleteSchedule, listSchedules, runNow, saveSchedule } from "./schedules.ts";
-import { refreshTickets, setStage, storyTask, syncStories } from "./stories.ts";
+import {
+	addStory,
+	bindTickets,
+	refreshTickets,
+	setStage,
+	startDoc,
+	startPatrol,
+	stopPatrol,
+	storyTask,
+	syncStories,
+	unbindTicket,
+} from "./stories.ts";
 import { applyMrAction, type MrAction } from "./drafts/mr.ts";
 import { type Kind, listStickers, resolveSticker } from "./drafts/format.ts";
 import { DraftError, getDraft, LIVE } from "./drafts/store.ts";
@@ -244,14 +255,26 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			return send(res, 500, { error: String((e as Error).message).slice(0, 300) });
 		}
 	}
-	// 需求任务：从飞书同步、推阶段、刷新发布工单、派开发 / 查询 / 提发布工单
-	const storyM = /^\/api\/stories(?:\/(\d+)\/(stage|task))?(\/sync|\/tickets)?$/.exec(p);
+	// 需求任务：从飞书同步、手动加飞书工单、推阶段、绑 / 解绑 / 刷新发布工单、派开发 / 查询 / 提发布工单
+	const storyM = /^\/api\/stories(?:\/(\d+)\/(stage|task|bind|unbind|doc|patrol|unpatrol))?(\/sync|\/tickets|\/add)?$/.exec(p);
 	if (storyM) {
 		try {
 			const [, sid, action, all] = storyM;
 			if (all === "/sync") return send(res, 200, { ok: true, added: await syncStories() });
 			if (all === "/tickets") {
 				await refreshTickets();
+				return send(res, 200, { ok: true });
+			}
+			if (all === "/add") return send(res, 200, { ok: true, story: await addStory(String(body.text ?? "")) });
+			if (action === "bind") return send(res, 200, { ok: true, ...(await bindTickets(sid, String(body.text ?? ""))) });
+			if (action === "unbind") {
+				unbindTicket(sid, String(body.key ?? ""));
+				return send(res, 200, { ok: true });
+			}
+			if (action === "doc") return send(res, 200, { ok: true, task: await startDoc(sid, String(body.key ?? "")) });
+			if (action === "patrol") return send(res, 200, { ok: true, ...(await startPatrol(sid, String(body.key ?? ""))) });
+			if (action === "unpatrol") {
+				stopPatrol(sid, String(body.key ?? ""));
 				return send(res, 200, { ok: true });
 			}
 			if (action === "stage") {

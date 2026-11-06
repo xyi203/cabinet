@@ -90,6 +90,11 @@ export interface ScheduleInput {
 	agent: string;
 	prompt: string;
 	enabled?: boolean;
+	model?: string | null;
+	thinking?: string | null;
+	/** 过了这个时间自动停用 */
+	until?: number | null;
+	patrol?: boolean;
 }
 
 /** 新建或修改；校验 cron、agent（只能是只读 agent）和内容 */
@@ -122,6 +127,10 @@ export function saveSchedule(input: ScheduleInput): Schedule {
 		nextRun: next,
 		lastRun: old?.lastRun ?? null,
 		lastTask: old?.lastTask ?? null,
+		model: input.model ?? old?.model ?? null,
+		thinking: input.thinking ?? old?.thinking ?? null,
+		until: input.until !== undefined ? input.until : (old?.until ?? null),
+		patrol: input.patrol ?? old?.patrol ?? false,
 		created: old?.created ?? t,
 		updated: t,
 	};
@@ -171,6 +180,9 @@ export async function fire(s: Schedule, at = now(), manual = false): Promise<str
 		triggers: [tid],
 		rule: `定时任务：${s.name}`,
 		notify: true,
+		model: s.model ?? undefined,
+		thinking: s.thinking ?? undefined,
+		patrol: s.patrol,
 	});
 	db().update(schema.schedules).set({ lastRun: at, lastTask: task.id, updated: now() }).where(eq(schema.schedules.id, s.id)).run();
 	changed();
@@ -190,6 +202,12 @@ export async function runNow(id: string) {
 export async function due(t = now()) {
 	for (const s of listSchedules()) {
 		if (!s.enabled || s.nextRun == null || s.nextRun > t) continue;
+		if (s.until != null && t > s.until) {
+			db().update(schema.schedules).set({ enabled: false, nextRun: null, updated: t }).where(eq(schema.schedules.id, s.id)).run();
+			log("定时任务到期，停用", s.id, s.name);
+			changed();
+			continue;
+		}
 		let next: number | null = null;
 		try {
 			next = nextRun(s.cron, t) ?? null;

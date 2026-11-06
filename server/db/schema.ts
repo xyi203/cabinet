@@ -216,6 +216,8 @@ export const devTasks = sqliteTable("dev_tasks", {
 	chat: integer("chat", { mode: "boolean" }).notNull().default(false),
 	/** 从哪个需求任务（飞书工单）派出来的 */
 	storyId: text("story_id"),
+	/** 发布工单巡检的一轮：本轮正常就直接归档、不私聊；额度用完不换备用模型 */
+	patrol: integer("patrol", { mode: "boolean" }).notNull().default(false),
 });
 
 /**
@@ -232,7 +234,7 @@ export const stories = sqliteTable("stories", {
 	url: text("url").notNull().default(""),
 	/** dev 开发中 / test 测试中 / release 发布中 / done 发布完成 / dropped 不跟了 */
 	stage: text("stage").notNull().default("dev"),
-	/** 关联的发布工单（GD-*）：key、标题、状态，刷新时从 devops 取 */
+	/** 关联的发布工单（GD-*）：手动绑、提单后挂、按工单里的飞书工单 ID 对上；标题和状态刷新时从 devops 取 */
 	tickets: text("tickets", { mode: "json" }).$type<StoryTicket[]>().notNull().default([]),
 	note: text("note").notNull().default(""),
 	created: real("created").notNull(),
@@ -244,6 +246,16 @@ export interface StoryTicket {
 	title: string;
 	status: string;
 	url?: string;
+	/** auto 按工单里的飞书工单 ID 对上 / manual Yi 手动绑 / created 从需求提的单；老数据没有，当 auto */
+	source?: "auto" | "manual" | "created";
+	/** Yi 解绑了：留着记录，刷新时不再自动挂回来 */
+	removed?: boolean;
+	/** 工单走完流程或终止了，刷新不再查 */
+	ended?: boolean;
+	/** 生成发布观察文档的那个助手任务（文档链接在任务结论里） */
+	doc?: { taskId: string };
+	/** 巡检：首次观察任务 + 每 30 分钟一轮的定时任务；stopped 写了停止原因就是停了 */
+	patrol?: { observeTaskId: string; scheduleId: string; started: number; stopped?: string };
 }
 
 /** 定时任务（借鉴 multica 的 Autopilots）：到点交给一个只读 agent 跑一次，结论私聊给 Yi */
@@ -259,6 +271,13 @@ export const schedules = sqliteTable("schedules", {
 	lastRun: real("last_run"),
 	/** 最近一次跑出来的 agent 任务 */
 	lastTask: text("last_task"),
+	/** 跑这个任务用的模型和思考强度，为空用 agent 配置 */
+	model: text("model"),
+	thinking: text("thinking"),
+	/** 过了这个时间（unix 秒）自动停用 */
+	until: real("until"),
+	/** 发布工单巡检：派出的任务按巡检处理（见 dev_tasks.patrol） */
+	patrol: integer("patrol", { mode: "boolean" }).notNull().default(false),
 	created: real("created").notNull(),
 	updated: real("updated").notNull(),
 });
