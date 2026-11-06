@@ -48,6 +48,8 @@ export interface Inflight {
 	label: string;
 	text: string;
 	since: number;
+	/** Yi 正在这个聊天里聊，等到这个时间再起草（见 make.ts waitIfYiActive）；看板上可以点「立即起草」跳过 */
+	waitUntil?: number;
 }
 export const inflight = new Map<string, Inflight>();
 

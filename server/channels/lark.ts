@@ -2,12 +2,12 @@
 // 人发的起草代回复，机器人 @Yi 的当告警攒批；草稿以 Yi 的身份发回原会话。
 import path from "node:path";
 import { addAlert, batching, isAlert } from "../alerts.ts";
-import { ALERT_ENABLED, DRAFT_ENABLED, DRAFT_SKIP_CHATS, OWNER_OPEN_ID, PATHS, POLL_TOP_N } from "../config.ts";
+import { ALERT_ENABLED, DRAFT_ENABLED, DRAFT_SKIP_CHATS, OWNER_OPEN_ID, PATHS, POLL_HOT_N, POLL_INTERVAL, POLL_TOP_N } from "../config.ts";
 import type { Draft } from "../db/schema.ts";
 import { resolveSticker } from "../drafts/format.ts";
 import { asksYi } from "../drafts/context.ts";
 import { abortIfYiReplied, makeDraft } from "../drafts/make.ts";
-import { expireDrafts } from "../drafts/replied.ts";
+import { expireDrafts, expireReactedDrafts } from "../drafts/replied.ts";
 import { type ChatRef, DraftError, inflight } from "../drafts/store.ts";
 import { isHandled, markHandled } from "../handled.ts";
 import { listChats, listMessages, reactAsUser, sendImageAsUser, sendTextAsUser } from "../lark/bot.ts";
@@ -17,14 +17,26 @@ import type { Channel } from "./index.ts";
 
 const startDraft = (chat: ChatRef, msgs: Message[]) => void makeDraft(chat, msgs, markHandled);
 
-async function poll(since: number) {
-	// 时间只按秒过滤，往前多取 2 分钟，靠 message_id 去重
-	const start = since - 120;
-	for (const chat of await listChats(POLL_TOP_N)) {
-		if (DRAFT_SKIP_CHATS.has(chat.chat_id) || chat.p2p_target_type === "bot") continue;
+/** 每个会话上一次成功拉消息开始的时间：后排的会话隔 POLL_INTERVAL 才拉，从这里接着拉 */
+const fetchedAt = new Map<string, number>();
+let reactionsCheckedAt = 0;
+
+/**
+ * 分层：会话列表按最近活跃排序，每轮都拉；前 POLL_HOT_N 个会话每轮拉消息（正在聊的一般都在这里），
+ * 后面的隔 POLL_INTERVAL 秒拉一次。新消息会把会话顶到前排，下一轮就按快的拉
+ */
+async function poll(since: number, full: boolean) {
+	const started = now();
+	const chats = (await listChats(POLL_TOP_N)).filter((c) => !DRAFT_SKIP_CHATS.has(c.chat_id) && c.p2p_target_type !== "bot");
+	for (const [rank, chat] of chats.entries()) {
+		const last = fetchedAt.get(chat.chat_id);
+		if (!full && rank >= POLL_HOT_N && last && started - last < POLL_INTERVAL) continue;
+		// 时间只按秒过滤，往前多取 2 分钟，靠 message_id 去重；后排会话从它上次拉到的地方接着拉
+		const start = Math.min(since, last ?? since) - 120;
 		let msgs: Message[];
 		try {
 			msgs = await listMessages({ chatId: chat.chat_id }, { start, order: "asc" });
+			fetchedAt.set(chat.chat_id, started);
 		} catch (e) {
 			log("轮询会话失败", chat.chat_id, e);
 			continue;
@@ -66,6 +78,11 @@ async function poll(since: number) {
 			startDraft(chat, fresh);
 		}
 	}
+	// 表情回复要逐条查，不跟着快速轮次跑
+	if (full || started - reactionsCheckedAt >= POLL_INTERVAL) {
+		reactionsCheckedAt = started;
+		await expireReactedDrafts().catch((e) => log("检查表情回复失败", e));
+	}
 }
 
 /** 以 Yi 的身份回复：表情回复加在对方那条消息上；群里 @ 回对方 */
@@ -87,5 +104,6 @@ export const larkChannel: Channel = {
 	desc: "飞书私聊和群里 @Yi（用户身份轮询）",
 	enabled: () => DRAFT_ENABLED,
 	poll,
+	fast: true,
 	send,
 };

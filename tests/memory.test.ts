@@ -415,3 +415,32 @@ test("原样发出、没有工具结果的草稿学不到东西，不调模型",
 	assert.equal(faux.state.callCount, calls);
 	assert.ok(embedCalls > 0);
 });
+
+test("裁定冲突：合并成 Yi 写定的文字，依据合并，另一条转为已取代", () => {
+	const a = store.rememberFromYi("站会纪要发群里", { kind: "preference", application: "reference", appliesWhen: "" }, yi("站会纪要发群里"), "test", true);
+	const b = store.rememberFromYi("站会纪要私发给我", { kind: "preference", application: "reference", appliesWhen: "" }, yi("站会纪要私发给我"), "test", true);
+	// 造一对互相冲突的
+	const set = (id: number, other: number) => {
+		const m = store.getMemory(id)!;
+		db().transaction((tx) => store.updateMemory(tx, id, { state: "contested", conflicts: [other] }));
+		return m;
+	};
+	set(a.id, b.id);
+	set(b.id, a.id);
+	const ra = store.getMemory(a.id)!;
+	const rb = store.getMemory(b.id)!;
+	assert.throws(() => store.resolveMemories(a.id, [{ id: a.id, revision: ra.revision - 1 }, { id: b.id, revision: rb.revision }], "x"));
+	const r = store.resolveMemories(a.id, [ra, rb], "站会纪要发群里，同时私发给我一份");
+	assert.equal(r.state, "active");
+	assert.equal(r.content, "站会纪要发群里，同时私发给我一份");
+	assert.equal(r.confirmed, true);
+	assert.deepEqual(r.conflicts, []);
+	assert.ok(r.evidence.some((e) => e.quote === "站会纪要私发给我"));
+	const after = store.getMemory(b.id)!;
+	assert.equal(after.state, "superseded");
+	assert.equal(after.supersededBy, a.id);
+	// 改文字：算 Yi 的原话
+	const e = store.editMemory(r.id, r.revision, "站会纪要发群里，并私发给我");
+	assert.equal(e.content, "站会纪要发群里，并私发给我");
+	assert.equal(e.revision, r.revision + 1);
+});

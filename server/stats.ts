@@ -100,7 +100,9 @@ export function summarize(range: Range, rows: RunRow[], drafts: DraftRow[], t = 
 		}
 	}
 	const list = (m: Map<string, Group & { okRuns: number }>): Group[] =>
-		[...m.values()].map((g) => ({ name: g.name, runs: g.runs, failed: g.failed, cost: g.cost, tokens: g.tokens, seconds: g.seconds })).toSorted((a, b) => b.cost - a.cost || b.runs - a.runs);
+		[...m.values()]
+			.map((g) => ({ name: g.name, runs: g.runs, failed: g.failed, cost: g.cost, tokens: g.tokens, seconds: g.seconds }))
+			.toSorted((a, b) => b.cost - a.cost || b.runs - a.runs);
 	const outcomes = new Map<string, number>();
 	for (const d of drafts) outcomes.set(d.status, (outcomes.get(d.status) ?? 0) + 1);
 	// 命中率：草稿真的被用上（你发了、标记完成）占已有结果的比例；还在等你的不算

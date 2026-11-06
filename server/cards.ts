@@ -69,10 +69,10 @@ function failureAction(a: string, taskId: string) {
 }
 
 async function approvalAction(a: string, id: string, form: Record<string, string>) {
-	if (a !== "approve" && a !== "reject") return reply("error", `不认识的操作 ${a}`);
+	if (a !== "approve" && a !== "reject" && a !== "approve_remember") return reply("error", `不认识的操作 ${a}`);
 	try {
-		const r = await decideApproval(id, a, form.note ?? "");
-		return reply("success", a === "approve" ? "已批准，执行中…" : "已拒绝", approvalCard(r));
+		const r = await decideApproval(id, a === "reject" ? "reject" : "approve", form.note ?? "", a === "approve_remember");
+		return reply("success", a === "reject" ? "已拒绝" : "已批准，执行中…", approvalCard(r));
 	} catch (e) {
 		if (!(e instanceof ApprovalError)) log("审批操作失败", id, e);
 		const cur = getApproval(id);

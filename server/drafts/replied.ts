@@ -1,15 +1,15 @@
 // Yi 是否已亲自回复：起草前再看一眼，已回复就不起草；之后回复了，没处理的草稿作废
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray, ne } from "drizzle-orm";
 import { changed } from "../bus.ts";
 import { OWNER_OPEN_ID } from "../config.ts";
 import { db, schema } from "../db/index.ts";
 import type { MeegoCard } from "../db/schema.ts";
-import { listMessages } from "../lark/bot.ts";
+import { listMessages, reactionsOf } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import { meegoYiReplied } from "../meego.ts";
 import { settle } from "../pipeline.ts";
 import { enqueueMemory } from "../memory/extract.ts";
-import { log } from "../util.ts";
+import { log, now } from "../util.ts";
 import { burstAfter } from "./context.ts";
 import { type ChatRef, claim, LIVE } from "./store.ts";
 
@@ -39,8 +39,39 @@ export async function staleReason(chat: ChatRef, msgs: Message[]): Promise<strin
 		return null;
 	}
 	if (ownerRepliedIn(chat.chat_mode, recent, msgs)) return "Yi 已亲自回复";
+	if (await ownerReacted(msgs.slice(-3).map((m) => m.message_id))) return "Yi 已回表情";
 	if (burstAfter(chat.chat_mode, recent, msgs)) return "对方又接着发了，合到后面那条一起起草";
 	return null;
+}
+
+/** Yi 在这几条消息上回过表情：表情回复不是消息，轮询看不到，只能逐条查 */
+async function ownerReacted(ids: string[]): Promise<boolean> {
+	for (const id of ids) {
+		try {
+			if ((await reactionsOf(id)).some((r) => r.by === OWNER_OPEN_ID)) return true;
+		} catch (e) {
+			log("读表情回复失败", id, e);
+			return false;
+		}
+	}
+	return false;
+}
+
+/** 草稿推出去之后 Yi 才在原消息上回了表情：和亲自回复一样作废。只看最近一天的，每轮几次请求 */
+export async function expireReactedDrafts() {
+	const live = db()
+		.select()
+		.from(schema.drafts)
+		.where(and(inArray(schema.drafts.status, LIVE), ne(schema.drafts.chatMode, "meego"), gte(schema.drafts.created, now() - 86400)))
+		.all();
+	for (const d of live) {
+		if (!d.replyTo.startsWith("om_") || !(await ownerReacted([d.replyTo]))) continue;
+		if (claim(d.id, LIVE, "expired")) {
+			changed();
+			log("草稿作废：Yi 已回表情", d.id);
+			settle({ actionKind: "draft", actionId: d.id, routeId: d.routeId, outcome: "expired", effect: "internal", detail: "Yi 已回表情" });
+		}
+	}
 }
 
 /** Yi 正在这个会话里聊：要回复的第一条消息之前 windowMs 内（或之后）他说过话 */

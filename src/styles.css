@@ -307,6 +307,24 @@ blockquote {
 	background: var(--warn-soft);
 	color: var(--warn);
 }
+/* 一组冲突：左边一道警示色，和普通卡片区分开 */
+.conflict-group {
+	border-left: 3px solid var(--warn);
+	padding-left: 10px;
+	margin-bottom: 12px;
+}
+.card.memory textarea {
+	width: 100%;
+	min-height: 64px;
+	box-sizing: border-box;
+	font: inherit;
+	color: var(--text);
+	background: var(--bg);
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	padding: 6px 8px;
+	margin-top: 6px;
+}
 .card.memory select,
 .card.memory input {
 	font: inherit;

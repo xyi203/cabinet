@@ -4,7 +4,8 @@
 import type { Draft } from "../db/schema.ts";
 import { DraftError } from "../drafts/store.ts";
 import { UserAuthError } from "../lark/bot.ts";
-import { log } from "../util.ts";
+import { POLL_INTERVAL } from "../config.ts";
+import { log, now } from "../util.ts";
 import { botChannel } from "./bot.ts";
 import { larkChannel } from "./lark.ts";
 import { meegoChannel } from "./meego.ts";
@@ -14,8 +15,10 @@ export interface Channel {
 	name: string;
 	desc: string;
 	enabled(): boolean;
-	/** 拉取：轮询主循环每轮调一次，since 是上一轮开始的时间（秒） */
-	poll?(since: number): Promise<void>;
+	/** 拉取：since 是这个渠道上一次成功拉取开始的时间（秒）；full 是「立即拉取」，分层的渠道这次全拉 */
+	poll?(since: number, full: boolean): Promise<void>;
+	/** 每个快速轮次都拉（自己内部再分层）；没有的渠道 POLL_INTERVAL 秒拉一次 */
+	fast?: boolean;
 	/** 推送：开始监听，返回停止函数 */
 	listen?(): () => void;
 	/** 以 Yi 的身份发出确认过的草稿；没有就是只读渠道 */
@@ -33,22 +36,37 @@ export function channelOfDraft(d: Pick<Draft, "chatMode">): Channel {
 	return ch;
 }
 
+/** 每个渠道上一次成功拉取开始的时间 */
+const lastOk = new Map<string, number>();
+
 /**
- * 轮询一轮：一个渠道失败不耽误别的渠道；但只要有失败就把错误抛给主循环，不推进 since，
- * 下一轮重新拉这段时间（已经处理过的靠 handled 去重）。用户授权失败优先抛：主循环据此暂停。
+ * 轮询一轮（每 POLL_FAST 秒）：fast 的渠道每轮都拉，别的到 POLL_INTERVAL 才拉；full（立即拉取）时都拉。
+ * 一个渠道失败不耽误别的渠道，它的 since 不推进，下一轮从原处重拉（已经处理过的靠 handled 去重）；
+ * 有失败就把错误抛给主循环，用户授权失败优先抛：主循环据此暂停。
+ * 返回各渠道都已拉到的时间：主循环存成 poll_since，重启后从这里接着拉，慢渠道也不漏
  */
-export async function pollChannels(since: number) {
+export async function pollChannels(since: number, full = false): Promise<number> {
+	const started = now();
 	const errors: unknown[] = [];
+	const marks: number[] = [];
 	for (const ch of channels()) {
 		if (!ch.poll || !ch.enabled()) continue;
+		const from = lastOk.get(ch.name) ?? since;
+		if (!full && !ch.fast && started - from < POLL_INTERVAL) {
+			marks.push(from);
+			continue;
+		}
 		try {
-			await ch.poll(since);
+			await ch.poll(from, full);
+			lastOk.set(ch.name, started);
+			marks.push(started);
 		} catch (e) {
 			if (!(e instanceof UserAuthError)) log(`渠道 ${ch.name} 轮询失败`, e);
 			errors.push(e);
 		}
 	}
 	if (errors.length) throw errors.find((e) => e instanceof UserAuthError) ?? errors[0];
+	return Math.min(started, ...marks);
 }
 
 /** 启动所有推送渠道，返回统一的停止函数 */

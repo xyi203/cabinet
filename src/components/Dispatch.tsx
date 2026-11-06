@@ -103,7 +103,17 @@ export function DispatchPage({ state, onOpenDev }: { state: State; onOpenDev: (i
 									{i.label}
 									<span className="ml-2 text-muted">{i.text}</span>
 								</span>
-								<span className="shrink-0 text-[12px] text-muted tabular-nums">等了 {span(d.now - i.since)}</span>
+								<span className="shrink-0 text-[12px] text-muted tabular-nums">
+									{i.waitUntil && i.waitUntil > d.now
+										? `你在聊，${Math.ceil(i.waitUntil - d.now)}s 后起草`
+										: `等了 ${span(d.now - i.since)}`}
+								</span>
+								<button className={btn} onClick={() => act("/api/poll", { id: i.id }, "不等了，马上起草")}>
+									立即起草
+								</button>
+								<button className={btn} onClick={() => act("/api/drafts/dismiss", { id: i.id }, "不起草了，记成跳过")}>
+									不用起草
+								</button>
 							</div>
 						))
 					) : (

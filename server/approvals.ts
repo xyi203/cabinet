@@ -5,7 +5,7 @@
 // - 24 小时没处理就过期
 import { and, desc, eq, inArray, lt } from "drizzle-orm";
 import { guardFor, setApprovalHandler, type ApprovalHandler } from "./agent/driver.ts";
-import { tokenize } from "./agent/guard.ts";
+import { type Learn, rememberRead, tokenize } from "./agent/guard.ts";
 import { callMcp } from "./agent/mcp.ts";
 import { ASSISTANT, loadAgents } from "./agent/router.ts";
 import { changed } from "./bus.ts";
@@ -58,6 +58,15 @@ export function nextRuns(cron: string, n = 3, from = now()): number[] {
 	return out;
 }
 
+/** 这条审批能不能「执行并以后放行」：只有没登记的 skill 脚本 / 子命令可以，规则里明确是写操作的不行 */
+export function learnOf(a: Pick<Approval, "tool" | "args" | "convId" | "cwd">): Learn | undefined {
+	if (a.tool !== "bash" || a.convId == null) return undefined;
+	const g = guardFor(a.convId);
+	return g?.guard.learnable(String(a.args.command ?? ""), a.cwd || g.cwd);
+}
+
+export const learnText = (l: Learn) => (l.isNew ? `新建规则 ${l.rule}，放行 ${l.sub}` : `${l.rule} 的 ${l.sub} 记成只读`);
+
 /** 卡片上「要执行什么」 */
 export function describe(a: Pick<Approval, "tool" | "args">): string {
 	if (a.tool === "bash") return "```\n" + String(a.args.command ?? "") + "\n```";
@@ -65,7 +74,13 @@ export function describe(a: Pick<Approval, "tool" | "args">): string {
 		const runs = nextRuns(String(a.args.cron)).map(fmt).join("、");
 		return `新建定时任务「${a.args.name}」\n- cron：\`${a.args.cron}\`（接下来：${runs || "算不出"}）\n- 到点交给助手做：${a.args.prompt}`;
 	}
-	return `调用 \`${a.tool}\`\n\`\`\`\n${JSON.stringify(a.args, null, 2).slice(0, 1500)}\n\`\`\``;
+	// 发布工单的 params 是多行文字，JSON 里只剩一串 \n，审批时看不清要写进去的内容
+	const { params, ...rest } = a.args as { params?: unknown };
+	const lines = Array.isArray(params)
+		? params.map((p: { paramKey?: string; paramValue?: unknown }) => `**${p.paramKey}**\n\`\`\`\n${String(p.paramValue ?? "").slice(0, 800)}\n\`\`\``)
+		: [];
+	const json = JSON.stringify(lines.length ? rest : a.args, null, 2).slice(0, 1500);
+	return [`调用 \`${a.tool}\`\n\`\`\`\n${json}\n\`\`\``, ...lines].join("\n");
 }
 
 const plain = (content: string) => ({ tag: "plain_text", content });
@@ -91,7 +106,9 @@ export function approvalCard(a: Approval): object {
 	if (a.result)
 		elements.push({ tag: "markdown", content: `**${a.status === "rejected" ? "拒绝理由" : "结果"}**\n${a.result.slice(0, 1500)}` });
 	if (a.status === "pending") {
+		const learn = learnOf(a);
 		elements.push({ tag: "hr" });
+		if (learn) elements.push(note(`确认是只读的话，可以点「执行并以后放行」：${learnText(learn)}，之后不再问`));
 		elements.push({
 			tag: "form",
 			name: "apv",
@@ -102,6 +119,7 @@ export function approvalCard(a: Approval): object {
 					horizontal_spacing: "8px",
 					columns: [
 						["apv_ok", "执行", "primary_filled", "approve"],
+						...(learn ? [["apv_learn", "执行并以后放行", "primary", "approve_remember"]] : []),
 						["apv_no", "拒绝", "danger", "reject"],
 					].map(([name, label, type, act]) => ({
 						tag: "column",
@@ -257,7 +275,8 @@ async function followUp(a: Approval, text: string, approved: boolean) {
 }
 
 /** Yi 点执行 / 拒绝（卡片和看板共用）。执行是异步的：先切到 running 返回，跑完更新卡片 */
-export async function decideApproval(id: string, action: "approve" | "reject", why = ""): Promise<Approval> {
+/** remember：执行成功后把这条命令记成只读（见 learnOf），以后同样的子命令直接放行 */
+export async function decideApproval(id: string, action: "approve" | "reject", why = "", remember = false): Promise<Approval> {
 	const a = getApproval(id);
 	if (!a) throw new ApprovalError("审批不存在");
 	if (a.status !== "pending") throw new ApprovalError(`这条审批${STATUS[a.status]?.[0] ?? a.status}`);
@@ -281,7 +300,18 @@ export async function decideApproval(id: string, action: "approve" | "reject", w
 		let status = "done";
 		let result: string;
 		try {
+			// 先算好要学的规则：执行前后规则文件都可能被改，以批准这一刻的判断为准
+			const learn = remember ? learnOf(a) : undefined;
 			result = (await execute(a)).slice(0, RESULT_MAX);
+			if (learn) {
+				try {
+					rememberRead(learn);
+					result = `（已${learnText(learn)}，以后直接放行）\n${result}`;
+					log("审批时记成只读", id, learn);
+				} catch (e) {
+					log("记规则失败", id, e);
+				}
+			}
 		} catch (e) {
 			status = "failed";
 			result = String((e as Error).message ?? e).slice(0, RESULT_MAX);

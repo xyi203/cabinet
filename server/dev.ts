@@ -438,7 +438,8 @@ export async function messageDev(id: string, text: string, from = "Yi"): Promise
 	if (!t) throw new DraftError("任务不存在");
 	if (!text.trim()) throw new DraftError("消息是空的");
 	if (t.status === "discarded") throw new DraftError("任务已放弃");
-	if (t.status === "done") throw new DraftError("任务已完成，新建一个吧");
+	// 归档时开发任务的 worktree 已经收掉了，没法接着改；查东西的任务会话还在，能接着聊
+	if (t.status === "done" && isDev(t) && !existsSync(t.worktree)) throw new DraftError("worktree 已经收掉了，新建一个任务吧");
 	if (t.status === "pushing") throw new DraftError("正在推送，等一下再发");
 	if (t.status === "running" && (await steer(sessionOf(id), `${from}：${text.trim()}`))) {
 		log("开发任务插话", id, from);

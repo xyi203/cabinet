@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { type ArmScore, type Classification, type Memory, addMemory, fetchMemory, memoryAction, searchMemory } from "../lib/api";
+import { type ArmScore, type Classification, type Memory, addMemory, fetchMemory, memoryAction, resolveMemories, searchMemory } from "../lib/api";
 import { time } from "../lib/format";
 import { type Msg, MsgLine } from "./Drawer";
 
@@ -16,7 +16,7 @@ const EVIDENCE: Record<string, string> = { yi: "你说", tool: "工具", board: 
 const GROUPS: Array<{ name: string; hint: string; match: (m: Memory) => boolean; open: boolean }> = [
 	{
 		name: "有争议",
-		hint: "互相冲突，暂停使用；确认对的那条，另一条会转为已取代",
+		hint: "互相冲突，暂停使用；选一条为准，或者改写、合并成最终版本再确认，其余转为已取代",
 		match: (m) => m.state === "contested",
 		open: true,
 	},
@@ -77,11 +77,13 @@ function MemoryCard({ m, score, onError }: { m: Memory; score?: ArmScore; onErro
 	const qc = useQueryClient();
 	const [busy, setBusy] = useState(false);
 	const [editing, setEditing] = useState(false);
-	async function act(action: "confirm" | "forget" | "restore" | "classify", extra?: Classification) {
+	const [text, setText] = useState<string | null>(null);
+	async function act(action: "confirm" | "forget" | "restore" | "classify" | "edit", extra?: Classification | { content: string }) {
 		setBusy(true);
 		try {
 			await memoryAction(m, action, extra);
 			setEditing(false);
+			setText(null);
 			onError(null);
 			qc.invalidateQueries({ queryKey: ["memory"] });
 		} catch (e) {
@@ -93,7 +95,22 @@ function MemoryCard({ m, score, onError }: { m: Memory; score?: ArmScore; onErro
 	const live = m.state !== "forgotten" && m.state !== "superseded";
 	return (
 		<div className="card memory">
-			<div className="body">{m.content}</div>
+			{text === null ? (
+				<div className="body">{m.content}</div>
+			) : (
+				<>
+					<textarea value={text} onChange={(e) => setText(e.target.value)} />
+					<div className="row">
+						<button className="btn primary" disabled={busy || !text.trim()} onClick={() => act("edit", { content: text })}>
+							保存文字
+						</button>
+						<button className="btn" disabled={busy} onClick={() => setText(null)}>
+							取消
+						</button>
+						<span className="foot">改过的算你的原话、已确认；有争议的改完还要在下面裁定</span>
+					</div>
+				</>
+			)}
 			{m.application === "convention" && <div className="foot">适用：{m.appliesWhen}</div>}
 			<div className="meta">
 				<span className="tag">{KIND[m.kind]}</span>
@@ -141,6 +158,11 @@ function MemoryCard({ m, score, onError }: { m: Memory; score?: ArmScore; onErro
 						以这条为准
 					</button>
 				)}
+				{live && text === null && (
+					<button className="btn" disabled={busy} onClick={() => setText(m.content)}>
+						改文字
+					</button>
+				)}
 				{live && (
 					<button className="btn" disabled={busy} onClick={() => setEditing(!editing)}>
 						{editing ? "取消" : "改分类"}
@@ -158,6 +180,96 @@ function MemoryCard({ m, score, onError }: { m: Memory; score?: ArmScore; onErro
 			</div>
 		</div>
 	);
+}
+
+/** 一组互相冲突的记忆（按冲突关系连起来的）：并排看，选底稿改写或合并，确认后就是最终版本 */
+function ConflictGroup({ items, onError }: { items: Memory[]; onError: (msg: Msg) => void }) {
+	const qc = useQueryClient();
+	// 默认以已确认的、再是最新的那条为底稿
+	const pick = items.toSorted((a, b) => Number(b.confirmed) - Number(a.confirmed) || b.updated - a.updated)[0];
+	const [keep, setKeep] = useState(pick.id);
+	const [text, setText] = useState(pick.content);
+	const [busy, setBusy] = useState(false);
+	async function resolve() {
+		setBusy(true);
+		try {
+			await resolveMemories(keep, items, text);
+			onError({ text: `已裁定，最终版本记在 #${keep}，其余转为已取代` });
+			qc.invalidateQueries({ queryKey: ["memory"] });
+		} catch (e) {
+			onError({ text: (e as Error).message, bad: true });
+		} finally {
+			setBusy(false);
+		}
+	}
+	return (
+		<div className="conflict-group">
+			{items.map((m) => (
+				<MemoryCard key={m.id} m={m} onError={onError} />
+			))}
+			<div className="card memory">
+				<div className="label">最终版本（可直接改写或合并）</div>
+				<div className="row">
+					{items.map((m) => (
+						<button
+							key={m.id}
+							className={`btn${keep === m.id && text === m.content ? " primary" : ""}`}
+							disabled={busy}
+							onClick={() => {
+								setKeep(m.id);
+								setText(m.content);
+							}}
+						>
+							用 #{m.id}
+						</button>
+					))}
+					<button className="btn" disabled={busy} onClick={() => setText(items.map((m) => m.content).join("；"))}>
+						合并几条
+					</button>
+				</div>
+				<textarea value={text} onChange={(e) => setText(e.target.value)} />
+				<div className="row">
+					<button className="btn primary" disabled={busy || !text.trim()} onClick={resolve}>
+						确认为最终版本
+					</button>
+					<span className="foot">
+						记在 #{keep} 上（沿用它的分类），依据合并过去；
+						{items
+							.filter((m) => m.id !== keep)
+							.map((m) => `#${m.id}`)
+							.join("、")}{" "}
+						转为已取代
+					</span>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+/** 有争议的按冲突关系连成组（对方可能还是生效状态，也拉进来一起看）；组里只剩一条就单独显示 */
+function conflictGroups(items: Memory[], all: Memory[]): Memory[][] {
+	const byId = new Map(all.filter((m) => m.state !== "forgotten" && m.state !== "superseded").map((m) => [m.id, m]));
+	const seen = new Set<number>();
+	const groups: Memory[][] = [];
+	for (const m of items) {
+		if (seen.has(m.id)) continue;
+		const group: Memory[] = [];
+		const stack = [m];
+		seen.add(m.id);
+		while (stack.length) {
+			const x = stack.pop()!;
+			group.push(x);
+			for (const c of x.conflicts) {
+				const y = byId.get(c);
+				if (y && !seen.has(y.id)) {
+					seen.add(y.id);
+					stack.push(y);
+				}
+			}
+		}
+		groups.push(group.toSorted((a, b) => a.id - b.id));
+	}
+	return groups;
 }
 
 function NewMemory() {
@@ -256,9 +368,15 @@ export function MemoryBoard() {
 									{items.length} 条 · {g.hint}
 								</span>
 							</summary>
-							{items.map((m) => (
-								<MemoryCard key={m.id} m={m} onError={setMsg} />
-							))}
+							{g.name === "有争议"
+								? conflictGroups(items, data.items).map((group) =>
+										group.length > 1 ? (
+											<ConflictGroup key={group.map((m) => `${m.id}v${m.revision}`).join("-")} items={group} onError={setMsg} />
+										) : (
+											<MemoryCard key={group[0].id} m={group[0]} onError={setMsg} />
+										),
+									)
+								: items.map((m) => <MemoryCard key={m.id} m={m} onError={setMsg} />)}
 						</details>
 					);
 				})

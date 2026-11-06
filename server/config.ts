@@ -41,9 +41,11 @@ export const SESSION_IDLE_DAYS = Number(env("SESSION_IDLE_DAYS", "7"));
 // 起草复用按聊天划分的会话，上下文会越滚越大（每次调用整段重发，缓存写入是大头）：上一轮结束时超过这么多 tokens 就换新会话。
 // 前文、记忆每次起草都另外带上，换会话只丢掉旧的工具输出和截图。0 = 不换
 export const SESSION_MAX_TOKENS = Number(env("SESSION_MAX_TOKENS", "50000"));
-// Yi 正在会话里聊（触发消息前 YI_ACTIVE_WINDOW 秒内说过话）时先等 YI_ACTIVE_DELAY 秒再起草：多半他自己就回了。0 = 不等
+// Yi 正在会话里聊（触发消息前 YI_ACTIVE_WINDOW 秒内说过话）时先等最多 YI_ACTIVE_DELAY 秒再起草：多半他自己就回了。
+// 等的期间每 YI_ACTIVE_CHECK 秒看一次，他回了消息或表情就提前结束（随后按跳过处理）。0 = 不等
 export const YI_ACTIVE_WINDOW = Number(env("YI_ACTIVE_WINDOW", "300"));
-export const YI_ACTIVE_DELAY = Number(env("YI_ACTIVE_DELAY", "90"));
+export const YI_ACTIVE_DELAY = Number(env("YI_ACTIVE_DELAY", "20"));
+export const YI_ACTIVE_CHECK = Number(env("YI_ACTIVE_CHECK", "5"));
 // 发布工单巡检：首次观察用 agent 默认模型（Opus），之后每轮用便宜些的模型、每轮新会话；最多巡检这么多天
 export const PATROL_MODEL = env("PATROL_MODEL", "claude/claude-sonnet-5-5");
 export const PATROL_CRON = env("PATROL_CRON", "*/30 * * * *");
@@ -57,7 +59,10 @@ export const QUOTA_MODEL = env("QUOTA_MODEL", "claude/claude-haiku-5-5");
 export const PATROL_PAUSE_AT = Number(env("PATROL_PAUSE_AT", "0.8"));
 
 export const DRAFT_ENABLED = env("DRAFT_ENABLED", "1") === "1";
+// 分层轮询：每 POLL_FAST 秒拉一次会话列表和最活跃的 POLL_HOT_N 个会话；其余会话和别的渠道（飞书项目）还是 POLL_INTERVAL 秒一次
 export const POLL_INTERVAL = Number(env("POLL_INTERVAL", "30"));
+export const POLL_FAST = Number(env("POLL_FAST", "5"));
+export const POLL_HOT_N = Number(env("POLL_HOT_N", "5"));
 export const POLL_TOP_N = Number(env("POLL_TOP_N", "15"));
 export const DRAFT_SKIP_CHATS = new Set(list("DRAFT_SKIP_CHATS"));
 // 告警：群里机器人 @Yi 的消息不起草回复，按群攒一批交给 alert agent（docs/pipeline.md §4）

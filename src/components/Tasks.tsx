@@ -1,7 +1,8 @@
 import { useState } from "react";
-import type { DevTask, State, Task } from "../lib/api";
+import { type DevTask, type State, type Task, pollNow } from "../lib/api";
 import { AGENT_NAME, describeDraft, money } from "../lib/format";
 import { NewTask } from "./NewTask";
+import { toast } from "./Toast";
 import { Segmented, span } from "./ui";
 
 /** 来源：和以前的看板筛选一样，草稿按会话类型分，问答和 agent 任务各一类 */
@@ -29,10 +30,12 @@ function Row({ t, state, onOpen }: { t: Task; state: State; onOpen: (t: Task) =>
 	const cost = (t.usage as { cost?: number } | null | undefined)?.cost;
 	const label = t.type === "dev" && t.agent ? `${AGENT_NAME[t.agent] ?? t.agent} · ${t.label.replace(/^\w+ · /, "")}` : t.label;
 	return (
-		<button
-			type="button"
+		<div
+			role="button"
+			tabIndex={0}
 			onClick={() => onOpen(t)}
-			className="flex w-full cursor-pointer items-start gap-3 border-0 border-t border-line bg-transparent px-4 py-2.5 text-left first:border-t-0 hover:bg-soft"
+			onKeyDown={(e) => e.key === "Enter" && onOpen(t)}
+			className="flex w-full cursor-pointer items-start gap-3 border-t border-line px-4 py-2.5 text-left first:border-t-0 hover:bg-soft"
 		>
 			<span className="mt-0.5 shrink-0 rounded bg-soft px-1.5 py-0.5 text-[11px] text-muted">{TYPE[t.type]}</span>
 			<span className="min-w-0 flex-1">
@@ -48,10 +51,26 @@ function Row({ t, state, onOpen }: { t: Task; state: State; onOpen: (t: Task) =>
 			>
 				{t.sub}
 			</span>
+			{t.type === "draft" && t.status === "todo" && (
+				<button
+					type="button"
+					title="不等了，马上起草这条"
+					onClick={(e) => {
+						e.stopPropagation();
+						pollNow(t.id).then(
+							(r) => toast(r.skipped ? "不等了，马上起草" : "已在排队，会尽快起草"),
+							(err) => toast((err as Error).message, true),
+						);
+					}}
+					className="shrink-0 cursor-pointer rounded-md border border-accent bg-accent px-2 py-0.5 text-[12px] text-white hover:opacity-90"
+				>
+					立即起草
+				</button>
+			)}
 			<span className="mt-0.5 w-32 shrink-0 text-right text-[12px] whitespace-nowrap text-muted tabular-nums">
 				{span(state.now - (t.end ?? t.start ?? t.created))}前{cost ? ` · ${money(cost)}` : ""}
 			</span>
-		</button>
+		</div>
 	);
 }
 

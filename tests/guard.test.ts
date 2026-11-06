@@ -3,7 +3,8 @@ import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { Guard, RULES_FILE, loadRules, mcpReadOnly, tokenize } from "../server/agent/guard.ts";
+import { readFileSync } from "node:fs";
+import { Guard, RULES_FILE, loadRules, mcpReadOnly, rememberRead, tokenize } from "../server/agent/guard.ts";
 
 const root = mkdtempSync(path.join(tmpdir(), "cabinet-guard-"));
 const repo = path.join(root, "repo");
@@ -120,12 +121,21 @@ test("开发任务：只能写自己的 worktree，git 只放本地写操作", (
 	no("go test ./... ; rm -rf /");
 });
 
-test("lark-cli 只放行读文档", () => {
+test("lark-cli：读文档和知识库放行，建 / 改文档走审批，只许 --as user", () => {
 	const gl = guard(["lark-cli"]);
+	const kind = (cmd: string) => gl.verdict("bash", { command: cmd }, repo).kind;
 	allow("lark-cli docs +fetch --doc https://x.feishu.cn/docx/abc --doc-format markdown", gl);
-	deny("lark-cli docs +update --doc abc", gl);
+	allow("lark-cli wiki +node-list --as user --parent-node-token Oh6", gl);
+	allow("lark-cli docs +fetch --doc abc --as=user", gl);
+	assert.equal(kind("lark-cli docs +create --as user --parent-token Oh6 --title 'x' --content '# 背景'"), "approve");
+	assert.equal(kind("lark-cli docs +update --doc abc --content 'x'"), "approve");
+	assert.equal(kind("lark-cli wiki +node-create --space-id 1 --title x"), "approve");
 	deny("lark-cli im +messages-send --chat-id oc_1 --text hi", gl);
+	deny("lark-cli wiki +delete-space --space-id 1", gl);
 	deny("lark-cli docs +fetch --doc abc --as bot", gl);
+	deny("lark-cli docs +fetch --doc abc --as=bot", gl);
+	deny("lark-cli docs +fetch --doc abc --as", gl);
+	deny("lark-cli docs +fetch --doc abc -o out.md", gl);
 	deny("lark-cli docs +fetch --doc abc", g);
 });
 
@@ -160,22 +170,22 @@ test("MCP：只放行 agent 配了的 server 的工具，codemode 只给配了 M
 	assert.match(plain.check("mcp__prometheus-saas-cluster__execute_query", {}, "/") ?? "", /未在白名单/);
 });
 
-test("命令三态：read 放行，write 要审批（审批上线前拦截并说明），deny 和没列出的拒绝", () => {
+test("命令三态：read 放行，write 和没列出的子命令要审批，deny 拒绝", () => {
 	const ga = new Guard({ roots: [repo], bash: "*", skillsDir: skills });
 	const v = (cmd: string) => ga.verdict("bash", { command: cmd }, repo).kind;
 	assert.equal(v(`${skills}/archery/scripts/archery query --env prod --sql "select 1"`), "allow");
 	assert.equal(v(`${skills}/archery/scripts/archery submit --sql "update t set a=1"`), "approve");
 	assert.equal(v(`${skills}/archery/scripts/archery login`), "deny");
-	assert.equal(v(`${skills}/archery/scripts/archery export`), "deny");
+	assert.equal(v(`${skills}/archery/scripts/archery export`), "approve");
 	assert.equal(v("glab mr note 12 -R gitlab.shoplazza.site/a/b -m ok"), "approve");
 	assert.equal(v("glab api projects/1"), "allow");
 	assert.equal(v("glab api -X POST projects/1/notes"), "approve");
 	assert.match(ga.check("bash", { command: "glab mr note 12 -m ok" }, repo) ?? "", /需要 Yi 审批.*还没上线/);
 	// "*" 包含 git 和规则文件里的全部命令族
 	assert.equal(v("git log -1"), "allow");
-	// 只写脚本名也认（改写成 skill 里的绝对路径），没列出的子命令拒绝
+	// 只写脚本名也认（改写成 skill 里的绝对路径），没列出的子命令要审批
 	assert.equal(v("kafka topics"), "allow");
-	assert.equal(v("kafka produce --topic x"), "deny");
+	assert.equal(v("kafka produce --topic x"), "approve");
 });
 
 test("规则文件：每条都有 argv0，子命令不在 read 和 write 里重复", () => {
@@ -205,4 +215,58 @@ test("工具输出太长时存的临时文件可以读，临时目录里的其�
 	assert.equal(g.check("read", { path: spill }, repo), undefined);
 	assert.ok(g.check("read", { path: path.join(tmp, "tmp-AbC123", "other.txt") }, repo));
 	assert.ok(g.check("read", { path: path.join(tmp, "tmp-AbC123", "pi-output-x.log.bak") }, repo));
+});
+
+test("没登记的 skill 脚本、没登记的子命令交给审批，并能记成只读；明确的写操作不能记", () => {
+	mkdirSync(path.join(skills, "newskill/scripts"), { recursive: true });
+	writeFileSync(path.join(skills, "newskill/scripts/tool"), "#!/bin/sh");
+	const all = new Guard({ roots: [repo, path.join(skills, "newskill"), path.join(skills, "archery")], bash: "*", skillsDir: skills });
+	const kind = (cmd: string, gg = all) => gg.verdict("bash", { command: cmd }, repo).kind;
+	const tool = path.join(skills, "newskill/scripts/tool");
+	assert.equal(kind(`${tool} list --x 1`), "approve");
+	assert.equal(kind(`python3 ${tool} list`), "approve");
+	assert.deepEqual(all.learnable(`python3 ${tool} list --x 1`, repo), {
+		rule: "tool",
+		argv0: ["python3", "{skills}/newskill/scripts/tool"],
+		sub: "list",
+		isNew: true,
+	});
+	// bash 没配 "*" 的 agent 不放没登记的脚本
+	assert.equal(kind(`${tool} list`, g), "deny");
+	// 不在 skill 目录里的照样拒绝
+	assert.equal(kind("cat a.go"), "deny");
+	// 已登记规则里没列出的子命令：审批，可以记成只读；规则里的写操作不能记
+	const archery = path.join(skills, "archery/scripts/archery");
+	assert.equal(kind(`${archery} explain --sql x`), "approve");
+	assert.deepEqual(all.learnable(`${archery} explain --sql x`, repo), { rule: "archery", argv0: [], sub: "explain", isNew: false });
+	assert.equal(all.learnable(`${archery} submit --sql x`, repo), undefined);
+	assert.equal(all.learnable(`${archery} query --sql x`, repo), undefined);
+});
+
+test("记成只读：往已有规则的 read 里加，没有的新建，不重复", () => {
+	const file = path.join(root, "rules.json");
+	writeFileSync(file, JSON.stringify({ _note: "x", archery: { argv0: ["a"], read: ["query"] } }));
+	rememberRead({ rule: "archery", argv0: [], sub: "explain", isNew: false }, file);
+	rememberRead({ rule: "archery", argv0: [], sub: "explain", isNew: false }, file);
+	rememberRead({ rule: "tool", argv0: ["{skills}/x/scripts/tool"], sub: "list", isNew: true }, file);
+	const d = JSON.parse(readFileSync(file, "utf8"));
+	assert.deepEqual(d.archery.read, ["query", "explain"]);
+	assert.deepEqual(d.tool, { argv0: ["{skills}/x/scripts/tool"], read: ["list"] });
+	assert.equal(d._note, "x");
+});
+
+test("devops publish 查询放行、auth 拒绝；只读 agent 能 fetch tag 和看 remote", () => {
+	mkdirSync(path.join(skills, "devops/scripts"), { recursive: true });
+	writeFileSync(path.join(skills, "devops/scripts/publish"), "#!/usr/bin/env python3");
+	const gp = new Guard({ roots: [repo, path.join(skills, "devops")], bash: "*", skillsDir: skills });
+	const pub = path.join(skills, "devops/scripts/publish");
+	allow(`${pub} changelogs GD-1 --timeline`, gp);
+	allow(`/usr/bin/python3 ${pub} issue GD-1`, gp);
+	allow(`python3 ${pub} issues --service functions-api --since 7d`, gp);
+	assert.equal(gp.verdict("bash", { command: `${pub} auth check --auto-refresh` }, repo).kind, "deny");
+	allow("git fetch --tags origin", gp);
+	allow("git remote -v", gp);
+	allow("git remote get-url origin", gp);
+	deny("git fetch upstream refs/heads/x", gp);
+	deny("git remote add x https://e.com/x.git", gp);
 });

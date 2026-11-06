@@ -152,6 +152,8 @@ export interface InboxItem {
 	title: string;
 	label: string;
 	at: number;
+	/** 审批：可以「执行并以后放行」时，记进规则的是什么 */
+	learn?: string;
 }
 
 export interface State {
@@ -269,8 +271,14 @@ export const fetchMemory = () => getJson<MemoryState>("/api/memory");
 export const searchMemory = (q: string) =>
 	getJson<{ ids: number[]; scores: ArmScore[]; degraded?: string }>(`/api/memory/search?${new URLSearchParams({ q })}`);
 export const addMemory = (input: Classification & { content: string }) => post("/api/memory", input);
-export const memoryAction = (m: Memory, action: "confirm" | "forget" | "restore" | "classify", extra: Partial<Classification> = {}) =>
-	post(`/api/memory/${m.id}/${action}`, { revision: m.revision, ...extra });
+export const memoryAction = (
+	m: Memory,
+	action: "confirm" | "forget" | "restore" | "classify" | "edit",
+	extra: Partial<Classification> & { content?: string } = {},
+) => post(`/api/memory/${m.id}/${action}`, { revision: m.revision, ...extra });
+/** 裁定一组冲突：最终文字落在 keep 那条上，其余转为已取代 */
+export const resolveMemories = (keep: number, items: Memory[], content: string) =>
+	post("/api/memory/resolve", { keep, content, items: items.map((m) => ({ id: m.id, revision: m.revision })) });
 export const fetchLog = (t: Pick<Task, "session" | "start" | "end">) =>
 	getJson<{ steps: Step[] }>(
 		`/api/log?${new URLSearchParams({ session: t.session ?? "", start: String(t.start ?? ""), end: String(t.end ?? "") })}`,
@@ -394,7 +402,7 @@ export interface DispatchState {
 	now: number;
 	queue: { capacity: number; free: number; waiting: number };
 	running: Array<{ key: string; label: string; agent: string | null; chatId: string | null; started: number; suspicious: boolean }>;
-	inflight: Array<{ id: string; label: string; text: string; since: number }>;
+	inflight: Array<{ id: string; label: string; text: string; since: number; waitUntil: number | null }>;
 	suspects: DispatchSuspect[];
 	routes: DispatchRoute[];
 }
@@ -452,3 +460,6 @@ export interface Journal {
 	summary: { text: string; at: number; model: string } | null;
 }
 export const fetchJournal = (date: string) => getJson<Journal>(`/api/journal?date=${date}`);
+
+/** 立即拉取新消息；带消息 id 时，这条如果在「你在聊，等一会儿再起草」就不等了 */
+export const pollNow = (id?: string) => post<{ skipped: boolean }>("/api/poll", id ? { id } : {});

@@ -1,5 +1,5 @@
 {
-	"_note": "agent 能执行的命令。read 直接放行；write 要 Yi 审批（审批上线前一律拦截）；deny 和没列出的子命令一律拒绝。子命令按词匹配，多个词的要在参数里连续出现。argv0 里的 {skills} 换成 SKILLS_DIR。改完不用重启，下一次运行生效。",
+	"_note": "agent 能执行的命令。read 直接放行；write 每次要 Yi 审批；deny 一律拒绝；没列出的子命令、skill 目录里没登记的脚本交给 Yi 审批，审批时可以点「执行并以后放行」记进 read。子命令按词匹配，多个词的要在参数里连续出现。argv0 里的 {skills} 换成 SKILLS_DIR。改完不用重启，下一次运行生效。",
 	"_mcpPreview": [
 		"mcp__devops-mcp-prod__issue_create",
 		"mcp__devops-mcp-prod__issue_update",
@@ -39,48 +39,166 @@
 		"mcp__devops-mcp-prod__issue_search_feishu_stories",
 		"mcp__devops-mcp-prod__issue_validate",
 		"mcp__devops-mcp-prod__reference_get",
-		"mcp__devops-mcp-prod__reference_list"
+		"mcp__devops-mcp-prod__reference_list",
+		"mcp__prometheus-saas-cluster__execute_query",
+		"mcp__prometheus-saas-cluster__execute_range_query",
+		"mcp__prometheus-saas-cluster__get_metric_metadata",
+		"mcp__prometheus-saas-cluster__get_targets",
+		"mcp__prometheus-saas-cluster__health_check",
+		"mcp__prometheus-saas-cluster__list_metrics",
+		"mcp__prometheus-partition-cluster__execute_query",
+		"mcp__prometheus-partition-cluster__execute_range_query",
+		"mcp__prometheus-partition-cluster__get_metric_metadata",
+		"mcp__prometheus-partition-cluster__get_targets",
+		"mcp__prometheus-partition-cluster__health_check",
+		"mcp__prometheus-partition-cluster__list_metrics",
+		"mcp__prometheus-saas-stg-cluster__execute_query",
+		"mcp__prometheus-saas-stg-cluster__execute_range_query",
+		"mcp__prometheus-saas-stg-cluster__get_metric_metadata",
+		"mcp__prometheus-saas-stg-cluster__get_targets",
+		"mcp__prometheus-saas-stg-cluster__health_check",
+		"mcp__prometheus-saas-stg-cluster__list_metrics",
+		"mcp__prometheus-saas-dev-cluster__execute_query",
+		"mcp__prometheus-saas-dev-cluster__execute_range_query",
+		"mcp__prometheus-saas-dev-cluster__get_metric_metadata",
+		"mcp__prometheus-saas-dev-cluster__get_targets",
+		"mcp__prometheus-saas-dev-cluster__health_check",
+		"mcp__prometheus-saas-dev-cluster__list_metrics"
 	],
 	"archery": {
-		"argv0": ["{skills}/archery/scripts/archery"],
-		"read": ["envs", "instances", "databases", "tables", "desc", "query", "check"],
-		"write": ["workflow", "submit", "execute", "approve", "cancel"],
-		"deny": ["login"]
+		"argv0": [
+			"{skills}/archery/scripts/archery"
+		],
+		"read": [
+			"envs",
+			"instances",
+			"databases",
+			"tables",
+			"desc",
+			"query",
+			"check"
+		],
+		"write": [
+			"workflow",
+			"submit",
+			"execute",
+			"approve",
+			"cancel"
+		],
+		"deny": [
+			"login"
+		]
 	},
 	"superset": {
-		"argv0": ["{skills}/superset/scripts/superset"],
-		"read": ["query", "datasets", "dataset", "columns", "desc", "charts"],
-		"deny": ["auth"]
+		"argv0": [
+			"{skills}/superset/scripts/superset"
+		],
+		"read": [
+			"query",
+			"datasets",
+			"dataset",
+			"columns",
+			"desc",
+			"charts"
+		],
+		"deny": [
+			"auth"
+		]
 	},
 	"sls": {
-		"argv0": ["python3", "{skills}/sls/scripts/sls_query.py"],
-		"read": ["query", "check", "logstores"]
+		"argv0": [
+			"python3",
+			"{skills}/sls/scripts/sls_query.py"
+		],
+		"read": [
+			"query",
+			"check",
+			"logstores"
+		]
 	},
 	"grafana": {
-		"argv0": ["{skills}/grafana/scripts/grafana"],
-		"read": ["alerts", "datasources", "search", "dashboard", "panel", "query"],
-		"deny": ["config"]
+		"argv0": [
+			"{skills}/grafana/scripts/grafana"
+		],
+		"read": [
+			"alerts",
+			"datasources",
+			"search",
+			"dashboard",
+			"panel",
+			"query"
+		],
+		"deny": [
+			"config"
+		]
 	},
 	"oncall": {
-		"argv0": ["{skills}/oncall/scripts/oncall"],
-		"read": ["analyze", "pd"],
-		"deny": ["aggregate"]
+		"argv0": [
+			"{skills}/oncall/scripts/oncall"
+		],
+		"read": [
+			"analyze",
+			"pd"
+		],
+		"deny": [
+			"aggregate"
+		]
 	},
 	"kafka": {
-		"argv0": ["{skills}/kafka/scripts/kafka"],
-		"read": ["clusters", "topics", "topic", "messages", "groups"]
+		"argv0": [
+			"{skills}/kafka/scripts/kafka"
+		],
+		"read": [
+			"clusters",
+			"topics",
+			"topic",
+			"messages",
+			"groups"
+		]
 	},
 	"sentry": {
-		"argv0": ["{skills}/sentry/scripts/sentry"],
-		"read": ["check", "projects", "project", "issues", "issue", "latest", "events", "tags", "issue-releases", "stats", "users", "teams"]
+		"argv0": [
+			"{skills}/sentry/scripts/sentry"
+		],
+		"read": [
+			"check",
+			"projects",
+			"project",
+			"issues",
+			"issue",
+			"latest",
+			"events",
+			"tags",
+			"issue-releases",
+			"stats",
+			"users",
+			"teams"
+		]
 	},
 	"glab": {
-		"argv0": ["glab"],
-		"read": ["mr view", "mr diff", "mr list", "mr notes", "repo view", "ci view", "ci status", "api"],
-		"write": ["mr note", "mr approve", "mr merge"]
+		"argv0": [
+			"glab"
+		],
+		"read": [
+			"mr view",
+			"mr diff",
+			"mr list",
+			"mr notes",
+			"repo view",
+			"ci view",
+			"ci status",
+			"api"
+		],
+		"write": [
+			"mr note",
+			"mr approve",
+			"mr merge"
+		]
 	},
 	"meegle": {
-		"argv0": ["meegle"],
+		"argv0": [
+			"meegle"
+		],
 		"read": [
 			"workitem get",
 			"workitem query",
@@ -94,7 +212,85 @@
 		]
 	},
 	"lark-cli": {
-		"argv0": ["lark-cli"],
-		"read": ["docs +fetch"]
+		"argv0": [
+			"lark-cli"
+		],
+		"read": [
+			"docs +fetch",
+			"docs +search",
+			"docs +history-list",
+			"wiki +node-list",
+			"wiki +node-get",
+			"wiki +space-list",
+			"wiki +member-list"
+		],
+		"write": [
+			"docs +create",
+			"docs +update",
+			"wiki +node-create",
+			"drive +update-title"
+		]
+	},
+	"publish": {
+		"argv0": [
+			"{skills}/devops/scripts/publish"
+		],
+		"read": [
+			"trace",
+			"releases",
+			"changes",
+			"issues",
+			"issue",
+			"changelogs",
+			"stats"
+		],
+		"deny": [
+			"auth"
+		]
+	},
+	"publish-py": {
+		"argv0": [
+			"/usr/bin/python3",
+			"{skills}/devops/scripts/publish"
+		],
+		"read": [
+			"trace",
+			"releases",
+			"changes",
+			"issues",
+			"issue",
+			"changelogs",
+			"stats"
+		],
+		"deny": [
+			"auth"
+		]
+	},
+	"publish-py3": {
+		"argv0": [
+			"python3",
+			"{skills}/devops/scripts/publish"
+		],
+		"read": [
+			"trace",
+			"releases",
+			"changes",
+			"issues",
+			"issue",
+			"changelogs",
+			"stats"
+		],
+		"deny": [
+			"auth"
+		]
+	},
+	"patrol": {
+		"argv0": [
+			"{skills}/release-observation/scripts/patrol"
+		],
+		"read": [
+			"run",
+			"baseline"
+		]
 	}
 }

@@ -449,6 +449,16 @@ export async function sendImageAsUser(target: UserTarget, file: string, uuid: st
 	return sendAsUser(target, "image", JSON.stringify({ image_key: key }), uuid);
 }
 
+/** 消息上谁加了哪些表情（用 Yi 的身份读）：Yi 给对方消息回了表情也算回复过了 */
+export async function reactionsOf(messageId: string): Promise<Array<{ emoji: string; by: string }>> {
+	const res = await client()
+		.im.v1.messageReaction.list({ path: { message_id: messageId }, params: { page_size: 50, user_id_type: "open_id" } }, await asUser())
+		.catch((e) => {
+			throw larkError(e, "读表情回复");
+		});
+	return (check(res, "读表情回复").items ?? []).map((r: any) => ({ emoji: r.reaction_type?.emoji_type ?? "", by: r.operator?.operator_id ?? "" }));
+}
+
 export async function reactAsUser(messageId: string, emoji: string) {
 	const res = await client()
 		.im.v1.messageReaction.create({ path: { message_id: messageId }, data: { reaction_type: { emoji_type: emoji } } }, await asUser())

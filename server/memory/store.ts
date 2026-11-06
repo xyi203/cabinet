@@ -223,6 +223,69 @@ export function restoreMemory(id: number, revision: number): Memory {
 	return result;
 }
 
+/** 改文字：Yi 亲手改过的就是他的原话，算已确认；改动记一条看板依据。有争议的改完还是有争议，要裁定用 resolveMemories */
+export function editMemory(id: number, revision: number, content: string): Memory {
+	content = normalize(content);
+	const bad = rejectContent(content);
+	if (bad) throw new MemoryError(bad);
+	const result = db().transaction((tx) => {
+		const m = expect(tx, id, revision);
+		if (m.state === "forgotten" || m.state === "superseded") throw new MemoryError("已遗忘或已取代的记忆不能改，先恢复");
+		if (content === m.content) return m;
+		const evidence = [...m.evidence, { kind: "board" as const, ref: "board", quote: `改成：${content.slice(0, 200)}`, at: now() }];
+		return updateMemory(tx, id, { content, evidence, provenance: "user_statement", confirmed: true });
+	});
+	afterWrite();
+	return result;
+}
+
+/**
+ * 裁定一组互相冲突的记忆：Yi 写定最终文字（可以是其中一条、改过的、或几条合并的），落在 keep 那条上；
+ * 依据合并过去，其余转为已取代。组外还有人和被取代的冲突，就从它们的冲突里摘掉，没别的争议就恢复生效
+ */
+export function resolveMemories(keep: number, items: Array<{ id: number; revision: number }>, content: string): Memory {
+	content = normalize(content);
+	const bad = rejectContent(content);
+	if (bad) throw new MemoryError(bad);
+	if (!items.some((x) => x.id === keep)) throw new MemoryError("保留的那条不在这组里");
+	const result = db().transaction((tx) => {
+		const rows = items.map((x) => expect(tx, x.id, x.revision));
+		for (const r of rows)
+			if (r.state === "forgotten" || r.state === "superseded") throw new MemoryError(`记忆 #${r.id} 已遗忘或已取代，刷新后再操作`);
+		const ids = new Set(rows.map((r) => r.id));
+		const base = rows.find((r) => r.id === keep)!;
+		const others = rows.filter((r) => r.id !== keep);
+		const seen = new Set<string>();
+		const evidence = [...base.evidence, ...others.flatMap((r) => r.evidence)].filter((e) => {
+			const k = `${e.kind}|${e.ref}|${e.quote}`;
+			return !seen.has(k) && Boolean(seen.add(k));
+		});
+		if (content !== base.content || others.length)
+			evidence.push({ kind: "board", ref: "board", quote: `裁定为：${content.slice(0, 200)}`, at: now() });
+		for (const r of others) updateMemory(tx, r.id, { state: "superseded", supersededBy: keep, conflicts: [] });
+		// 组外和这组有冲突的：摘掉被取代的那几条，指向保留那条的冲突照旧
+		const outside = new Set(rows.flatMap((r) => r.conflicts).filter((x) => !ids.has(x)));
+		for (const oid of outside) {
+			const o = tx.select().from(schema.memories).where(eq(schema.memories.id, oid)).get();
+			if (!o) continue;
+			const rest = o.conflicts.filter((x) => x === keep || !ids.has(x));
+			if (rest.length !== o.conflicts.length)
+				updateMemory(tx, o.id, { conflicts: rest, state: o.state === "contested" && !rest.length ? "active" : o.state });
+		}
+		const left = base.conflicts.filter((x) => !ids.has(x));
+		return updateMemory(tx, keep, {
+			content,
+			evidence,
+			provenance: content === base.content ? base.provenance : "user_statement",
+			confirmed: true,
+			conflicts: left,
+			state: left.length ? "contested" : "active",
+		});
+	});
+	afterWrite();
+	return result;
+}
+
 /** 改分类：用法、条件、种类、作用域。确认与来源原样保留；候选被 Yi 分类过就算生效 */
 export function classifyMemory(id: number, revision: number, c: Classification): Memory {
 	const bad = checkClassification(c);

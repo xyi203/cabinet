@@ -248,12 +248,41 @@ export function TaskDrawer({ task: t, draft, onClose }: { task: Task; draft?: Dr
 			setBusy(false);
 		}
 	}
+	const queued = t.type === "draft" && (t.status === "todo" || t.status === "in_progress");
+	async function queuedAct(path: string, done: string) {
+		setBusy(true);
+		try {
+			await post(path, { id: t.id });
+			setMsg({ text: done });
+			qc.invalidateQueries({ queryKey: ["state"] });
+			setTimeout(onClose, 1000);
+		} catch (e) {
+			setMsg({ text: (e as Error).message, bad: true });
+			setBusy(false);
+		}
+	}
 	return (
 		<Drawer
 			title={`${t.type === "draft" ? "草稿" : "问答"} · ${t.label}`}
 			onClose={onClose}
 			actions={
-				t.status === "blocked" ? (
+				queued ? (
+					<>
+						{t.status === "todo" && (
+							<button className="btn primary" disabled={busy} onClick={() => queuedAct("/api/poll", "不等了，马上起草")}>
+								立即起草
+							</button>
+						)}
+						<button
+							className="btn"
+							disabled={busy}
+							title="不用回，不起草，这条消息算已处理"
+							onClick={() => queuedAct("/api/drafts/dismiss", "不起草了，记成跳过")}
+						>
+							不用起草
+						</button>
+					</>
+				) : t.status === "blocked" ? (
 					<>
 						{t.retryable && (
 							<button className="btn primary" disabled={busy} onClick={() => retry()}>

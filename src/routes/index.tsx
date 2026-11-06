@@ -13,14 +13,14 @@ import { SkillsPage } from "../components/Skills";
 import { AudiencePage } from "../components/Audience";
 import { JournalPage } from "../components/Journal";
 import { MemoryBoard } from "../components/MemoryBoard";
-import { type DevTask, type Draft, type InboxItem, type Task, fetchState, post } from "../lib/api";
+import { type DevTask, type Draft, type InboxItem, type Task, fetchState, post, pollNow } from "../lib/api";
 import { isLive, money } from "../lib/format";
 import { useLiveUpdates } from "../lib/live";
 import { ChatPage } from "../components/ChatPage";
 import { StoryBoard } from "../components/StoryBoard";
 import { Overview } from "../components/Overview";
 import { StatsPage } from "../components/Stats";
-import { ToastHost } from "../components/Toast";
+import { ToastHost, toast } from "../components/Toast";
 
 const TITLES = {
 	home: "概览",
@@ -146,7 +146,20 @@ function Dashboard() {
 						) : state && s ? (
 							<>
 								进行中 <b>{state.running + state.inflight}</b> · 待确认 <b>{s.pending}</b> · 今日请求 <b>{s.requests}</b> · 今日花费{" "}
-								<b>{money(s.usage.cost)}</b> · 轮询 {lag}
+								<b>{money(s.usage.cost)}</b> · 轮询 {lag}{" "}
+								<button
+									type="button"
+									title="不等轮询间隔，马上拉一次飞书的新消息"
+									onClick={() =>
+										pollNow().then(
+											() => toast("已开始拉取新消息"),
+											(e) => toast((e as Error).message, true),
+										)
+									}
+									className="cursor-pointer rounded border border-line bg-panel px-1.5 py-0 text-[12px] text-accent hover:bg-soft"
+								>
+									立即拉取
+								</button>
 								{!connected && " · 实时推送断开"}
 							</>
 						) : (

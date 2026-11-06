@@ -1,6 +1,6 @@
 // 起草：分派 agent、跑一轮、把草稿私聊给 Yi；进程中断后按同一 requestId 接回
 import { changed } from "../bus.ts";
-import { PATHS, SESSION_MAX_TOKENS, YI_ACTIVE_DELAY, YI_ACTIVE_WINDOW } from "../config.ts";
+import { PATHS, SESSION_MAX_TOKENS, YI_ACTIVE_CHECK, YI_ACTIVE_DELAY, YI_ACTIVE_WINDOW } from "../config.ts";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import type { MeegoCard } from "../db/schema.ts";
@@ -67,7 +67,10 @@ export async function makeDraft(chat: ChatRef, msgs: Message[], onDone?: (ids: s
 			if (suffix) forgetRun(`${requestIdOf(msgs, attempt)}${suffix}`);
 			onDone?.(msgs.map((m) => m.message_id));
 		}
-		for (const m of msgs) inflight.delete(m.message_id);
+		for (const m of msgs) {
+			inflight.delete(m.message_id);
+			dismissed.delete(m.message_id);
+		}
 		changed();
 	}
 }
@@ -116,6 +119,8 @@ interface Drafting {
 	msgs: Message[];
 	key?: string;
 	aborted?: boolean;
+	/** 是 Yi 在看板上点了「不用起草」中止的，不是他亲自回复了 */
+	dismissed?: boolean;
 }
 const drafting = new Map<string, Drafting>();
 
@@ -130,7 +135,8 @@ export function abortIfYiReplied(chat: ChatRef, m: Message) {
 	abortRun(d.key).catch((e) => log("中止起草失败", d.key, e));
 }
 
-/** Yi 正在这个聊天里聊：先等一会儿再起草，多半他自己就回了（之后起草前照常再查一次是否已回复） */
+/** Yi 正在这个聊天里聊：先等一会儿再起草，多半他自己就回了。等的期间隔几秒看一次，他回了消息、表情或对方又接着发了就不再等
+ * （之后起草前照常再判一次，按跳过处理） */
 async function waitIfYiActive(chat: ChatRef, msgs: Message[]) {
 	if (YI_ACTIVE_DELAY <= 0 || chat.chat_mode === "meego") return;
 	let recent: Message[];
@@ -141,8 +147,70 @@ async function waitIfYiActive(chat: ChatRef, msgs: Message[]) {
 		return;
 	}
 	if (!ownerActive(recent, msgs, YI_ACTIVE_WINDOW * 1000)) return;
-	log(`Yi 正在聊，等 ${YI_ACTIVE_DELAY}s 再起草`, chat.chat_id);
-	await new Promise((r) => setTimeout(r, YI_ACTIVE_DELAY * 1000));
+	log(`Yi 正在聊，最多等 ${YI_ACTIVE_DELAY}s 再起草`, chat.chat_id);
+	const until = now() + YI_ACTIVE_DELAY;
+	for (const m of msgs) {
+		const i = inflight.get(m.message_id);
+		if (i) i.waitUntil = until;
+	}
+	changed();
+	let skipped = false;
+	let wakeUp: (() => void) | undefined;
+	skipWait.set(chat.chat_id, () => {
+		skipped = true;
+		wakeUp?.();
+	});
+	try {
+		while (!skipped && now() < until) {
+			await new Promise<void>((r) => {
+				const timer = setTimeout(r, Math.min(YI_ACTIVE_CHECK, until - now()) * 1000);
+				wakeUp = () => {
+					clearTimeout(timer);
+					r();
+				};
+			});
+			if (skipped || now() >= until) break;
+			const stale = await staleReason(chat, msgs);
+			if (stale) {
+				log(`等待期间${stale}，不再等`, chat.chat_id);
+				break;
+			}
+		}
+	} finally {
+		skipWait.delete(chat.chat_id);
+		for (const m of msgs) delete inflight.get(m.message_id)?.waitUntil;
+	}
+}
+
+/** 正在「你在聊，等一会儿再起草」的聊天：看板上点「立即起草」就不等了 */
+const skipWait = new Map<string, () => void>();
+
+/** Yi 点了「不用起草」的消息：起草前当跳过处理，起草完（或跳过）就清掉 */
+const dismissed = new Set<string>();
+
+/** 不用起草这条消息：在等的不等了、排队的轮到时跳过、正在起草的中止，都记成跳过、消息算已处理 */
+export function dismissDraft(messageId: string): boolean {
+	const i = inflight.get(messageId);
+	if (!i) return false;
+	dismissed.add(messageId);
+	log("Yi 标记不用起草", i.chatId, messageId);
+	const d = drafting.get(i.chatId);
+	if (d?.key && !d.aborted && d.msgs.some((m) => m.message_id === messageId) && running.get(d.key)?.chatId === i.chatId) {
+		d.aborted = true;
+		d.dismissed = true;
+		abortRun(d.key).catch((e) => log("中止起草失败", d.key, e));
+	} else skipWait.get(i.chatId)?.();
+	return true;
+}
+
+/** 立即起草这条消息：在等的跳过等待，返回有没有跳过；不在等的（排队、已在起草）照常 */
+export function draftNow(messageId: string): boolean {
+	const i = inflight.get(messageId);
+	const done = i && skipWait.get(i.chatId);
+	if (!done) return false;
+	log("Yi 点了立即起草，不再等", i.chatId, messageId);
+	done();
+	return true;
 }
 
 /** 同一批消息默认同一个 requestId，进程重启后接回原来那次运行；手动重试带 attempt，换一个 */
@@ -200,7 +268,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 	async function draftLocked(self: Drafting) {
 		const onError = (e: unknown) => {
 			if (isStopping()) throw e;
-			if (self.aborted) yiRepliedMidway(chat, source, label, routeId);
+			if (self.aborted) yiRepliedMidway(chat, source, label, routeId, self.dismissed ? "Yi 标记不用起草" : undefined);
 			else failed(chat, msgs, source, label, started, routeId, e);
 		};
 		const open = openRoute(triggerIds, "draft");
@@ -222,7 +290,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			}
 			return;
 		}
-		const stale = await staleReason(chat, msgs);
+		const stale = msgs.some((m) => dismissed.has(m.message_id)) ? "Yi 标记不用起草" : await staleReason(chat, msgs);
 		if (stale) {
 			log(
 				`${stale}，跳过起草`,
@@ -420,7 +488,7 @@ async function finish(chat: ChatRef, msgs: Message[], first: Stage, requestId: s
 	source.session = sessionId;
 	// 起草可能跑了好几分钟：这期间 Yi 自己回了，草稿就没用了（轮询看到 Yi 的回复时这张草稿还没推，作废不到它）；
 	// 对方又接着发了也不推，后面那条会把这几条一起起草
-	const stale = await staleReason(chat, msgs);
+	const stale = msgs.some((m) => dismissed.has(m.message_id)) ? "Yi 标记不用起草" : await staleReason(chat, msgs);
 	if (stale) {
 		log(`起草期间${stale}，不推草稿`, chat.chat_id, requestId);
 		record({
@@ -472,8 +540,7 @@ function mergeEarlier(chat: ChatRef, earlier: Message[], into: string) {
 }
 
 /** 运行被 abortIfYiReplied 中止：和起草完才发现 Yi 已回复一样记成跳过、草稿作废，不当失败提醒 */
-function yiRepliedMidway(chat: ChatRef, source: Source, label: string, routeId: number | undefined) {
-	const reason = "起草期间Yi 已亲自回复";
+function yiRepliedMidway(chat: ChatRef, source: Source, label: string, routeId: number | undefined, reason = "起草期间Yi 已亲自回复") {
 	log(`${reason}，已中止`, chat.chat_id, source.replyTo);
 	record({ kind: "draft", status: "skipped", chatId: chat.chat_id, source: source.replyTo, label, question: source.text, reason });
 	settle({ actionKind: "draft", routeId, outcome: "expired", effect: "internal", detail: reason });

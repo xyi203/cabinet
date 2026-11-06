@@ -301,6 +301,7 @@ export function docPrompt(s: Story, key: string) {
 		`- 用 devops 的 issue_get_info ${key}（或 devops skill 的 scripts/publish issue）读工单：服务、版本、发布方式；以发布前线上实际版本到目标版本核对完整变更，不只看一个 MR。`,
 		"- 按 doc-templates 的发布观察模板写清观察指标、验证方法、风险与回滚；查不到的写「待确认」，不编版本、时间和结论。",
 		"- 文档按 team-wiki 放到团队知识库「迭代记录 → 发布观察 → 季度」下（季度取计划发布日期）；同一次发布已有文档就更新。写飞书是写操作，会给我发审批卡片。",
+		`- 文档写好后挂到工单：issue_update ${key} 的 fbgc（发布观察）和 fxya（风险预案）第一行写文档链接，原有文字留在后面，其他字段不动。先 confirmed=false 看预览，没问题直接 confirmed=true，审批卡片就是我的确认，不用停下来等我回复「提交」。`,
 		"- 最后单独一行给出文档链接。",
 	].join("\n");
 }

@@ -1,7 +1,7 @@
 // agent 的工具守卫：读文件只能在允许目录里；命令按 config/skill-rules.json 判成 放行 / 要审批 / 拒绝。
 // 由 durable 的 beforeTool 钩子调用（server/agent/driver.ts）；钩子抛错时 durable 也会拦截（fail-closed）。
 // 每个会话用自己的策略创建一份守卫，同一进程里并行的 agent 互不影响。
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
@@ -70,8 +70,17 @@ const gitBannedArg = /^(--output|--ext-diff|--textconv|--no-index|-c$|--exec|--u
 // 开发任务在自己的 worktree 里可以做的本地 git 写操作；push / fetch / 切分支 / reset 一律不放
 const gitLocalWrite = new Set(["add", "commit", "restore", "rm", "mv"]);
 
-// lark-cli 用的是 Yi 的飞书账号：--as 能换身份，--output 会落盘
-const larkBannedArg = /^(--output|-o$|--as$|--as=)/;
+// lark-cli 用的是 Yi 的飞书账号：--output 会落盘，拒绝；--as 只许 user。
+// 默认身份是 auto（可能落到机器人身份），飞书 skill 也要求写 --as user，所以 user 放行，换成 bot 等别的身份拒绝
+export function larkBadArg(rest: string[]): string | undefined {
+	for (let i = 0; i < rest.length; i++) {
+		const a = rest[i];
+		if (/^(--output|-o$)/.test(a)) return "lark-cli 不允许 --output（会写本地文件）";
+		if ((a === "--as" && rest[i + 1] !== "user") || (a.startsWith("--as=") && a !== "--as=user"))
+			return "lark-cli 只允许 --as user（用 Yi 的身份），不能换成别的身份";
+	}
+	return undefined;
+}
 
 interface ScriptRule {
 	argv0: string[];
@@ -81,6 +90,43 @@ interface ScriptRule {
 }
 
 const words = (list?: string[]) => (list ?? []).map((w) => w.split(/\s+/));
+
+// 跑 skill 脚本时前面常带的解释器：skill 文档里经常写 /usr/bin/python3 scripts/xxx
+const INTERPRETERS = new Set(["python3", "/usr/bin/python3", "python", "bash", "sh", "node"]);
+
+/** 审批时「执行并以后放行」要记进 skill-rules.json 的一条：rule 已有就往它的 read 里加，没有就新建 */
+export interface Learn {
+	rule: string;
+	/** 新建规则时的 argv0（skill 目录写成 {skills}） */
+	argv0: string[];
+	/** 要放行的子命令（一个或两个词） */
+	sub: string;
+	isNew: boolean;
+}
+
+/**
+ * 子命令：参数里的第一个词（以 - 开头就当没有子命令，免得把某个参数的值当成子命令记进规则）；
+ * lark-cli 那种「docs +fetch」、或者规则里已有两个词的，带上第二个
+ */
+function subcommand(rest: string[], rule?: ScriptRule): string {
+	const [first, second] = rest;
+	if (!first || first.startsWith("-")) return "";
+	const two =
+		second &&
+		!second.startsWith("-") &&
+		(second.startsWith("+") || [...(rule?.read ?? []), ...(rule?.write ?? [])].some((w) => w.length > 1 && w[0] === first));
+	return two ? `${first} ${second}` : first;
+}
+
+/** 把一条子命令记成只读：写回 skill-rules.json（格式统一成 tab 缩进的 JSON），下一次运行起生效 */
+export function rememberRead(l: Learn, file = RULES_FILE) {
+	const raw = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+	const r = raw[l.rule] ?? { argv0: l.argv0 };
+	const read: string[] = r.read ?? [];
+	if (!read.includes(l.sub)) read.push(l.sub);
+	raw[l.rule] = { ...r, read };
+	writeFileSync(file, `${JSON.stringify(raw, null, "\t")}\n`);
+}
 
 export function loadRules(skillsDir: string, specs?: Record<string, RuleSpec>): Record<string, ScriptRule> {
 	const raw: Record<string, RuleSpec> = specs ?? (existsSync(RULES_FILE) ? JSON.parse(readFileSync(RULES_FILE, "utf8")) : {});
@@ -152,6 +198,9 @@ export class Guard {
 	readonly lookup: boolean;
 	/** 放行的 MCP 工具名前缀 */
 	readonly mcp: string[];
+	readonly skillsDir: string;
+	/** bash 配了 "*"：没登记的 skill 脚本可以走审批（否则直接拒绝） */
+	readonly anyScript: boolean;
 
 	constructor(policy: GuardPolicy) {
 		// 根目录不存在时直接丢弃，不能让守卫构造失败
@@ -159,6 +208,8 @@ export class Guard {
 		this.roots = [...real(policy.roots), ...this.writeRoots];
 		this.commands = (policy.commands ?? []).map((c) => c.trim().split(/\s+/));
 		this.scripts = loadRules(policy.skillsDir, policy.rules);
+		this.skillsDir = real([policy.skillsDir])[0] ?? policy.skillsDir;
+		this.anyScript = policy.bash === "*" || policy.bash.includes("*");
 		const all = ["git", ...Object.keys(this.scripts)];
 		this.enabled = new Set(policy.bash === "*" ? all : policy.bash.flatMap((b) => (b === "*" ? all : [b])));
 		this.lookup = Boolean(policy.lookup);
@@ -217,6 +268,16 @@ export class Guard {
 			args = [args[0], ...args.slice(3)];
 			cwd = target;
 		}
+		// 只读 agent 核对发布区间要先拉 tag：fetch 只许 --tags / --prune / -q 和 origin，不带别的 refspec
+		if (args[1] === "fetch" && !this.writeRoots.length)
+			return args.slice(2).every((a) => ["--tags", "--prune", "-q", "--quiet", "origin"].includes(a))
+				? undefined
+				: "git fetch 只允许 --tags / --prune 和 origin";
+		// 查看远端地址：remote、remote -v、remote get-url <名字>
+		if (args[1] === "remote")
+			return args.length === 2 || (args.length === 3 && args[2] === "-v") || (args.length === 4 && args[2] === "get-url")
+				? undefined
+				: "git remote 只允许查看（-v、get-url）";
 		const localWrite = this.enabled.has("git-local") && gitLocalWrite.has(args[1]);
 		if (localWrite && !this.writable(cwd, ".")) return "git 写操作只能在开发任务自己的 worktree 里执行";
 		if (!gitReadOnly.has(args[1]) && !localWrite) return `不允许的 git 子命令: ${args[1]}`;
@@ -230,10 +291,53 @@ export class Guard {
 		return undefined;
 	}
 
-	/** 命令规则：deny > write > read，没列出的拒绝。glab api 只有 GET 算读，meegle 带 --params、lark-cli 换身份或落盘一律拒绝 */
+	/**
+	 * 没登记命令规则的 skill 脚本（可以带解释器）：脚本在 agent 能读的 skill 目录里才算。
+	 * 返回 skill 名、脚本路径和规则里要写的 argv0
+	 */
+	skillScript(args: string[], cwd: string): { skill: string; file: string; argv0: string[]; rest: string[] } | undefined {
+		const interp = INTERPRETERS.has(args[0]) && args[1] ? args[0] : undefined;
+		const raw = interp ? args[1] : args[0];
+		if (!raw?.includes("/")) return undefined;
+		const file = this.resolveInside(cwd, raw);
+		if (!file || !file.startsWith(this.skillsDir + path.sep)) return undefined;
+		const [skill, dir] = path.relative(this.skillsDir, file).split(path.sep);
+		if (dir !== "scripts") return undefined;
+		const spec = `{skills}/${path.relative(this.skillsDir, file)}`;
+		return { skill, file, argv0: interp ? [interp, spec] : [spec], rest: args.slice(interp ? 2 : 1) };
+	}
+
+	/** 这条命令能不能在审批时顺手记成只读：没登记的子命令、没登记的 skill 脚本可以；规则里明确是写操作或拒绝的不行 */
+	learnable(cmd: string, cwd: string): Learn | undefined {
+		const tokens = tokenize(this.normalizeScriptPath(cmd));
+		if (typeof tokens === "string" || !tokens.length) return undefined;
+		const args = tokens.map((t) => t.replace(/^~(?=$|\/)/, homedir()));
+		for (const [name, rule] of Object.entries(this.scripts)) {
+			const head = args.slice(0, rule.argv0.length).map((a) => (a.includes("/") ? path.resolve(cwd, a) : a));
+			if (head.join("\0") !== rule.argv0.join("\0")) continue;
+			const rest = args.slice(rule.argv0.length);
+			if (hits(rest, rule.deny) || hits(rest, rule.write) || hits(rest, rule.read)) return undefined;
+			if (name === "glab" || name === "meegle" || name === "lark-cli") {
+				// 这几个有额外的参数检查（glab api、--params、--as），不自动学
+				if (name !== "lark-cli" || larkBadArg(rest)) return undefined;
+			}
+			const sub = subcommand(rest, rule);
+			return sub ? { rule: name, argv0: [], sub, isNew: false } : undefined;
+		}
+		const s = this.skillScript(args, cwd);
+		if (!s) return undefined;
+		const sub = subcommand(s.rest);
+		if (!sub) return undefined;
+		const base = path.basename(s.file).replace(/\.\w+$/, "");
+		const taken = this.scripts[base] !== undefined;
+		return { rule: taken ? `${s.skill}-${base}` : base, argv0: s.argv0, sub, isNew: true };
+	}
+
+	/** 命令规则：deny > write > read；没列出的子命令走审批（可以记成只读）。glab api 只有 GET 算读，meegle 带 --params、lark-cli 换身份或落盘一律拒绝 */
 	ruleVerdict(name: string, rule: ScriptRule, rest: string[]): Verdict {
 		if (hits(rest, rule.deny)) return deny(`${name} 不允许这个子命令`);
-		if (name === "lark-cli" && rest.some((a) => larkBannedArg.test(a))) return deny("lark-cli 不允许这个参数");
+		const larkBad = name === "lark-cli" ? larkBadArg(rest) : undefined;
+		if (larkBad) return deny(larkBad);
 		if (name === "meegle" && rest.includes("--params")) return deny("meegle 不允许 --params");
 		if (name === "glab" && rest[0] === "api") {
 			const m = rest.findIndex((a) => a === "-X" || a === "--method");
@@ -245,10 +349,9 @@ export class Guard {
 		const w = hits(rest, rule.write);
 		if (w) return approve(`${name} ${w.join(" ")} 是写操作`);
 		if (hits(rest, rule.read)) return ALLOW;
-		// 把要审批的写子命令也列出来：只列只读的，agent 会以为写操作也一律被拒、不去走审批
-		return deny(
-			`${name} 不允许这个子命令。直接放行：${joinWords(rule.read)}${rule.write.length ? `；要 Yi 审批的写操作：${joinWords(rule.write)}` : ""}`,
-		);
+		// 没登记的子命令不直接拒绝：交给 Yi 审批，确认是只读的可以点「执行并以后放行」记进规则
+		const sub = subcommand(rest, rule);
+		return approve(`${name}${sub ? ` ${sub}` : ""} 还没登记是读还是写（直接放行的有：${joinWords(rule.read) || "无"}）`);
 	}
 
 	bashVerdict(cmd: string, cwd: string): Verdict {
@@ -280,8 +383,16 @@ export class Guard {
 			if (head.join("\0") !== rule.argv0.join("\0")) continue;
 			return this.ruleVerdict(name, rule, args.slice(rule.argv0.length));
 		}
+		// skill 目录里还没登记规则的脚本：交给 Yi 审批（可以顺手记成只读），不直接拒绝
+		const script = this.anyScript ? this.skillScript(args, cwd) : undefined;
+		if (script) {
+			const sub = subcommand(script.rest);
+			return approve(`${script.skill} 的脚本 ${path.basename(script.file)}${sub ? ` ${sub}` : ""} 还没登记命令规则`);
+		}
 		const allowed = [...this.enabled, ...this.commands.map((c) => c.join(" "))];
-		return deny(`这个 agent 不允许执行: ${args[0]}（可用：${allowed.join(", ")}；看文件、搜代码用 read / grep / find / ls 工具）`);
+		return deny(
+			`这个 agent 不允许执行: ${args[0]}（可用：${allowed.join(", ")}；skill 目录里的脚本用绝对路径写，没登记的会交给 Yi 审批；看文件、搜代码用 read / grep / find / ls 工具）`,
+		);
 	}
 
 	checkBash(cmd: string, cwd: string): string | undefined {

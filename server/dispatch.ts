@@ -129,7 +129,13 @@ export function dispatchState(t = now()) {
 			started: r.started,
 			suspicious: t - r.started >= SUSPECT_RUN,
 		})),
-		inflight: [...inflight].map(([id, i]) => ({ id, label: i.label, text: i.text.slice(0, 200), since: i.since })),
+		inflight: [...inflight].map(([id, i]) => ({
+			id,
+			label: i.label,
+			text: i.text.slice(0, 200),
+			since: i.since,
+			waitUntil: i.waitUntil ?? null,
+		})),
 		suspects: suspects(t),
 		routes: recentRoutes(),
 	};

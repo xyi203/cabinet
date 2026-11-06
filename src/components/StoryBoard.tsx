@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { type DevTask, type State, type Story, fetchRepos, post } from "../lib/api";
 import { AGENT_NAME, ago, ticketUrl } from "../lib/format";
 import { Drawer, type Msg, MsgLine } from "./Drawer";
@@ -158,6 +158,37 @@ export function StoryBoard({ state, onOpenDev }: { state: State; onOpenDev: (id:
 	);
 }
 
+/** 抽屉里的一个区块：标题、数量、右侧操作，下面是内容 */
+function Section({
+	title,
+	count,
+	hint,
+	extra,
+	children,
+}: {
+	title: string;
+	count?: number;
+	hint?: string;
+	extra?: ReactNode;
+	children: ReactNode;
+}) {
+	return (
+		<section className="mt-5">
+			<div className="mb-2 flex items-center gap-2">
+				<h3 className="m-0 text-[13px] font-semibold text-text">{title}</h3>
+				{count !== undefined && count > 0 && <span className="rounded bg-soft px-1.5 text-[11px] text-muted tabular-nums">{count}</span>}
+				{hint && <span className="text-[12px] text-muted">{hint}</span>}
+				{extra && <span className="ml-auto">{extra}</span>}
+			</div>
+			{children}
+		</section>
+	);
+}
+
+const Empty = ({ children }: { children: ReactNode }) => (
+	<div className="mb-2 rounded-lg border border-dashed border-line px-3 py-3 text-[12px] text-muted">{children}</div>
+);
+
 type Kind = "dev" | "ask" | "release";
 const KIND_HINT: Record<Kind, string> = {
 	dev: "要实现什么（可选，不写就让 agent 读工单描述）；会在新分支上改，你审核后推送建 MR",
@@ -280,134 +311,171 @@ function StoryDrawer({
 				</div>
 			}
 		>
-			<div className="meta">
-				<span className="pill pending">{STAGE_NAME[s.stage] ?? s.stage}</span>
+			<div className="flex items-center gap-2 text-[12px] text-muted">
+				<span className={`rounded px-1.5 py-0.5 ${s.typeKey === "issue" ? "bg-warn-soft text-warn" : "bg-accent-soft text-accent"}`}>
+					{TYPE_NAME[s.typeKey] ?? "工单"}
+				</span>
+				<span className="tabular-nums">ID {s.id}</span>
 				{s.url && (
-					<a href={s.url} target="_blank" rel="noreferrer">
+					<a
+						href={s.url}
+						target="_blank"
+						rel="noreferrer"
+						className="ml-auto rounded-md border border-line px-2 py-0.5 text-accent no-underline hover:bg-accent-soft"
+					>
 						在飞书打开 ↗
 					</a>
 				)}
-				<span className="text-[12px] text-muted">ID {s.id}</span>
 			</div>
-			<div className="label">{TYPE_NAME[s.typeKey] ?? "工单"}</div>
-			<blockquote>
-				{s.url ? (
-					<a href={s.url} target="_blank" rel="noreferrer" className="text-text no-underline hover:underline" title="在飞书打开">
-						{s.title}
-					</a>
-				) : (
-					s.title
-				)}
-			</blockquote>
-			<div className="label">阶段（以这边为准，不看也不改飞书项目的节点）</div>
-			<div className="row-inline">
-				{[...STAGES, ["dropped", "不跟了"] as [string, string]].map(([k, name]) => (
-					<button key={k} className={`btn${k === s.stage ? " primary" : ""}`} disabled={busy || k === s.stage} onClick={() => stage(k)}>
-						{name}
-					</button>
-				))}
-			</div>
-			<div className="label">任务</div>
-			{tasks.length ? (
-				<div className="story-list">
-					{tasks.map((t) => (
-						<div key={t.id} className="story-item" onClick={() => onOpenDev(t.id)}>
-							<span className="tag agent">{t.agent === "dev" ? "开发" : (AGENT_NAME[t.agent] ?? t.agent)}</span>
-							<span className="t">{t.title}</span>
-							<span className="m">
-								{TASK_STATUS[t.status] ?? t.status}
-								{t.branch ? ` · ${t.branch}` : ""}
-							</span>
-						</div>
-					))}
+			<div className="mt-2 text-[17px] leading-snug font-semibold break-words text-text">{s.title}</div>
+
+			<Section title="阶段" hint="以这边为准，不改飞书项目的节点">
+				<div className="flex flex-wrap items-center gap-3">
+					<div className="inline-flex rounded-lg border border-line bg-bg p-0.5">
+						{STAGES.map(([k, name], i) => {
+							const cur = STAGES.findIndex(([x]) => x === s.stage);
+							const on = k === s.stage;
+							return (
+								<button
+									key={k}
+									type="button"
+									disabled={busy || on}
+									onClick={() => stage(k)}
+									className={`cursor-pointer rounded-md border-0 px-3 py-1 text-[13px] disabled:cursor-default ${
+										on
+											? "bg-accent font-semibold text-white"
+											: i < cur
+												? "bg-transparent text-text hover:bg-soft"
+												: "bg-transparent text-muted hover:bg-soft hover:text-text"
+									}`}
+								>
+									{i < cur ? `✓ ${name}` : name}
+								</button>
+							);
+						})}
+					</div>
+					{s.stage === "dropped" ? (
+						<span className="text-[12px] text-muted">已不跟，点上面的阶段可以恢复</span>
+					) : (
+						<button
+							type="button"
+							className="ml-auto cursor-pointer border-0 bg-transparent p-0 text-[12px] text-muted hover:text-bad disabled:opacity-50"
+							disabled={busy}
+							onClick={() => stage("dropped")}
+						>
+							不跟了
+						</button>
+					)}
 				</div>
-			) : (
-				<div className="foot">还没有任务</div>
-			)}
-			<div className="label">
-				发布工单
-				<button className="linkbtn" disabled={busy} onClick={() => act(() => post("/api/stories/tickets"), "已刷新")}>
-					刷新
-				</button>
-			</div>
-			{tickets.length ? (
-				<div className="story-list">
-					{tickets.map((t) => {
-						const docTask = taskOf(t.doc?.taskId);
-						const docUrl = docTask?.summary.match(DOC_URL_RE)?.[0];
-						const patrolling = Boolean(t.patrol && !t.patrol.stopped);
-						return (
-							<div key={t.key} className="story-ticket">
-								<div className="story-item" title={`来源：${SOURCE_NAME[t.source ?? "auto"]}`}>
-									<a
-										href={ticketUrl(t.key)}
-										target="_blank"
-										rel="noreferrer"
-										className="tag dev no-underline hover:underline"
-										title="在发布系统打开这张工单"
-									>
-										{t.key} ↗
-									</a>
-									<span className="t">{t.title || "（标题待刷新）"}</span>
-									<span className="m">
-										{t.status || "—"} · {SOURCE_NAME[t.source ?? "auto"]}
-									</span>
-									<button className="linkbtn" disabled={busy} onClick={() => unbind(t.key)}>
-										解绑
-									</button>
-								</div>
-								<div className="story-ticket-ops">
-									<span>观察文档：</span>
-									{docUrl ? (
-										<a href={docUrl} target="_blank" rel="noreferrer">
-											打开
-										</a>
-									) : docTask ? (
-										<button className="linkbtn" onClick={() => onOpenDev(docTask.id)}>
-											{docTask.status === "running" ? "生成中…" : "看任务"}
-										</button>
-									) : null}
-									<button className="linkbtn" disabled={busy || docTask?.status === "running"} onClick={() => makeDoc(t.key)}>
-										{docTask ? "重新生成" : "生成"}
-									</button>
-									<span className="sep">巡检：</span>
-									{patrolling ? (
-										<>
-											<span>每 30 分钟一轮</span>
-											<button className="linkbtn" onClick={() => onOpenDev(t.patrol!.observeTaskId)}>
-												首次观察
-											</button>
-											<button className="linkbtn" disabled={busy} onClick={() => unpatrol(t.key)}>
-												停止
-											</button>
-										</>
-									) : (
-										<>
-											{t.patrol?.stopped && <span className="muted">已停（{t.patrol.stopped}）</span>}
-											<button className="linkbtn" disabled={busy || t.ended} onClick={() => patrol(t.key)}>
-												{t.ended ? "工单已结束" : t.patrol ? "重新开始" : "开始"}
-											</button>
-										</>
-									)}
-								</div>
+			</Section>
+
+			<Section title="任务" count={tasks.length}>
+				{tasks.length ? (
+					<div className="story-list">
+						{tasks.map((t) => (
+							<div key={t.id} className="story-item" onClick={() => onOpenDev(t.id)}>
+								<span className="shrink-0 rounded bg-ok-soft px-1.5 text-[12px] text-ok">{t.agent === "dev" ? "开发" : (AGENT_NAME[t.agent] ?? t.agent)}</span>
+								<span className="t">{t.title}</span>
+								<span className="m">
+									{TASK_STATUS[t.status] ?? t.status}
+									{t.branch ? ` · ${t.branch}` : ""}
+								</span>
 							</div>
-						);
-					})}
+						))}
+					</div>
+				) : (
+					<Empty>还没有任务，用底部的按钮派开发、查询或提发布工单</Empty>
+				)}
+			</Section>
+
+			<Section
+				title="发布工单"
+				count={tickets.length}
+				extra={
+					<button className="linkbtn" disabled={busy} onClick={() => act(() => post("/api/stories/tickets"), "已刷新")}>
+						刷新状态
+					</button>
+				}
+			>
+				{tickets.length ? (
+					<div className="story-list">
+						{tickets.map((t) => {
+							const docTask = taskOf(t.doc?.taskId);
+							const docUrl = docTask?.summary.match(DOC_URL_RE)?.[0];
+							const patrolling = Boolean(t.patrol && !t.patrol.stopped);
+							return (
+								<div key={t.key} className="story-ticket">
+									<div className="story-item" title={`来源：${SOURCE_NAME[t.source ?? "auto"]}`}>
+										<a
+											href={ticketUrl(t.key)}
+											target="_blank"
+											rel="noreferrer"
+											className="shrink-0 rounded bg-accent-soft px-1.5 font-medium text-accent no-underline hover:underline"
+											title="在发布系统打开这张工单"
+										>
+											{t.key} ↗
+										</a>
+										<span className="t">{t.title || "（标题待刷新）"}</span>
+										<span className="m">
+											{t.status || "—"} · {SOURCE_NAME[t.source ?? "auto"]}
+										</span>
+										<button className="linkbtn" disabled={busy} onClick={() => unbind(t.key)}>
+											解绑
+										</button>
+									</div>
+									<div className="story-ticket-ops">
+										<span>观察文档：</span>
+										{docUrl ? (
+											<a href={docUrl} target="_blank" rel="noreferrer">
+												打开
+											</a>
+										) : docTask ? (
+											<button className="linkbtn" onClick={() => onOpenDev(docTask.id)}>
+												{docTask.status === "running" ? "生成中…" : "看任务"}
+											</button>
+										) : null}
+										<button className="linkbtn" disabled={busy || docTask?.status === "running"} onClick={() => makeDoc(t.key)}>
+											{docTask ? "重新生成" : "生成"}
+										</button>
+										<span className="sep">巡检：</span>
+										{patrolling ? (
+											<>
+												<span>每 30 分钟一轮</span>
+												<button className="linkbtn" onClick={() => onOpenDev(t.patrol!.observeTaskId)}>
+													首次观察
+												</button>
+												<button className="linkbtn" disabled={busy} onClick={() => unpatrol(t.key)}>
+													停止
+												</button>
+											</>
+										) : (
+											<>
+												{t.patrol?.stopped && <span className="muted">已停（{t.patrol.stopped}）</span>}
+												<button className="linkbtn" disabled={busy || t.ended} onClick={() => patrol(t.key)}>
+													{t.ended ? "工单已结束" : t.patrol ? "重新开始" : "开始"}
+												</button>
+											</>
+										)}
+									</div>
+								</div>
+							);
+						})}
+					</div>
+				) : (
+					<Empty>还没有关联的发布工单。填工单号绑定，或者点「提发布工单」，提交后自动挂上</Empty>
+				)}
+				<div className="story-bind">
+					<input
+						value={ticketText}
+						placeholder="GD-12345，多张用空格隔开，也可以贴工单页链接"
+						onChange={(e) => setTicketText(e.target.value)}
+						onKeyDown={(e) => e.key === "Enter" && ticketText.trim() && !busy && bind()}
+					/>
+					<button className="btn" disabled={busy || !ticketText.trim()} onClick={bind}>
+						绑定
+					</button>
 				</div>
-			) : (
-				<div className="foot">还没有关联的发布工单：填工单号绑定，或者点「提发布工单」，提交后会自动挂上</div>
-			)}
-			<div className="story-bind">
-				<input
-					value={ticketText}
-					placeholder="绑定发布工单：GD-12345，多张用空格隔开，也可以贴工单页链接"
-					onChange={(e) => setTicketText(e.target.value)}
-					onKeyDown={(e) => e.key === "Enter" && ticketText.trim() && !busy && bind()}
-				/>
-				<button className="btn" disabled={busy || !ticketText.trim()} onClick={bind}>
-					绑定
-				</button>
-			</div>
+			</Section>
 		</Drawer>
 	);
 }

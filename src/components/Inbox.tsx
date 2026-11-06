@@ -40,7 +40,7 @@ function useAct() {
 }
 
 /** 写操作审批：在这里直接执行或拒绝（飞书卡片上也能点，两边同步） */
-function ApprovalActions({ id, what }: { id: string; what: string }) {
+function ApprovalActions({ id, what, learn }: { id: string; what: string; learn?: string }) {
 	const { busy, act } = useAct();
 	const [note, setNote] = useState("");
 	return (
@@ -61,6 +61,19 @@ function ApprovalActions({ id, what }: { id: string; what: string }) {
 			>
 				执行
 			</button>
+			{learn && (
+				<button
+					className={btn}
+					disabled={busy}
+					title={`确认是只读的话：${learn}，之后不再问`}
+					onClick={async () => {
+						if (await confirmDialog({ title: "执行，并以后直接放行？", body: `${what}\n\n${learn}`, confirmText: "执行并放行" }))
+							void act(`/api/approvals/${id}/remember`, { note }, "已批准，以后同样的命令直接放行");
+					}}
+				>
+					执行并以后放行
+				</button>
+			)}
 			<button className={btn} disabled={busy} onClick={() => act(`/api/approvals/${id}/reject`, { note }, "已拒绝")}>
 				拒绝
 			</button>
@@ -188,7 +201,7 @@ export function Inbox({
 								<pre className="mt-2 max-h-48 overflow-auto rounded-lg bg-soft p-2.5 text-[12px] whitespace-pre-wrap text-text">
 									{it.title.replace(/```\n?/g, "").slice(0, 1500)}
 								</pre>
-								<ApprovalActions id={it.ref} what={it.title.replace(/```\n?/g, "").slice(0, 600)} />
+								<ApprovalActions id={it.ref} what={it.title.replace(/```\n?/g, "").slice(0, 600)} learn={it.learn} />
 							</>
 						) : (
 							<div className="mt-2 flex items-start gap-3">

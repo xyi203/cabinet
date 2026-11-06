@@ -220,6 +220,8 @@ export function DevDrawer({ dev: d, onClose }: { dev: DevTask; task?: Task; onCl
 	const running = d.status === "running";
 	const isDev = d.agent === "dev";
 	const ended = d.status === "discarded" || d.status === "done";
+	// 归档的开发任务 worktree 已经删了；助手类任务会话还在，完成了也能接着问
+	const canTalk = d.status !== "discarded" && !(isDev && d.status === "done");
 	const { data: diff } = useQuery({
 		queryKey: ["devdiff", d.id, d.updated],
 		queryFn: () => fetchDevDiff(d.id),
@@ -284,15 +286,17 @@ export function DevDrawer({ dev: d, onClose }: { dev: DevTask; task?: Task; onCl
 			}
 			onClose={onClose}
 			actions={
-				ended ? undefined : (
+				!canTalk ? undefined : (
 					<div className="chat-input">
 						<textarea
 							value={text}
 							disabled={d.status === "pushing"}
 							placeholder={
-								running
-									? "插话：会在 agent 下一个工具步骤后生效，例如「先别动 pb」（⌘↩ 发送）"
-									: "给 agent 发消息：提问、补充要求、让它继续改（⌘↩ 发送）"
+								d.status === "done"
+									? "任务已完成，发消息会接着这次对话再跑一轮（⌘↩ 发送）"
+									: running
+										? "插话：会在 agent 下一个工具步骤后生效，例如「先别动 pb」（⌘↩ 发送）"
+										: "给 agent 发消息：提问、补充要求、让它继续改（⌘↩ 发送）"
 							}
 							onChange={(e) => setText(e.target.value)}
 							onKeyDown={(e) => {
@@ -313,7 +317,7 @@ export function DevDrawer({ dev: d, onClose }: { dev: DevTask; task?: Task; onCl
 									{d.mrUrl ? "推送新提交" : "推送并建 MR"}
 								</button>
 							)}
-							{!running && (!isDev || canClose) && (
+							{!running && !ended && (!isDev || canClose) && (
 								<button className="btn" disabled={busy} title="看完了，归档" onClick={() => act("close")}>
 									完成
 								</button>

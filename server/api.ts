@@ -35,7 +35,8 @@ import { applyMrAction, type MrAction } from "./drafts/mr.ts";
 import { type Kind, listStickers, resolveSticker } from "./drafts/format.ts";
 import { DraftError, getDraft, LIVE } from "./drafts/store.ts";
 import { LarkError, authorizeUrl, exchangeCode, userAuthStatus } from "./lark/bot.ts";
-import { lastPoll } from "./poller.ts";
+import { lastPoll, pollNow } from "./poller.ts";
+import { dismissDraft, draftNow } from "./drafts/make.ts";
 import { abortRun, conversationTranscript, running } from "./agent/driver.ts";
 import { modelOptions } from "./agent/models.ts";
 import { closeTask, devDiff, discardDev, dispatch, getDevTask, listRepos, messageDev, pushDev, stopDev } from "./dev.ts";
@@ -47,9 +48,11 @@ import {
 	MemoryError,
 	classifyMemory,
 	confirmMemory,
+	editMemory,
 	forgetMemory,
 	listMemories,
 	rememberFromYi,
+	resolveMemories,
 	restoreMemory,
 	vectorStatus,
 } from "./memory/store.ts";
@@ -112,13 +115,20 @@ function memoryAction(p: string, body: any) {
 			true,
 		);
 	}
-	const m = /^\/api\/memory\/(\d+)\/(confirm|forget|restore|classify)$/.exec(p);
+	if (p === "/api/memory/resolve")
+		return resolveMemories(
+			Number(body.keep),
+			(Array.isArray(body.items) ? body.items : []).map((x: any) => ({ id: Number(x.id), revision: Number(x.revision) })),
+			String(body.content ?? ""),
+		);
+	const m = /^\/api\/memory\/(\d+)\/(confirm|forget|restore|classify|edit)$/.exec(p);
 	if (!m) return undefined;
 	const id = Number(m[1]);
 	const revision = Number(body.revision);
 	if (m[2] === "confirm") return confirmMemory(id, revision);
 	if (m[2] === "forget") return forgetMemory(id, revision);
 	if (m[2] === "restore") return restoreMemory(id, revision);
+	if (m[2] === "edit") return editMemory(id, revision, String(body.content ?? ""));
 	return classifyMemory(id, revision, classification(body));
 }
 
@@ -237,10 +247,12 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 	} catch {
 		return send(res, 400, { error: "bad json" });
 	}
-	const apv = /^\/api\/approvals\/(apv-[\w]+)\/(approve|reject)$/.exec(p);
+	const apv = /^\/api\/approvals\/(apv-[\w]+)\/(approve|reject|remember)$/.exec(p);
 	if (apv) {
 		try {
-			return send(res, 200, { ok: true, item: await decideApproval(apv[1], apv[2] as "approve" | "reject", String(body.note ?? "")) });
+			// remember：执行并以后放行（没登记的子命令记成只读）
+			const action = apv[2] === "reject" ? "reject" : "approve";
+			return send(res, 200, { ok: true, item: await decideApproval(apv[1], action, String(body.note ?? ""), apv[2] === "remember") });
 		} catch (e) {
 			if (e instanceof ApprovalError) return send(res, 409, { error: e.message });
 			throw e;
@@ -292,6 +304,17 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		} catch (e) {
 			return send(res, e instanceof DraftError ? 409 : 500, { error: String((e as Error).message).slice(0, 300) });
 		}
+	}
+	// 立即拉取：不等轮询间隔马上拉一次新消息；带 id 时这条消息如果在「你在聊，等一会儿」就不等了，立即起草
+	if (p === "/api/poll") {
+		const skipped = body.id ? draftNow(String(body.id)) : false;
+		pollNow();
+		return send(res, 200, { ok: true, skipped });
+	}
+	// 不用起草：还在等、排队或正在起草的消息直接记成跳过
+	if (p === "/api/drafts/dismiss") {
+		if (!dismissDraft(String(body.id ?? ""))) return send(res, 409, { error: "这条已经起草完或不在排队了" });
+		return send(res, 200, { ok: true });
 	}
 	// 分发页的「停止」：agent 任务走 stopDev（记成按你的要求停止），其他运行直接中止（起草、问答会记成失败，可以重试）
 	if (p === "/api/runs/stop") {

@@ -5,7 +5,7 @@ import path from "node:path";
 import { PATHS } from "./config.ts";
 import { db, schema } from "./db/index.ts";
 import type { Approval, DevTask, Draft, RecordRow } from "./db/schema.ts";
-import { describe, pendingApprovals } from "./approvals.ts";
+import { describe, learnOf, learnText, pendingApprovals } from "./approvals.ts";
 import { draftLabel } from "./drafts/format.ts";
 import { inflight } from "./drafts/store.ts";
 import { draftMrs } from "./drafts/mr.ts";
@@ -92,11 +92,12 @@ export function buildTasks(drafts: Draft[], records: RecordRow[]): Task[] {
 
 	for (const [mid, info] of inflight) {
 		const runId = busy.get(info.chatId);
+		const waiting = !runId && info.waitUntil && info.waitUntil > t;
 		tasks.push({
 			id: mid,
 			type: "draft",
 			status: runId ? "in_progress" : "todo",
-			sub: runId ? "起草中" : "排队等起草",
+			sub: runId ? "起草中" : waiting ? `你在聊，${Math.ceil(info.waitUntil! - t)}s 后起草` : "排队等起草",
 			title: info.text,
 			label: info.label,
 			chatMode: info.chatMode,
@@ -282,6 +283,8 @@ export interface InboxItem {
 	title: string;
 	label: string;
 	at: number;
+	/** 审批：可以「执行并以后放行」时，记进规则的是什么 */
+	learn?: string;
 }
 
 const LEVEL = { now: 0, soon: 1, later: 2 };
@@ -304,7 +307,8 @@ export function buildInbox(
 		at: now(),
 	}));
 	// 写操作审批：agent 在等，24 小时不处理就过期
-	for (const a of approvals)
+	for (const a of approvals) {
+		const learn = learnOf(a);
 		items.push({
 			kind: "approval",
 			ref: a.id,
@@ -313,7 +317,9 @@ export function buildInbox(
 			title: describe(a),
 			label: a.origin,
 			at: a.created,
+			learn: learn && learnText(learn),
 		});
+	}
 	for (const d of drafts) {
 		if (d.status !== "pending" && d.status !== "noreply") continue;
 		items.push({
