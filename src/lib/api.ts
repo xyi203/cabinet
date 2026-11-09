@@ -79,6 +79,8 @@ export interface DevTask {
 	created: number;
 	updated: number;
 	chat?: boolean;
+	/** 发布工单巡检的一轮 */
+	patrol?: boolean;
 	storyId?: string | null;
 }
 

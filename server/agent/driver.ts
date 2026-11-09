@@ -77,6 +77,8 @@ export interface RunOptions {
 	origin?: Origin;
 	/** 复用的会话上一轮结束时上下文超过这么多 tokens 就换新会话（0 = 不换）；只给起草这类前文另外带齐的运行 */
 	maxContext?: number;
+	/** 这次运行最多跑多少秒，不给按 PI_TIMEOUT */
+	timeout?: number;
 	/** 记进 runs 表的档位（assistant 的 ack / answer / deep / mr，agent 任务是 task），统计页按它拆分 */
 	tier?: string;
 }
@@ -433,15 +435,15 @@ function skillsHint(skills: string[]) {
 	return `# 可用的 skill\n\n用到哪个先 read 它的说明 \`${SKILLS_DIR}/<名字>/SKILL.md\`，按说明里的只读子命令用；命令会按 config/skill-rules.json 判定，写操作要 Yi 审批。\n\n${lines.join("\n")}`;
 }
 
-async function waitSettled(submission: { wait(c: typeof ctx): Promise<any> }, conv: Conversation) {
+async function waitSettled(submission: { wait(c: typeof ctx): Promise<any> }, conv: Conversation, timeout = PI_TIMEOUT) {
 	const ac = new AbortController();
-	const timer = setTimeout(() => ac.abort(), PI_TIMEOUT * 1000);
+	const timer = setTimeout(() => ac.abort(), timeout * 1000);
 	try {
 		return await submission.wait(withAbortSignal(ac.signal, ctx));
 	} catch (e) {
 		if (ac.signal.aborted) {
 			await conv.abort(ctx).catch(() => {});
-			throw new Error(`pi 超时 ${PI_TIMEOUT}s`, { cause: e });
+			throw new Error(`pi 超时 ${timeout}s`, { cause: e });
 		}
 		throw e;
 	} finally {
@@ -531,7 +533,7 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 			record = { key, convId: Number(conv.id), submissionId: String(submission.id), before, at: now() };
 			if (opts.requestId) setKv(runKey(opts.requestId), record);
 		}
-		let settled = await waitSettled(submission, conv);
+		let settled = await waitSettled(submission, conv, opts.timeout);
 		// 额度/限流这类错误换模型也能跑：同一会话里换成备用模型接着做，前面已经查到的内容不丢。已经换过的不再换
 		if (settled.status === "unanswered" && !record.continueId && fallback && fallback !== spec) {
 			const failure = (await h.snapshot(LiveDoc, conv.id, ctx))?.runFailure as any;
@@ -543,7 +545,7 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 				record = { ...record, continueId: String(cont.id) };
 				if (opts.requestId) setKv(runKey(opts.requestId), record);
 				model = fallback;
-				settled = await waitSettled(cont, conv);
+				settled = await waitSettled(cont, conv, opts.timeout);
 			}
 		}
 		const before = record.before;

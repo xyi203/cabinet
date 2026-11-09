@@ -23,10 +23,16 @@ const TASK_STATUS: Record<string, string> = {
 	discarded: "已放弃",
 };
 
-const tasksOf = (state: State, id: string) => state.devTasks.filter((t) => t.storyId === id);
+/** 巡检每 30 分钟一轮，不进任务列表，在发布工单那一行看最近一轮 */
+const tasksOf = (state: State, id: string) => state.devTasks.filter((t) => t.storyId === id && !t.patrol);
 /** 解绑的留着记录（免得刷新时又自动挂回来），不显示 */
 const ticketsOf = (s: Story) => s.tickets.filter((t) => !t.removed);
 const SOURCE_NAME: Record<string, string> = { auto: "自动", manual: "手动", created: "提单" };
+/** 巡检正常时结论第一行就是这句（server/dev.ts 的 PATROL_OK） */
+const PATROL_OK = "本轮巡查正常";
+const hhmm = (ts: number) => new Date(ts * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+const roundState = (t: DevTask) =>
+	t.status === "running" ? "进行中" : t.status === "failed" ? "失败" : t.summary.trim().startsWith(PATROL_OK) ? "正常" : "有异常";
 /** 观察文档的链接：写在生成文档那个任务的结论里 */
 const DOC_URL_RE = /https:\/\/[\w.-]*feishu\.cn\/(?:docx|wiki|docs)\/[\w-]+/;
 
@@ -243,6 +249,14 @@ function StoryDrawer({
 		act(() => post(`/api/stories/${s.id}/doc`, { key }), `已派出：给 ${key} 写观察文档，写飞书前会发审批卡片`);
 	const patrol = (key: string) =>
 		act(() => post(`/api/stories/${s.id}/patrol`, { key }), `已开始：先做首次观察，之后每 30 分钟巡检一轮，正常不打扰`);
+	const rerunObserve = (id: string) =>
+		act(
+			() =>
+				post(`/api/dev/${id}/message`, {
+					text: "上次没跑完就中断了。接着把首次观察做完，结尾照要求写「【巡检范围与基线】」，之后每轮巡检靠它做对比。",
+				}),
+			"已重跑首次观察，跑完后巡检就有基线可比",
+		);
 	const unpatrol = (key: string) => act(() => post(`/api/stories/${s.id}/unpatrol`, { key }), `已停止巡检 ${key}`);
 	const stage = (st: string) => act(() => post(`/api/stories/${s.id}/stage`, { stage: st }), `已移到「${STAGE_NAME[st]}」`);
 	const start = () =>
@@ -374,7 +388,9 @@ function StoryDrawer({
 					<div className="story-list">
 						{tasks.map((t) => (
 							<div key={t.id} className="story-item" onClick={() => onOpenDev(t.id)}>
-								<span className="shrink-0 rounded bg-ok-soft px-1.5 text-[12px] text-ok">{t.agent === "dev" ? "开发" : (AGENT_NAME[t.agent] ?? t.agent)}</span>
+								<span className="shrink-0 rounded bg-ok-soft px-1.5 text-[12px] text-ok">
+									{t.agent === "dev" ? "开发" : (AGENT_NAME[t.agent] ?? t.agent)}
+								</span>
 								<span className="t">{t.title}</span>
 								<span className="m">
 									{TASK_STATUS[t.status] ?? t.status}
@@ -403,6 +419,15 @@ function StoryDrawer({
 							const docTask = taskOf(t.doc?.taskId);
 							const docUrl = docTask?.summary.match(DOC_URL_RE)?.[0];
 							const patrolling = Boolean(t.patrol && !t.patrol.stopped);
+							const observe = taskOf(t.patrol?.observeTaskId);
+							// 失败的，或者出错后被归档、没有结论的：都要重跑，不然巡检没有基线
+							const observeBroken = Boolean(
+								observe && (observe.status === "failed" || (observe.status === "done" && observe.error && !observe.summary.trim())),
+							);
+							const rounds = allTasks
+								.filter((x) => x.patrol && x.title.includes(`巡检 ${t.key} `))
+								.toSorted((a, b) => b.created - a.created);
+							const last = rounds[0];
 							return (
 								<div key={t.key} className="story-ticket">
 									<div className="story-item" title={`来源：${SOURCE_NAME[t.source ?? "auto"]}`}>
@@ -441,9 +466,19 @@ function StoryDrawer({
 										{patrolling ? (
 											<>
 												<span>每 30 分钟一轮</span>
+												{last && (
+													<button className="linkbtn" title={`共 ${rounds.length} 轮`} onClick={() => onOpenDev(last.id)}>
+														最近 {hhmm(last.created)} {roundState(last)}
+													</button>
+												)}
 												<button className="linkbtn" onClick={() => onOpenDev(t.patrol!.observeTaskId)}>
-													首次观察
+													{observeBroken ? "首次观察（没跑完）" : observe?.status === "running" ? "首次观察中…" : "首次观察"}
 												</button>
+												{observe && observeBroken && (
+													<button className="linkbtn" disabled={busy} onClick={() => rerunObserve(observe.id)}>
+														重跑
+													</button>
+												)}
 												<button className="linkbtn" disabled={busy} onClick={() => unpatrol(t.key)}>
 													停止
 												</button>

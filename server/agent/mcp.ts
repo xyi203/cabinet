@@ -4,12 +4,15 @@
 // - server 定义沿用 pi 的 mcp.json（MCP_CONFIG），agent 在 agents.json 的 mcp 里列出能用哪些 server
 // - 只连被 agent 引用的 server：mcp.json 里还有能写的 server（如 devops-mcp-prod），没引用就不连、不注册
 // - 工具在 harness 打开前注册：重启后接回的运行要能找到它们。agents.json 新引用 server 需要重启
+// - 启动时连不上（开机网络还没好、server 临时挂了）就用上次连上时缓存的工具列表注册，调用时再连；
+//   不然这一整次运行期间这个 server 的工具都不存在，只能重启
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { existsSync, readFileSync } from "node:fs";
-import { MCP_CONFIG } from "../config.ts";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { DATA_DIR, MCP_CONFIG } from "../config.ts";
 import { log } from "../util.ts";
 import { RULES_FILE, mcpPreview, mcpReadOnly, mcpToolName } from "./guard.ts";
 
@@ -84,47 +87,72 @@ function mcpRuleList(key: "_mcpRead" | "_mcpPreview"): Set<string> {
 	}
 }
 
-/** 连上这些 server，列出工具。连不上的跳过并记日志，不影响其他 server 和 cabinet 启动 */
+type ListedTool = Awaited<ReturnType<Client["listTools"]>>["tools"][number];
+const TOOL_CACHE = path.join(DATA_DIR, "mcp-tools.json");
+
+function readToolCache(): Record<string, ListedTool[]> {
+	try {
+		return JSON.parse(readFileSync(TOOL_CACHE, "utf8"));
+	} catch {
+		return {};
+	}
+}
+
+/** 连上这些 server，列出工具。连不上的用上次缓存的工具列表注册（调用时再连），没缓存才跳过；都不影响 cabinet 启动 */
 export async function mcpTools(names: string[], servers = loadServers()): Promise<ToolRegistration[]> {
 	const tools: ToolRegistration[] = [];
 	const readList = mcpRuleList("_mcpRead");
 	const previewList = mcpRuleList("_mcpPreview");
+	const cache = readToolCache();
+	let cacheChanged = false;
 	await Promise.all(
 		[...new Set(names)].map(async (name) => {
 			const def = servers[name];
 			if (!def) return log(`MCP server ${name} 不在 ${MCP_CONFIG} 里，跳过`);
+			let listed: { tools: ListedTool[] };
 			try {
-				const listed = await (await clientOf(name, def)).listTools(undefined, { timeout: CONNECT_TIMEOUT });
-				for (const t of listed.tools) {
-					// 只读的直接放行，其余在守卫里按写操作处理（要审批）
-					if (t.annotations?.readOnlyHint || readList.has(mcpToolName(name, t.name))) mcpReadOnly.add(mcpToolName(name, t.name));
-					if (previewList.has(mcpToolName(name, t.name))) mcpPreview.add(mcpToolName(name, t.name));
-					registered.set(mcpToolName(name, t.name), { server: name, tool: t.name, def });
-					tools.push(
-						defineTool({
-							name: mcpToolName(name, t.name),
-							description: `[MCP ${name}] ${t.description ?? t.name}`,
-							parameters: (t.inputSchema ?? { type: "object", properties: {} }) as any,
-							callers: ["tools"],
-							// 只读的工具中断后可以重跑
-							replay: t.annotations?.readOnlyHint ? "safe" : "unsafe",
-							execute: async (args: any) => {
-								const result = await (
-									await clientOf(name, def)
-								).callTool({ name: t.name, arguments: args ?? {} }, undefined, {
-									timeout: CALL_TIMEOUT,
-								});
-								return { output: [{ type: "text" as const, text: renderResult(result) }], isError: Boolean(result.isError) };
-							},
-						}),
-					);
-				}
+				listed = await (await clientOf(name, def)).listTools(undefined, { timeout: CONNECT_TIMEOUT });
+				cache[name] = listed.tools;
+				cacheChanged = true;
 				log(`MCP server ${name}：${listed.tools.length} 个工具`);
 			} catch (e) {
-				log(`MCP server ${name} 连接失败，跳过`, String((e as Error)?.message ?? e).slice(0, 200));
+				const why = String((e as Error)?.message ?? e).slice(0, 200);
+				if (!cache[name]?.length) return log(`MCP server ${name} 连接失败，跳过`, why);
+				listed = { tools: cache[name] };
+				log(`MCP server ${name} 连接失败，先用上次的 ${listed.tools.length} 个工具，调用时再连`, why);
+			}
+			for (const t of listed.tools) {
+				// 只读的直接放行，其余在守卫里按写操作处理（要审批）
+				if (t.annotations?.readOnlyHint || readList.has(mcpToolName(name, t.name))) mcpReadOnly.add(mcpToolName(name, t.name));
+				if (previewList.has(mcpToolName(name, t.name))) mcpPreview.add(mcpToolName(name, t.name));
+				registered.set(mcpToolName(name, t.name), { server: name, tool: t.name, def });
+				tools.push(
+					defineTool({
+						name: mcpToolName(name, t.name),
+						description: `[MCP ${name}] ${t.description ?? t.name}`,
+						parameters: (t.inputSchema ?? { type: "object", properties: {} }) as any,
+						callers: ["tools"],
+						// 只读的工具中断后可以重跑
+						replay: t.annotations?.readOnlyHint ? "safe" : "unsafe",
+						execute: async (args: any) => {
+							const result = await (
+								await clientOf(name, def)
+							).callTool({ name: t.name, arguments: args ?? {} }, undefined, {
+								timeout: CALL_TIMEOUT,
+							});
+							return { output: [{ type: "text" as const, text: renderResult(result) }], isError: Boolean(result.isError) };
+						},
+					}),
+				);
 			}
 		}),
 	);
+	if (cacheChanged)
+		try {
+			writeFileSync(TOOL_CACHE, JSON.stringify(cache));
+		} catch (e) {
+			log("写 MCP 工具缓存失败", e);
+		}
 	return tools;
 }
 

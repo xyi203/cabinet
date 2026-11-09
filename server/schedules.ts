@@ -2,7 +2,7 @@
 // - cron 是 5 段（分 时 日 月 周），本机时区；支持 *、数字、a-b、a,b、*/n、a-b/n；日和周都限定时按任一满足算（同 Vixie cron）
 // - 上一次的任务还在跑就跳过这一次；停机期间错过的只补跑一次
 // - 提示里带上上一次任务的 ID，agent 可以用 lookup 查上次的结论，只说变化
-import { eq } from "drizzle-orm";
+import { eq, like } from "drizzle-orm";
 import { loadAgents } from "./agent/router.ts";
 import { changed } from "./bus.ts";
 import { PATROL_PAUSE_AT } from "./config.ts";
@@ -182,9 +182,18 @@ export async function fire(s: Schedule, at = now(), manual = false): Promise<str
 	]
 		.filter(Boolean)
 		.join("\n\n");
+	// 巡检挂回发起它的需求：需求抽屉里看得到最近一轮，不然像是停了
+	const storyId = s.patrol
+		? db()
+				.select({ id: schema.stories.id })
+				.from(schema.stories)
+				.where(like(schema.stories.tickets, `%"scheduleId":"${s.id}"%`))
+				.get()?.id
+		: undefined;
 	const task = await dispatch({
 		agent: s.agent,
 		request,
+		storyId,
 		title: `定时 · ${s.name}`,
 		triggers: [tid],
 		rule: `定时任务：${s.name}`,

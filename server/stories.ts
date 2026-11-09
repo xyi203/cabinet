@@ -242,7 +242,8 @@ export async function bindTickets(storyId: string, text: string, source: "manual
 			infos.set(key, await ticketInfo(key));
 		} catch (e) {
 			log("读取发布工单失败", key, e);
-			failed.push(key);
+			// 工单真不存在是 DraftError；别的（MCP 没连上、超时）把原因带上，免得以为是单号错了
+			failed.push(e instanceof DraftError ? key : `${key}（${String((e as Error).message).slice(0, 80)}）`);
 		}
 	}
 	const bound = source === "created" ? keys : keys.filter((k) => infos.has(k));

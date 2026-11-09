@@ -7,7 +7,7 @@ import path from "node:path";
 import { abortRun, forgetRun, runPi, steer } from "./agent/driver.ts";
 import { complete, modelOptions } from "./agent/models.ts";
 import { changed } from "./bus.ts";
-import { DATA_DIR, DEFAULT_CWD, GLAB_BIN, OWNER_OPEN_ID, PATHS, PI_MODEL, PORT } from "./config.ts";
+import { DATA_DIR, DEFAULT_CWD, GLAB_BIN, OWNER_OPEN_ID, PATHS, PI_MODEL, PORT, TASK_TIMEOUT } from "./config.ts";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "./db/index.ts";
 import { imageKeys, imagesNote, queuePatch, saveImage, sendCardToUserAsBot, sendToUserAsBot } from "./lark/bot.ts";
 import { devCard, devTitle, type Round } from "./devcard.ts";
@@ -352,6 +352,8 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 				agent,
 				agentName: task.agent,
 				tier: task.patrol ? "patrol" : "task",
+				// 巡检每轮只做增量检查，按普通时长；其余 agent 任务放宽
+				timeout: task.patrol ? undefined : TASK_TIMEOUT,
 				label: dev ? `开发 · ${path.basename(task.repo)}` : `${task.agent} · ${task.title.slice(0, 20)}`,
 				chatId: id,
 				// 只有 dev agent 能写，而且只能写自己的 worktree
