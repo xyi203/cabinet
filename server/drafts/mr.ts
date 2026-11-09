@@ -140,7 +140,7 @@ export async function applyMrAction(id: string, action: MrAction): Promise<void>
 	if (!d) throw new DraftError("草稿不存在");
 	const mr = draftMrs([d]).get(id);
 	if (!mr) throw new DraftError("这条草稿不是 MR 预审，没有对应的 MR");
-	if (mr.done.includes(action)) throw new DraftError(action === "approve" ? "已经 approve 过了" : "评审意见已经发到 MR 上了");
+	if (mr.done.includes(action)) throw new DraftError(action === "approve" ? "这个 MR 已经批准过了" : "已经发到 MR 上了");
 	const repo = glabRepo(mr.project);
 	if (action === "note" && !mr.ledger && !d.report.trim()) throw new DraftError("这条草稿没有评审报告");
 	try {
@@ -150,7 +150,7 @@ export async function applyMrAction(id: string, action: MrAction): Promise<void>
 	} catch (e) {
 		log("MR 操作失败", action, mr.project, mr.iid, e);
 		if (e instanceof DraftError) throw e;
-		throw new DraftError(`${action === "approve" ? "approve" : "发评论"}没有成功：${String((e as Error).message).slice(0, 300)}`);
+		throw new DraftError(`${action === "approve" ? "批准 MR" : "发评论"}没有成功：${String((e as Error).message).slice(0, 300)}`);
 	}
 	setKv(doneKey(id), [...mr.done, action]);
 	settle({
@@ -185,7 +185,7 @@ async function postLedger(id: string, mr: DraftMr, ledger: MrLedger) {
 	const head = JSON.parse(await glabApi("GET", base))?.diff_refs?.head_sha;
 	if (head !== ledger.head_sha)
 		throw new DraftError(
-			`MR 有新提交（预审时 ${ledger.head_sha.slice(0, 8)}，现在 ${String(head).slice(0, 8)}），评论位置过期了，重新预审后再发`,
+			`MR 有了新提交（预审时是 ${ledger.head_sha.slice(0, 8)}，现在是 ${String(head).slice(0, 8)}），评论的位置可能对不上了，请重新预审后再发`,
 		);
 	const posted = new Set(getKv<number[]>(postedKey(id), []));
 	const unplaced: string[] = [];

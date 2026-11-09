@@ -18,7 +18,8 @@ import { queuePatch, sendCardToUserAsBot } from "./lark/bot.ts";
 import { CronError, nextRun, parseCron, saveSchedule } from "./schedules.ts";
 import { ticketsCreated } from "./stories.ts";
 import { execFile } from "node:child_process";
-import { log, now } from "./util.ts";
+import { footnote } from "./drafts/card.ts";
+import { log, now, when } from "./util.ts";
 
 export const APPROVAL_TTL = 86400;
 const RESULT_MAX = 3000;
@@ -31,7 +32,7 @@ export function pendingApprovals(): Approval[] {
 	return db().select().from(schema.approvals).where(eq(schema.approvals.status, "pending")).orderBy(desc(schema.approvals.created)).all();
 }
 
-const fmt = (t: number) => new Date(t * 1000).toLocaleString("zh-CN", { hour12: false });
+const fmt = (t: number) => when(t);
 
 /** 定时任务的参数：名字、cron、内容都要有，cron 要能解析 */
 export function checkSchedule(args: Record<string, unknown>): string | undefined {
@@ -77,7 +78,10 @@ export function describe(a: Pick<Approval, "tool" | "args">): string {
 	// 发布工单的 params 是多行文字，JSON 里只剩一串 \n，审批时看不清要写进去的内容
 	const { params, ...rest } = a.args as { params?: unknown };
 	const lines = Array.isArray(params)
-		? params.map((p: { paramKey?: string; paramValue?: unknown }) => `**${p.paramKey}**\n\`\`\`\n${String(p.paramValue ?? "").slice(0, 800)}\n\`\`\``)
+		? params.map(
+				(p: { paramKey?: string; paramValue?: unknown }) =>
+					`**${p.paramKey}**\n\`\`\`\n${String(p.paramValue ?? "").slice(0, 800)}\n\`\`\``,
+			)
 		: [];
 	const json = JSON.stringify(lines.length ? rest : a.args, null, 2).slice(0, 1500);
 	return [`调用 \`${a.tool}\`\n\`\`\`\n${json}\n\`\`\``, ...lines].join("\n");
@@ -88,10 +92,11 @@ const note = (content: string, color = "grey") => ({
 	tag: "div",
 	text: { tag: "plain_text", content, text_color: color, text_size: "notation" },
 });
+// 颜色：等你批准和正在执行的青绿，结束的灰，执行出错的红
 const STATUS: Record<string, [string, string]> = {
-	pending: ["待你审批", "orange"],
-	running: ["执行中…", "wathet"],
-	done: ["已执行", "green"],
+	pending: ["等你批准", "turquoise"],
+	running: ["正在执行…", "turquoise"],
+	done: ["已执行", "grey"],
 	failed: ["执行出错", "red"],
 	rejected: ["已拒绝", "grey"],
 	expired: ["已过期（超过 24 小时没处理）", "grey"],
@@ -100,7 +105,7 @@ const STATUS: Record<string, [string, string]> = {
 export function approvalCard(a: Approval): object {
 	const [subtitle, template] = STATUS[a.status] ?? [a.status, "grey"];
 	const elements: object[] = [
-		{ tag: "markdown", content: `**来源**：${a.origin || "未知"}\n**说明**：${a.reason}` },
+		{ tag: "markdown", content: `**来源**：${a.origin || "未知"}\n**原因**：${a.reason}` },
 		{ tag: "markdown", content: describe(a) },
 	];
 	if (a.result)
@@ -108,19 +113,19 @@ export function approvalCard(a: Approval): object {
 	if (a.status === "pending") {
 		const learn = learnOf(a);
 		elements.push({ tag: "hr" });
-		if (learn) elements.push(note(`确认是只读的话，可以点「执行并以后放行」：${learnText(learn)}，之后不再问`));
+		if (learn) elements.push(note(`确认它只读、不改东西的话，可以点「批准，以后不再问」（${learnText(learn)}）`));
 		elements.push({
 			tag: "form",
 			name: "apv",
 			elements: [
-				{ tag: "input", name: "note", placeholder: plain("拒绝时可以写一句理由，会告诉 agent"), max_length: 300, width: "fill" },
+				{ tag: "input", name: "note", placeholder: plain("拒绝的话可以写一句理由，助手会看到"), max_length: 300, width: "fill" },
 				{
 					tag: "column_set",
 					horizontal_spacing: "8px",
 					columns: [
-						["apv_ok", "执行", "primary_filled", "approve"],
-						...(learn ? [["apv_learn", "执行并以后放行", "primary", "approve_remember"]] : []),
-						["apv_no", "拒绝", "danger", "reject"],
+						["apv_ok", "批准", "primary_filled", "approve"],
+						...(learn ? [["apv_learn", "批准，以后不再问", "default", "approve_remember"]] : []),
+						["apv_no", "拒绝", "default", "reject"],
 					].map(([name, label, type, act]) => ({
 						tag: "column",
 						width: "auto",
@@ -139,13 +144,13 @@ export function approvalCard(a: Approval): object {
 			],
 		});
 	}
-	elements.push(note(`${a.id} · ${fmt(a.created)} · 看板 http://127.0.0.1:${PORT}/?view=todo`));
+	elements.push(footnote(`${fmt(a.created)} 发起`, `http://127.0.0.1:${PORT}/`));
 	return {
 		schema: "2.0",
 		config: { update_multi: true, summary: { content: `审批：${a.reason}` } },
 		header: {
 			title: plain(
-				`写操作审批 · ${
+				`审批：${
 					a.tool === "bash"
 						? String(a.args.command ?? "")
 								.split(/\s+/)
@@ -243,7 +248,7 @@ async function execute(a: Approval): Promise<string> {
 	const args = { ...a.args };
 	const v = g.guard.verdict(a.tool, args, a.cwd || g.cwd);
 	if (v.kind !== "approve")
-		throw new ApprovalError(v.kind === "deny" ? `现在的规则不允许：${v.reason}` : "现在的规则把它当成只读，请让 agent 直接执行");
+		throw new ApprovalError(v.kind === "deny" ? `现在的规则不允许：${v.reason}` : "现在的规则把它当成只读，不用审批，让助手直接执行");
 	if (a.tool === "bash") {
 		const tokens = tokenize(String(args.command ?? ""));
 		if (typeof tokens === "string" || !tokens.length) throw new ApprovalError(`命令解析失败：${tokens}`);
@@ -278,11 +283,11 @@ async function followUp(a: Approval, text: string, approved: boolean) {
 /** remember：执行成功后把这条命令记成只读（见 learnOf），以后同样的子命令直接放行 */
 export async function decideApproval(id: string, action: "approve" | "reject", why = "", remember = false): Promise<Approval> {
 	const a = getApproval(id);
-	if (!a) throw new ApprovalError("审批不存在");
+	if (!a) throw new ApprovalError("找不到这条审批");
 	if (a.status !== "pending") throw new ApprovalError(`这条审批${STATUS[a.status]?.[0] ?? a.status}`);
 	if (now() - a.created > APPROVAL_TTL) {
 		expire(a.id);
-		throw new ApprovalError("超过 24 小时，已过期；需要的话让 agent 重新发起");
+		throw new ApprovalError("超过 24 小时没处理，已经过期了；需要的话让助手重新发起");
 	}
 	const next = action === "approve" ? "running" : "rejected";
 	const res = db()

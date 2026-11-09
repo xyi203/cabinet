@@ -104,15 +104,15 @@ function draftText(source: Source, kind: Kind, body: string, note: string, repor
 	const parts = [`**${where(source)}**`];
 	if (source.chatMode === "meego" && source.meego) parts.push(source.meego.url);
 	// 只看 @ 那一条常常不知道在说什么：私聊草稿里带上相关前文的最后几行
-	else if (source.context) parts.push(`前文：\n${quote(source.context.slice(-500))}`);
+	else if (source.context) parts.push(`前面的消息：\n${quote(source.context.slice(-500))}`);
 	parts.push(quote(source.text.slice(0, 600)));
 	if (noReply) {
-		parts.push(`建议不回复：${body.slice(NO_REPLY_MARK.length).trim()}`, "需要回复就回本条：`改 <要点>` / `表情 <类型>` / `表情包 <名字>`");
+		parts.push(`建议不回复：${body.slice(NO_REPLY_MARK.length).trim()}`, "要回复的话，引用本条回复「改写 要点」「表情 赞」「表情包 名字」");
 	} else {
 		parts.push(`**草稿**\n${describeReply(kind, body)}`);
-		if (report) parts.push(`**评审报告**（不会发出）\n${report}`);
-		if (note) parts.push(`备注（不会发出）：${note}`);
-		parts.push("回复本条：`发` / `改 <意见>` / `表情 <类型>` / `表情包 <名字>` / `完成` / `不发`");
+		if (report) parts.push(`**评审报告**（只给你看）\n${report}`);
+		if (note) parts.push(`备注（只给你看）：${note}`);
+		parts.push("引用本条回复「发送」「不回复」「完成」「改写 语气软一点」「表情 赞」「表情包 名字」");
 	}
 	return parts.join("\n\n");
 }
@@ -135,7 +135,7 @@ export async function pushDraft(source: Source, draft: string, replaces?: string
 	if (mr && comments) {
 		const got = parseLedger(comments);
 		if (typeof got === "string")
-			note = [rawNote, `MR 评论台账读不出来（${got}），「发到 MR」只能把评审报告整段发成一条评论`].filter(Boolean).join("\n");
+			note = [rawNote, `没读出要逐条发到 MR 的评论（${got}），点「发送评审意见」会把评审报告整段发成一条评论`].filter(Boolean).join("\n");
 		else ledger = got;
 	}
 	const noReply = rawBody.startsWith(NO_REPLY_MARK);

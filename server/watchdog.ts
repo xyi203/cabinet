@@ -10,7 +10,8 @@ import { inflight } from "./drafts/store.ts";
 import { sendCardToUserAsBot, userAuthStatus } from "./lark/bot.ts";
 import { lastPoll } from "./poller.ts";
 import { recentRecords } from "./records.ts";
-import { log, now } from "./util.ts";
+import { footnote } from "./drafts/card.ts";
+import { log, now, span } from "./util.ts";
 
 export interface Issue {
 	/** 同一个问题同一个 key：用来去重和判断恢复 */
@@ -41,25 +42,25 @@ export function checkHealth(s: Snapshot): Issue[] {
 		if (!s.auth.authorized)
 			issues.push({
 				key: "auth",
-				title: "飞书用户身份没有授权",
-				detail: "读不到私聊和 @你 的消息，草稿也发不出去。在看板上点「授权飞书」。",
+				title: "飞书还没授权",
+				detail: "收不到私聊和 @你 的消息，草稿也发不出去。到看板上点「授权飞书」。",
 			});
 		else {
 			const lag = s.pollSince ? s.now - s.pollSince : Infinity;
 			if (lag > Math.max(10 * MIN, POLL_INTERVAL * 10))
 				issues.push({
 					key: "poll",
-					title: "轮询停了",
+					title: "收取消息停了",
 					detail: s.pollSince
-						? `上次推进是 ${Math.round(lag / MIN)} 分钟前，私聊和 @你 的消息可能漏了。看一下 data/cabinet.log。`
-						: "启动后还没完成过一次轮询。",
+						? `已经 ${span(lag)} 没有收取新消息，私聊和 @你 的消息可能漏了。原因在 data/cabinet.log 里。`
+						: "启动后还没成功收取过一次消息。",
 				});
 			const left = s.auth.refreshExpiresAt ? s.auth.refreshExpiresAt - s.now : Infinity;
 			if (left < 3 * 86400)
 				issues.push({
 					key: "auth-expiring",
 					title: "飞书授权快过期了",
-					detail: `还剩 ${Math.max(0, Math.round(left / 3600))} 小时，到期前在看板上重新授权。`,
+					detail: `还剩 ${span(left)}，到期前到看板上重新授权。`,
 				});
 		}
 	}
@@ -68,28 +69,28 @@ export function checkHealth(s: Snapshot): Issue[] {
 			issues.push({
 				key: `draft-stuck:${d.id}`,
 				title: "起草卡住了",
-				detail: `${d.label} 的消息起草了 ${Math.round((s.now - d.since) / MIN)} 分钟还没出草稿。`,
+				detail: `${d.label} 的消息已经起草了 ${span(s.now - d.since)}，还没出草稿。`,
 			});
 	for (const t of s.devTasks)
 		if (t.status === "running" && !s.runningKeys.has(`dev-${t.id}`) && s.now - t.updated > 5 * MIN)
 			issues.push({
 				key: `task-lost:${t.id}`,
-				title: "agent 任务丢了",
-				detail: `「${t.title.slice(0, 40)}」显示运行中，但没有在跑的运行。在卡片或看板上给它发一句话就会重新开始。`,
+				title: "任务中断了",
+				detail: `「${t.title.slice(0, 40)}」显示进行中，实际已经没在运行。在卡片或看板上给它发一句话，就会接着做。`,
 			});
 	for (const b of s.alertBatches)
 		if (s.now - b.first > routeRules().alert.maxWait + 5 * MIN)
 			issues.push({
 				key: `alert-stuck:${b.chatId}`,
-				title: "告警批没有收口",
-				detail: `群「${b.name}」的一批告警攒了 ${Math.round((s.now - b.first) / MIN)} 分钟还没交给 agent。`,
+				title: "告警迟迟没有分析",
+				detail: `「${b.name}」的告警已经攒了 ${span(s.now - b.first)}，还没交给助手分析。`,
 			});
 	const failed = s.failures.filter((f) => s.now - f.ts < 3600).length;
 	if (failed >= 5)
 		issues.push({
 			key: "failures",
-			title: "最近失败很多",
-			detail: `最近一小时失败了 ${failed} 次，可能是模型网关、额度或飞书接口出了问题。看板「失败」里有原因。`,
+			title: "最近失败比较多",
+			detail: `最近一小时失败了 ${failed} 次，可能是模型服务、额度或飞书接口出了问题。原因在看板的「运行」页。`,
 		});
 	return issues;
 }
@@ -117,24 +118,16 @@ const seenKey = (key: string) => `watchdog:${key}`;
 function card(issues: Issue[]) {
 	return {
 		schema: "2.0",
-		config: { update_multi: true, summary: { content: `Watchdog：${issues.map((i) => i.title).join("、")}` } },
+		config: { update_multi: true, summary: { content: `自检：${issues.map((i) => i.title).join("、")}` } },
 		header: {
-			title: { tag: "plain_text", content: "Watchdog" },
-			subtitle: { tag: "plain_text", content: `${issues.length} 个新问题` },
+			title: { tag: "plain_text", content: "自检" },
+			subtitle: { tag: "plain_text", content: `发现 ${issues.length} 个新问题` },
 			template: "red",
 		},
 		body: {
 			elements: [
 				...issues.map((i) => ({ tag: "markdown", content: `**${i.title}**\n${i.detail}` })),
-				{
-					tag: "div",
-					text: {
-						tag: "plain_text",
-						content: `同一个问题只提醒一次，恢复后自动清掉。看板 http://127.0.0.1:${PORT}/?view=todo`,
-						text_color: "grey",
-						text_size: "notation",
-					},
-				},
+				footnote("同一个问题只提醒一次", `http://127.0.0.1:${PORT}/`),
 			],
 		},
 	};

@@ -7,6 +7,41 @@ export function log(...args: unknown[]) {
 
 export const now = () => Date.now() / 1000;
 
+// 发给 Yi 的卡片和消息里的时间、时长，写法和看板一致（docs/ui.md「数字」）。
+// 不用 toLocaleString 再截字符串：月、日位数会变，截出来会错
+const pad = (n: number) => String(n).padStart(2, "0");
+const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+
+/** 时间点：今天 14:05、明天 09:30、昨天 18:00、11月12日 09:33、2025年3月2日 10:00 */
+export function when(ts: number, at = now()) {
+	const d = new Date(ts * 1000);
+	const n = new Date(at * 1000);
+	const rel = (days: number) => dayKey(new Date(n.getFullYear(), n.getMonth(), n.getDate() + days)) === dayKey(d);
+	const day = rel(0)
+		? "今天"
+		: rel(1)
+			? "明天"
+			: rel(-1)
+				? "昨天"
+				: d.getFullYear() === n.getFullYear()
+					? `${d.getMonth() + 1}月${d.getDate()}日`
+					: `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+	return `${day} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 时长：3 分钟、2 小时 5 分钟、1 天 3 小时 */
+export function span(sec: number) {
+	const s = Math.max(0, Math.round(sec));
+	if (s < 3600) return `${Math.max(1, Math.round(s / 60))} 分钟`;
+	const h = Math.floor(s / 3600);
+	if (h < 24) {
+		const m = Math.floor((s % 3600) / 60);
+		return m ? `${h} 小时 ${m} 分钟` : `${h} 小时`;
+	}
+	const d = Math.floor(h / 24);
+	return h % 24 ? `${d} 天 ${h % 24} 小时` : `${d} 天`;
+}
+
 // 进程正在退出：这时被打断的运行不算失败，留着待接回标记，下次启动用同一 requestId 接着跑
 let stopping = false;
 export const isStopping = () => stopping;

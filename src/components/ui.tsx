@@ -2,31 +2,31 @@
 import type { ReactNode } from "react";
 import type { QuotaWindow } from "../lib/api";
 
-/** 12.9K / 3.4M / 1.2B */
-export function compact(n: number) {
-	const a = Math.abs(n);
-	if (a >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
-	if (a >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
-	if (a >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
-	return String(Math.round(n));
-}
+const COMPACT = new Intl.NumberFormat("zh-CN", { notation: "compact", maximumSignificantDigits: 3 });
+const PLAIN = new Intl.NumberFormat("zh-CN");
+/** 大数按中文习惯：9,999、1.23万、37.9万、1400万、1.23亿（保留三位有效数字，不写 K、M） */
+export const compact = (n: number) => (Math.abs(n) < 10_000 ? PLAIN.format(Math.round(n)) : COMPACT.format(Math.round(n)));
 
-/** 等了多久 / 还有多久：3m、2h05m、1d04h */
+/** 一段时长：3 分钟、2 小时 5 分钟、1 天 4 小时 */
 export function span(sec: number) {
 	const s = Math.max(0, Math.round(sec));
-	if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m`;
+	if (s < 3600) return `${Math.max(1, Math.round(s / 60))} 分钟`;
 	const h = Math.floor(s / 3600);
-	if (h < 24) return `${h}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
-	return `${Math.floor(h / 24)}d${String(h % 24).padStart(2, "0")}h`;
+	if (h < 24) {
+		const m = Math.floor((s % 3600) / 60);
+		return m ? `${h} 小时 ${m} 分钟` : `${h} 小时`;
+	}
+	const d = Math.floor(h / 24);
+	return h % 24 ? `${d} 天 ${h % 24} 小时` : `${d} 天`;
 }
 
 export const pct = (x: number) => `${Math.round(x * 100)}%`;
 
-/** 耗时：不到一分钟按秒，之后同 span */
-export const dur = (sec: number) => (sec < 60 ? `${Math.max(0, Math.round(sec))}s` : span(sec));
+/** 耗时：不到 10 秒带一位小数，不到一分钟按秒，之后同 span */
+export const dur = (sec: number) => (sec < 10 ? `${Math.max(0, sec).toFixed(1)} 秒` : sec < 60 ? `${Math.round(sec)} 秒` : span(sec));
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-	return <div className={`rounded-xl border border-line bg-panel ${className}`}>{children}</div>;
+	return <div className={`rounded-[10px] border border-line bg-panel ${className}`}>{children}</div>;
 }
 
 export function SectionTitle({ children, extra }: { children: ReactNode; extra?: ReactNode }) {
@@ -45,17 +45,16 @@ export function StatTile({ label, value, sub, title }: { label: string; value: R
 			<div className="text-[12px] text-muted" title={title}>
 				{label}
 			</div>
-			<div className="mt-1 text-[22px] leading-tight font-semibold text-text tabular-nums">{value}</div>
-			{sub != null && <div className="mt-1 truncate text-[12px] text-muted">{sub}</div>}
+			<div className="mt-1 text-[20px] leading-tight font-semibold text-text tabular-nums">{value}</div>
+			{sub != null && <div className="mt-1 text-[12px] text-muted">{sub}</div>}
 		</Card>
 	);
 }
 
-/** 额度窗口的严重程度：填充色随用量变（主色 → 警告 → 危险），轨道用同色更浅的一档 */
+/** 额度用量：平时是强调色，快用完（80% 起）才变成警示色；轨道统一暖灰 */
 function severity(u: number) {
-	if (u >= 0.8) return { fill: "bg-bad", track: "bg-bad-soft", text: "text-bad" };
-	if (u >= 0.6) return { fill: "bg-warn", track: "bg-warn-soft", text: "text-warn" };
-	return { fill: "bg-accent", track: "bg-accent-soft", text: "text-text" };
+	if (u >= 0.8) return { fill: "bg-warn", track: "bg-soft", text: "text-warn" };
+	return { fill: "bg-accent", track: "bg-soft", text: "text-text" };
 }
 
 /** 一个额度窗口：标签、用量条、重置倒计时 */
@@ -64,8 +63,8 @@ export function QuotaMeter({ label, w, now, stale }: { label: string; w?: QuotaW
 		return (
 			<Card className="px-4 py-3">
 				<div className="text-[12px] text-muted">{label}</div>
-				<div className="mt-1 text-[22px] leading-tight font-semibold text-muted">—</div>
-				<div className="mt-1 text-[12px] text-muted">还没查到</div>
+				<div className="mt-1 text-[20px] leading-tight font-semibold text-muted">—</div>
+				<div className="mt-1 text-[12px] text-muted">暂时查不到</div>
 			</Card>
 		);
 	const s = severity(w.utilization);
@@ -79,7 +78,7 @@ export function QuotaMeter({ label, w, now, stale }: { label: string; w?: QuotaW
 					</span>
 				)}
 			</div>
-			<div className={`mt-1 text-[22px] leading-tight font-semibold tabular-nums ${s.text}`}>{pct(w.utilization)}</div>
+			<div className={`mt-1 text-[20px] leading-tight font-semibold tabular-nums ${s.text}`}>{pct(w.utilization)}</div>
 			<div
 				className={`mt-2 h-2 overflow-hidden rounded-full ${s.track}`}
 				role="meter"
@@ -112,7 +111,7 @@ export function Segmented<T extends string>({
 					key={o.value}
 					type="button"
 					onClick={() => onChange(o.value)}
-					className={`cursor-pointer rounded-md border-0 px-3 py-1 text-[13px] ${
+					className={`cursor-pointer rounded-md border-0 px-3 py-1 text-[14px] ${
 						o.value === value ? "bg-accent-soft font-semibold text-accent" : "bg-transparent text-muted hover:text-text"
 					}`}
 				>

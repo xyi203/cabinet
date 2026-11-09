@@ -1,14 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchModels } from "../lib/api";
 
-const EFFORT: Record<string, string> = {
-	off: "off（不思考）",
-	minimal: "minimal",
-	low: "low",
-	medium: "medium",
-	high: "high",
-	xhigh: "xhigh",
-	max: "max",
+/** 思考强度的中文说法；模型支持哪几档由后端给 */
+export const EFFORT: Record<string, string> = {
+	off: "不思考",
+	minimal: "最低",
+	low: "低",
+	medium: "中",
+	high: "高",
+	xhigh: "很高",
+	max: "最高",
 };
 
 /** effort 不在新模型支持的级别里时，退到最接近的较低一级 */
@@ -35,7 +36,7 @@ export function ModelPicker({
 		<>
 			<select
 				value={model}
-				title="模型"
+				aria-label="模型"
 				onChange={(e) => {
 					const next = models?.find((m) => m.id === e.target.value);
 					onChange(e.target.value, fitEffort(next?.levels ?? [], thinking));
@@ -47,10 +48,10 @@ export function ModelPicker({
 					</option>
 				))}
 			</select>
-			<select value={thinking} title="effort（思考强度）" onChange={(e) => onChange(model, e.target.value)}>
+			<select value={thinking} aria-label="思考强度" title="越高想得越久、越贵" onChange={(e) => onChange(model, e.target.value)}>
 				{levels.map((l) => (
 					<option key={l} value={l}>
-						effort: {EFFORT[l] ?? l}
+						思考强度：{EFFORT[l] ?? l}
 					</option>
 				))}
 			</select>

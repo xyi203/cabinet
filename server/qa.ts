@@ -2,6 +2,7 @@
 // 所以 key = root_id ?? message_id，话题和 pi 会话一一对应。Yi 私聊机器人时还能处理草稿指令。
 import { BOT_OPEN_ID, COMMON_EMOJI, DEFAULT_CWD, OWNER_NAME, OWNER_OPEN_ID, THREAD_CONTEXT_N } from "./config.ts";
 import { type Action, applyDraftAction } from "./drafts/actions.ts";
+import { emojiName } from "./drafts/card.ts";
 import { type Kind, listStickers } from "./drafts/format.ts";
 import { DraftError, LIVE, getDraft, pickDraft } from "./drafts/store.ts";
 import { locks, sem } from "./agent/slots.ts";
@@ -67,7 +68,7 @@ export async function remember(ev: BotEvent, text: string, tid: string) {
 	const content = text.replace(/^记住[:：,，\s]*/, "").trim();
 	const routeId = decide([tid], { rule: "记住", actionKind: "remember", actionId: ev.messageId });
 	if (ev.senderId !== OWNER_OPEN_ID) return void (await reply(ev, `写入记忆需要${OWNER_NAME}确认，可以请${OWNER_NAME}来说「记住 …」。`));
-	if (!content) return void (await reply(ev, "要记住什么？用法：记住 xxx"));
+	if (!content) return void (await reply(ev, "要记住什么？例如：记住 周报周五下午发"));
 	// 只有 Yi 能写；正文就是他的原话，模型只帮着分类，群里的提示词注入写不进长期记忆
 	// 引用了草稿卡片说的「记住」：可以只对那条消息的发送人或那个会话生效
 	const d = ev.parentId ? getDraft(ev.parentId) : undefined;
@@ -94,30 +95,31 @@ export async function remember(ev: BotEvent, text: string, tid: string) {
 		: m.scope.startsWith("chat:")
 			? `，只在「${m.scopeName}」里用`
 			: "";
-	if (m.application === "convention")
-		await reply(ev, `记成长期约定 #${m.id}，适用：${m.appliesWhen}${scope}。不对的话在看板「记忆」里改。`);
-	else if (scope) await reply(ev, `记下了 #${m.id}${scope}。不对的话在看板「记忆」里改。`);
+	if (m.application === "convention") await reply(ev, `记住了，以后照做。适用：${m.appliesWhen}${scope}。不对的话到看板「记忆」里改。`);
+	else if (scope) await reply(ev, `记住了${scope}。不对的话到看板「记忆」里改。`);
 	record({ kind: "qa", status: "remembered", source: ev.messageId, chatId: ev.chatId, question: content, label: "记忆" });
 }
 
-const DRAFT_CMD = /^(发|不发|改|表情包|表情|完成|已处理)(?:$|[\s:：,，]+([\s\S]*))/;
+const DRAFT_CMD = /^(发送|发|不回复|不发|改写|改|表情包|表情|完成|已处理)(?:$|[\s:：,，]+([\s\S]*))/;
+// 卡片和提示里写的是看板的动词（发送 / 不回复 / 改写），老的短指令照样认
+const CMD_ALIAS: Record<string, string> = { 发送: "发", 不回复: "不发", 改写: "改" };
 
 /** Yi 私聊机器人的草稿指令；返回 false 表示不是指令，当普通问题处理 */
 export async function draftCommand(ev: BotEvent, text: string, tid: string): Promise<boolean> {
 	const m = DRAFT_CMD.exec(text);
 	if (!m) return false;
-	const cmd = m[1];
+	const cmd = CMD_ALIAS[m[1]] ?? m[1];
 	const opinion = (m[2] ?? "").trim();
 	// 「建议不回复」的草稿没有可发内容，不引用时「发」不该落到它头上
 	const d = pickDraft(ev.parentId ?? ev.rootId, cmd === "发" ? ["pending"] : LIVE);
 	if (!d) {
 		if (["改", "表情", "表情包"].includes(cmd)) return false;
-		await reply(ev, "没有待处理的草稿。");
+		await reply(ev, "没有等你处理的草稿。");
 		return true;
 	}
 	decide([tid], { rule: `草稿指令：${cmd}`, actionKind: "command", actionId: d.id });
 	if (cmd === "改" && !opinion) {
-		await reply(ev, "怎么改？用法：改 <意见>");
+		await reply(ev, "想怎么改？例如：改写 语气软一点");
 		return true;
 	}
 	if ((cmd === "表情" || cmd === "表情包") && !opinion) {
@@ -125,8 +127,10 @@ export async function draftCommand(ev: BotEvent, text: string, tid: string): Pro
 		await reply(
 			ev,
 			cmd === "表情"
-				? `用法：表情 <类型>，常用：${COMMON_EMOJI.join(", ")}`
-				: `用法：表情包 <名字>，可用：${stickers.length ? stickers.join(", ") : "目录里还没有表情包"}`,
+				? `回哪个表情？例如：表情 赞。常用的有：${COMMON_EMOJI.map(emojiName).join("、")}`
+				: stickers.length
+					? `发哪个表情包？例如：表情包 ${stickers[0]}。可用的有：${stickers.join("、")}`
+					: "还没有表情包，把图片放进 data/stickers/ 就能用",
 		);
 		return true;
 	}
@@ -152,7 +156,10 @@ export async function draftCommand(ev: BotEvent, text: string, tid: string): Pro
 /** Yi 在飞书里引用开发任务通知回复：推送 / 停止 / 放弃，其余原样转给 agent */
 export async function devReply(ev: BotEvent, id: string, text: string) {
 	try {
-		if (text === "推送") return void (await reply(ev, `已推送：${(await pushDev(id)) || "MR 已更新"}`));
+		if (text === "推送") {
+			const url = await pushDev(id);
+			return void (await reply(ev, url ? `已推送：${url}` : "已推送，MR 已更新"));
+		}
 		if (text === "停止") {
 			await stopDev(id);
 			return void (await react(ev.messageId, "OK"));

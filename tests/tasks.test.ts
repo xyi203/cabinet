@@ -131,7 +131,7 @@ test("看板：每件事带时间线和产出；草稿转任务后同一件事�
 	db().update(schema.devTasks).set({ status: "pushed" }).run();
 	v = taskViews([]).find((x) => x.id === id)!;
 	assert.equal(v.status, "done");
-	assert.equal(v.result, "已提 MR");
+	assert.equal(v.result, "已创建 MR");
 });
 
 test("推送规则：建议不回和表情不私聊，MR 预审和改写总要私聊；定时没变化、巡检正常直接归档", async () => {

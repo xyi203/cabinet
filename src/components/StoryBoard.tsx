@@ -1,52 +1,54 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import {
-	type DevTask,
-	type Schedule,
-	type State,
-	type Story,
-	type StoryTicket,
-	fetchRepos,
-	fetchSchedules,
-	post,
-	runSchedule,
-} from "../lib/api";
-import { AGENT_NAME, ago, ticketUrl, waitingOn } from "../lib/format";
+import { type DevTask, type Schedule, type State, type Story, fetchRepos, fetchSchedules, post, runSchedule } from "../lib/api";
+import { AGENT_NAME, ago, ticketUrl, time, waitingOn, when } from "../lib/format";
 import { Drawer, type Msg, MsgLine } from "./Drawer";
+import { humanCron } from "./Schedules";
 
-/** 需求任务的四个阶段，加一个「不跟了」收起来 */
+/** 需求任务的四个阶段，加一个「不再跟进」收起来 */
 const STAGES: Array<[string, string]> = [
 	["dev", "开发中"],
 	["test", "测试中"],
 	["release", "发布中"],
-	["done", "发布完成"],
+	["done", "已发布"],
 ];
-const STAGE_NAME: Record<string, string> = { ...Object.fromEntries(STAGES), dropped: "不跟了" };
+const DROPPED = "不再跟进";
+const STAGE_NAME: Record<string, string> = { ...Object.fromEntries(STAGES), dropped: DROPPED };
 const TYPE_NAME: Record<string, string> = { story: "需求", issue: "缺陷" };
 const TASK_STATUS: Record<string, string> = {
 	running: "进行中",
-	review: "待看",
+	review: "待查看",
 	failed: "失败",
 	pushing: "推送中",
-	pushed: "已提 MR",
+	pushed: "已创建 MR",
 	done: "已完成",
 	discarded: "已放弃",
 };
+const TASK_STATUS_COLOR: Record<string, string> = { review: "text-accent", failed: "text-bad" };
 
-/** 巡检每 30 分钟一轮，不进任务列表，在发布工单那一行看最近一轮 */
+/** 巡检每 30 分钟一轮，不进任务列表，在发布工单下面看 */
 const tasksOf = (state: State, id: string) => state.devTasks.filter((t) => t.storyId === id && !t.patrol);
 /** 解绑的留着记录（免得刷新时又自动挂回来），不显示 */
 const ticketsOf = (s: Story) => s.tickets.filter((t) => !t.removed);
-const SOURCE_NAME: Record<string, string> = { auto: "自动", manual: "手动", created: "提单" };
+const SOURCE_NAME: Record<string, string> = { auto: "按飞书工单自动关联", manual: "手动绑定", created: "从这里提交的" };
 /** 巡检正常时结论第一行就是这句（server/dev.ts 的 PATROL_OK） */
 const PATROL_OK = "本轮巡查正常";
-const mdhm = (ts: number) =>
-	new Date(ts * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
-const hhmm = (ts: number) => new Date(ts * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+/** 和上一轮比没变化时第一行写这句（server/dev.ts 的 NO_CHANGE），也算正常，不能当成异常 */
+const NO_CHANGE = "本轮无变化";
 const roundState = (t: DevTask) =>
 	// 审批结果回来接着跑的那轮，第一行先说审批，「本轮巡查正常」在后面；异常的结论不会带这句
-	t.status === "running" ? "进行中" : t.status === "failed" ? "失败" : t.summary.includes(PATROL_OK) ? "正常" : "有异常";
+	t.status === "running"
+		? "进行中"
+		: t.status === "failed"
+			? "失败"
+			: t.summary.includes(PATROL_OK)
+				? "正常"
+				: t.summary.trimStart().startsWith(NO_CHANGE)
+					? "无变化"
+					: "有异常";
+/** 正常的不上色，只让异常和失败显眼 */
+const ROUND_COLOR: Record<string, string> = { 有异常: "text-bad", 失败: "text-bad", 进行中: "text-accent" };
 /** 观察文档的链接：写在生成文档那个任务的结论里 */
 const DOC_URL_RE = /https:\/\/[\w.-]*feishu\.cn\/(?:docx|wiki|docs)\/[\w-]+/;
 
@@ -58,9 +60,15 @@ function StoryCard({ s, state, onOpen }: { s: Story; state: State; onOpen: (s: S
 	const waiting = state.items.filter((t) => t.storyId === s.id && waitingOn(t)).length;
 	const patrolling = tickets.some((t) => t.patrol && !t.patrol.stopped);
 	return (
-		<div className="tcard" onClick={() => onOpen(s)}>
+		<div
+			className="tcard"
+			role="button"
+			tabIndex={0}
+			onClick={() => onOpen(s)}
+			onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onOpen(s)}
+		>
 			<div className="head">
-				<span className={`tag ${s.typeKey === "issue" ? "draft" : "dev"}`}>{TYPE_NAME[s.typeKey] ?? s.typeKey}</span>
+				<span className="tag">{TYPE_NAME[s.typeKey] ?? s.typeKey}</span>
 				{s.url && (
 					// 直接打开飞书工单，不弹抽屉
 					<a
@@ -68,8 +76,8 @@ function StoryCard({ s, state, onOpen }: { s: Story; state: State; onOpen: (s: S
 						target="_blank"
 						rel="noreferrer"
 						onClick={(e) => e.stopPropagation()}
-						className="rounded px-1.5 text-[12px] text-accent no-underline hover:bg-accent-soft"
-						title="在新标签页打开飞书工单"
+						className="rounded-[4px] px-1.5 text-[12px] text-accent no-underline hover:bg-accent-soft"
+						title="在飞书打开"
 					>
 						飞书 ↗
 					</a>
@@ -78,14 +86,21 @@ function StoryCard({ s, state, onOpen }: { s: Story; state: State; onOpen: (s: S
 			<div className="t">{s.title}</div>
 			<div className="foot2">
 				<span>
-					{tasks.length ? `${tasks.length} 个任务${running ? `（${running} 个进行中）` : ""}` : "还没有任务"}
-					{waiting > 0 && <b className="zhu"> · {waiting} 个等我</b>}
+					{tasks.length > 0 && `${tasks.length} 个任务${running ? `，${running} 个进行中` : ""}`}
+					{waiting > 0 && (
+						<b className="zhu">
+							{tasks.length > 0 ? "，" : ""}
+							{waiting} 件等你处理
+						</b>
+					)}
 				</span>
-				<span>{ago(state.now, s.updated)}</span>
+				<span className="num" title={`最近更新：${time(s.updated)}`}>
+					{ago(state.now, s.updated)}
+				</span>
 			</div>
 			{(tickets.length > 0 || patrolling) && (
 				<div className="foot2">
-					<span className="mono">{tickets.map((t) => t.key).join(" ")}</span>
+					<span className="num">{tickets.map((t) => t.key).join(" ")}</span>
 					{patrolling && <span className="livedot">巡检中</span>}
 				</div>
 			)}
@@ -109,25 +124,25 @@ export function StoryBoard({
 	const [open, setOpen] = useState<string | null>(initialOpen ?? null);
 	const [showDropped, setShowDropped] = useState(false);
 	const [msg, setMsg] = useState<Msg>(null);
-	const [busy, setBusy] = useState(false);
+	const [busy, setBusy] = useState<"" | "sync" | "add">("");
 	const [adding, setAdding] = useState("");
 	const stories = state.stories ?? [];
 	const current = stories.find((s) => s.id === open);
 	async function sync() {
-		setBusy(true);
+		setBusy("sync");
 		try {
 			const r = await post<{ added: number }>("/api/stories/sync");
 			await post("/api/stories/tickets");
-			setMsg({ text: r.added ? `新增 ${r.added} 条` : "已是最新" });
+			setMsg({ text: r.added ? `同步完成，新增 ${r.added} 条` : "已是最新" });
 			qc.invalidateQueries({ queryKey: ["state"] });
 		} catch (e) {
 			setMsg({ text: (e as Error).message, bad: true });
 		} finally {
-			setBusy(false);
+			setBusy("");
 		}
 	}
 	async function add() {
-		setBusy(true);
+		setBusy("add");
 		try {
 			const r = await post<{ story: Story }>("/api/stories/add", { text: adding });
 			setAdding("");
@@ -137,39 +152,43 @@ export function StoryBoard({
 		} catch (e) {
 			setMsg({ text: (e as Error).message, bad: true });
 		} finally {
-			setBusy(false);
+			setBusy("");
 		}
 	}
 	const dropped = stories.filter((s) => s.stage === "dropped");
 	return (
 		<>
 			<div className="filters">
-				<button disabled={busy} onClick={sync}>
-					{busy ? "同步中…" : "从飞书同步"}
+				<button disabled={!!busy} onClick={sync} title="拉取飞书项目里你名下的需求和缺陷，并刷新发布工单的状态">
+					{busy === "sync" ? "正在同步…" : "从飞书同步"}
 				</button>
-				<button className={showDropped ? "on" : undefined} onClick={() => setShowDropped(!showDropped)}>
-					不跟了 {dropped.length}
-				</button>
+				{/* 没有不再跟进的就不占位置；正在看的时候留着，好切回去 */}
+				{(dropped.length > 0 || showDropped) && (
+					<button className={showDropped ? "on" : undefined} onClick={() => setShowDropped(!showDropped)}>
+						{DROPPED} <span className="num">{dropped.length}</span>
+					</button>
+				)}
 				<input
 					className="story-add"
 					value={adding}
 					placeholder="添加飞书工单：贴链接或 ID"
+					aria-label="添加飞书工单"
 					onChange={(e) => setAdding(e.target.value)}
 					onKeyDown={(e) => e.key === "Enter" && adding.trim() && !busy && add()}
 				/>
-				<button disabled={busy || !adding.trim()} onClick={add}>
+				<button disabled={!!busy || !adding.trim()} onClick={add}>
 					添加
 				</button>
 				<MsgLine msg={msg} />
 			</div>
 			<div className="board">
-				{(showDropped ? [["dropped", "不跟了"] as [string, string]] : STAGES).map(([key, name]) => {
+				{(showDropped ? [["dropped", DROPPED] as [string, string]] : STAGES).map(([key, name]) => {
 					const items = stories.filter((s) => s.stage === key);
 					return (
 						<div className="col" key={key}>
 							<h2>
 								{name}
-								<span>{items.length}</span>
+								<span className="num">{items.length}</span>
 							</h2>
 							<div className="lane">
 								{items.map((s) => (
@@ -184,6 +203,7 @@ export function StoryBoard({
 				<StoryDrawer
 					key={current.id}
 					s={current}
+					now={state.now}
 					tasks={tasksOf(state, current.id)}
 					allTasks={state.devTasks}
 					onClose={() => {
@@ -203,59 +223,47 @@ export function StoryBoard({
 
 /** 一轮结论的第一行（正常时就是「本轮巡查正常」，异常时是异常和证据） */
 const firstLine = (x: DevTask) => (x.summary.trim().split("\n")[0] || x.error || "").slice(0, 80);
-const ROUND_COLOR: Record<string, string> = { 正常: "text-ok", 有异常: "text-bad", 失败: "text-bad", 进行中: "text-accent" };
 
-/** 一张工单的巡检：计划、首次观察、每一轮的结果都在这里看，不用去定时任务页 */
-function PatrolPanel({
-	t,
+/** 一张工单的巡检记录：首次观察和每一轮的结果，折叠着，展开后一轮一行，新的在上 */
+function PatrolLog({
 	schedule,
 	observe,
 	rounds,
-	busy,
+	now,
 	onOpenDev,
-	onRun,
 }: {
-	t: StoryTicket;
 	schedule?: Schedule;
 	observe?: DevTask;
 	rounds: DevTask[];
-	busy: boolean;
+	now: number;
 	onOpenDev: (id: string) => void;
-	onRun: (scheduleId: string) => void;
 }) {
+	const last = rounds[0];
+	const lastState = last && roundState(last);
+	const row = (t: DevTask, label: string, color: string, text: string) => (
+		<button key={t.id} type="button" className="story-patrol-row" onClick={() => onOpenDev(t.id)} title={time(t.created)}>
+			<span className="w-[8em] shrink-0 tabular-nums">{when(t.created, now)}</span>
+			<span className={`w-[4em] shrink-0 font-semibold ${color}`}>{label}</span>
+			<span className="min-w-0 flex-1 truncate">{text}</span>
+		</button>
+	);
 	return (
 		<details className="story-patrol">
-			<summary>
-				巡检记录 {rounds.length} 轮{schedule?.enabled && schedule.nextRun ? ` · 下次 ${hhmm(schedule.nextRun)}` : ""}
-				{schedule?.until ? ` · ${mdhm(schedule.until)} 自动停` : ""}
-				{schedule?.model ? ` · ${schedule.model.split("/").pop()}` : ""}
+			<summary title={schedule?.model ? `模型：${schedule.model.split("/").pop()}` : undefined}>
+				巡检记录 <span className="num">{rounds.length}</span> 轮
+				{last && (
+					<span className="ml-3 tabular-nums">
+						最近一轮 {when(last.created, now)} <span className={ROUND_COLOR[lastState] ?? "text-text-2"}>{lastState}</span>
+					</span>
+				)}
 			</summary>
 			<div className="story-patrol-body">
-				{observe && (
-					<button type="button" className="story-patrol-row" onClick={() => onOpenDev(observe.id)}>
-						<span className="w-24 shrink-0 text-muted tabular-nums">{mdhm(observe.created)}</span>
-						<span className="shrink-0 font-medium text-text">首次观察</span>
-						<span className="min-w-0 flex-1 truncate text-muted">{firstLine(observe) || TASK_STATUS[observe.status]}</span>
-					</button>
-				)}
 				{rounds.map((r) => {
 					const st = roundState(r);
-					return (
-						<button key={r.id} type="button" className="story-patrol-row" onClick={() => onOpenDev(r.id)}>
-							<span className="w-24 shrink-0 text-muted tabular-nums">{mdhm(r.created)}</span>
-							<span className={`shrink-0 font-medium ${ROUND_COLOR[st] ?? "text-text"}`}>{st}</span>
-							<span className="min-w-0 flex-1 truncate text-muted">{firstLine(r)}</span>
-						</button>
-					);
+					return row(r, st, ROUND_COLOR[st] ?? "text-text-2", firstLine(r));
 				})}
-				{!rounds.length && <div className="px-2 py-1 text-muted">还没有跑过巡检</div>}
-				{schedule && t.patrol && !t.patrol.stopped && (
-					<div className="px-2 pt-1">
-						<button className="linkbtn" disabled={busy} onClick={() => onRun(schedule.id)}>
-							立即巡检一轮
-						</button>
-					</div>
-				)}
+				{observe && row(observe, "首次观察", "text-text-2", firstLine(observe) || TASK_STATUS[observe.status] || "")}
+				{!rounds.length && !observe && <div className="px-1 py-1">还没有记录</div>}
 			</div>
 		</details>
 	);
@@ -276,10 +284,10 @@ function Section({
 	children: ReactNode;
 }) {
 	return (
-		<section className="mt-5">
-			<div className="mb-2 flex items-center gap-2">
-				<h3 className="m-0 text-[13px] font-semibold text-text">{title}</h3>
-				{count !== undefined && count > 0 && <span className="rounded bg-soft px-1.5 text-[11px] text-muted tabular-nums">{count}</span>}
+		<section className="mt-6">
+			<div className="mb-2 flex items-baseline gap-2">
+				<h3 className="m-0 text-[14px] font-semibold text-text">{title}</h3>
+				{count !== undefined && count > 0 && <span className="text-[12px] text-muted tabular-nums">{count}</span>}
 				{hint && <span className="text-[12px] text-muted">{hint}</span>}
 				{extra && <span className="ml-auto">{extra}</span>}
 			</div>
@@ -288,25 +296,24 @@ function Section({
 	);
 }
 
-const Empty = ({ children }: { children: ReactNode }) => (
-	<div className="mb-2 rounded-lg border border-dashed border-line px-3 py-3 text-[12px] text-muted">{children}</div>
-);
-
 type Kind = "dev" | "ask" | "release";
 const KIND_HINT: Record<Kind, string> = {
-	dev: "要实现什么（可选，不写就让 agent 读工单描述）；会在新分支上改，你审核后推送建 MR",
-	ask: "要查什么：只读地查，不建分支",
-	release: "要提哪种发布工单，例如「stg 灰度」「线上 AB」「全量」；不写就让助手先问你。提交前会给你看预览，提交走审批",
+	dev: "要改什么？留空就照工单描述来做。改动放在新分支上，你看过之后再推送、创建 MR",
+	ask: "要查什么？只查不改",
+	release: "提哪种发布工单？比如 stg 灰度、线上 AB、全量。留空的话助手会先问你，提交前也会请你批准",
 };
+const KIND_START: Record<Kind, string> = { dev: "开始实现", ask: "开始查询", release: "开始提单" };
 
 function StoryDrawer({
 	s,
+	now,
 	tasks,
 	allTasks,
 	onClose,
 	onOpenDev,
 }: {
 	s: Story;
+	now: number;
 	tasks: DevTask[];
 	allTasks: DevTask[];
 	onClose: () => void;
@@ -328,6 +335,7 @@ function StoryDrawer({
 			await fn();
 			setMsg({ text: done });
 			qc.invalidateQueries({ queryKey: ["state"] });
+			void qc.invalidateQueries({ queryKey: ["schedules"] });
 		} catch (e) {
 			setMsg({ text: (e as Error).message, bad: true });
 		} finally {
@@ -339,27 +347,27 @@ function StoryDrawer({
 		act(async () => {
 			const r = await post<{ bound: string[]; failed: string[] }>(`/api/stories/${s.id}/bind`, { text: ticketText });
 			setTicketText("");
-			if (r.failed.length) throw new Error(`已绑 ${r.bound.join("、")}；查不到 ${r.failed.join("、")}`);
+			if (r.failed.length)
+				throw new Error(r.bound.length ? `已绑定 ${r.bound.join("、")}，没找到 ${r.failed.join("、")}` : `没找到 ${r.failed.join("、")}`);
 		}, "已绑定");
 	const unbind = (key: string) => act(() => post(`/api/stories/${s.id}/unbind`, { key }), `已解绑 ${key}`);
 	const taskOf = (id?: string) => (id ? allTasks.find((t) => t.id === id) : undefined);
-	const makeDoc = (key: string) =>
-		act(() => post(`/api/stories/${s.id}/doc`, { key }), `已派出：给 ${key} 写观察文档，写飞书前会发审批卡片`);
+	const makeDoc = (key: string) => act(() => post(`/api/stories/${s.id}/doc`, { key }), `正在生成 ${key} 的观察文档，写入飞书前会请你批准`);
 	const patrol = (key: string) =>
-		act(() => post(`/api/stories/${s.id}/patrol`, { key }), `已开始：先做首次观察，之后每 30 分钟巡检一轮，正常不打扰`);
-	const rerunObserve = (id: string) =>
+		act(() => post(`/api/stories/${s.id}/patrol`, { key }), "已开始巡检：先做一次首次观察，之后定时检查，没问题不打扰你");
+	const retryObserve = (id: string) =>
 		act(
 			() =>
 				post(`/api/dev/${id}/message`, {
 					text: "上次没跑完就中断了。接着把首次观察做完，结尾照要求写「【巡检范围与基线】」，之后每轮巡检靠它做对比。",
 				}),
-			"已重跑首次观察，跑完后巡检就有基线可比",
+			"已重试首次观察",
 		);
 	const runPatrol = (scheduleId: string) =>
 		act(async () => {
 			const id = await runSchedule(scheduleId);
 			if (id) onOpenDev(id);
-		}, "已开跑一轮巡检");
+		}, "已开始巡检一轮");
 	const unpatrol = (key: string) => act(() => post(`/api/stories/${s.id}/unpatrol`, { key }), `已停止巡检 ${key}`);
 	const stage = (st: string) => act(() => post(`/api/stories/${s.id}/stage`, { stage: st }), `已移到「${STAGE_NAME[st]}」`);
 	const start = () =>
@@ -376,7 +384,7 @@ function StoryDrawer({
 		}, "已派出");
 	return (
 		<Drawer
-			title={`${TYPE_NAME[s.typeKey] ?? "工单"} · ${STAGE_NAME[s.stage] ?? s.stage}`}
+			title={s.title}
 			onClose={onClose}
 			actions={
 				<div className="chat-input">
@@ -384,8 +392,13 @@ function StoryDrawer({
 						<>
 							{kind !== "release" && (
 								<div className="row">
-									<select value={repo || (kind === "dev" ? repos?.[0] : "") || ""} onChange={(e) => setRepo(e.target.value)}>
-										{kind === "ask" && <option value="">不限仓库（~/code）</option>}
+									<select
+										value={repo || (kind === "dev" ? repos?.[0] : "") || ""}
+										onChange={(e) => setRepo(e.target.value)}
+										aria-label="仓库"
+										title="仓库"
+									>
+										{kind === "ask" && <option value="">不限仓库</option>}
 										{repos?.map((r) => (
 											<option key={r} value={r}>
 												{r}
@@ -393,18 +406,23 @@ function StoryDrawer({
 										))}
 									</select>
 									{kind === "dev" && (
-										<input value={branch} onChange={(e) => setBranch(e.target.value.trim())} placeholder="分支：留空由 agent 起名" />
+										<input
+											value={branch}
+											onChange={(e) => setBranch(e.target.value.trim())}
+											placeholder="分支名，留空自动起名"
+											aria-label="分支名"
+										/>
 									)}
 								</div>
 							)}
-							<textarea value={text} placeholder={KIND_HINT[kind]} onChange={(e) => setText(e.target.value)} />
+							<textarea value={text} placeholder={KIND_HINT[kind]} onChange={(e) => setText(e.target.value)} autoFocus />
 						</>
 					)}
 					<div className="row">
 						{kind ? (
 							<>
 								<button className="btn primary" disabled={busy || (kind === "ask" && !text.trim())} onClick={start}>
-									{kind === "dev" ? "开始实现" : kind === "ask" ? "开始查" : "开始提单"}
+									{KIND_START[kind]}
 								</button>
 								<button className="btn" disabled={busy} onClick={() => setKind(null)}>
 									取消
@@ -428,59 +446,44 @@ function StoryDrawer({
 				</div>
 			}
 		>
-			<div className="flex items-center gap-2 text-[12px] text-muted">
-				<span className={`rounded px-1.5 py-0.5 ${s.typeKey === "issue" ? "bg-warn-soft text-warn" : "bg-accent-soft text-accent"}`}>
-					{TYPE_NAME[s.typeKey] ?? "工单"}
+			<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
+				<span className="rounded-[4px] bg-soft px-1.5 text-text-2">{TYPE_NAME[s.typeKey] ?? "工单"}</span>
+				<span className="tabular-nums" title="飞书工单 ID">
+					ID {s.id}
 				</span>
-				<span className="tabular-nums">ID {s.id}</span>
 				{s.url && (
-					<a
-						href={s.url}
-						target="_blank"
-						rel="noreferrer"
-						className="ml-auto rounded-md border border-line px-2 py-0.5 text-accent no-underline hover:bg-accent-soft"
-					>
+					<a href={s.url} target="_blank" rel="noreferrer" className="ml-auto text-accent no-underline hover:underline">
 						在飞书打开 ↗
 					</a>
 				)}
 			</div>
-			<div className="mt-2 text-[17px] leading-snug font-semibold break-words text-text">{s.title}</div>
 
-			<Section title="阶段" hint="以这边为准，不改飞书项目的节点">
+			<Section title="阶段" hint="只记在这里，不改飞书上的状态">
 				<div className="flex flex-wrap items-center gap-3">
-					<div className="inline-flex rounded-lg border border-line bg-bg p-0.5">
-						{STAGES.map(([k, name], i) => {
-							const cur = STAGES.findIndex(([x]) => x === s.stage);
+					<div className="inline-flex rounded-[6px] border border-line bg-bg p-0.5">
+						{STAGES.map(([k, name]) => {
 							const on = k === s.stage;
 							return (
 								<button
 									key={k}
 									type="button"
 									disabled={busy || on}
+									aria-pressed={on}
 									onClick={() => stage(k)}
-									className={`cursor-pointer rounded-md border-0 px-3 py-1 text-[13px] disabled:cursor-default ${
-										on
-											? "bg-accent font-semibold text-white"
-											: i < cur
-												? "bg-transparent text-text hover:bg-soft"
-												: "bg-transparent text-muted hover:bg-soft hover:text-text"
+									className={`cursor-pointer rounded-[4px] border-0 px-3 py-1 text-[14px] disabled:cursor-default ${
+										on ? "bg-accent-soft font-semibold text-accent" : "bg-transparent text-text-2 hover:bg-soft hover:text-text"
 									}`}
 								>
-									{i < cur ? `✓ ${name}` : name}
+									{name}
 								</button>
 							);
 						})}
 					</div>
 					{s.stage === "dropped" ? (
-						<span className="text-[12px] text-muted">已不跟，点上面的阶段可以恢复</span>
+						<span className="text-[12px] text-muted">已不再跟进，选一个阶段就能恢复</span>
 					) : (
-						<button
-							type="button"
-							className="ml-auto cursor-pointer border-0 bg-transparent p-0 text-[12px] text-muted hover:text-bad disabled:opacity-50"
-							disabled={busy}
-							onClick={() => stage("dropped")}
-						>
-							不跟了
+						<button type="button" className="btn ghost sm ml-auto" disabled={busy} onClick={() => stage("dropped")}>
+							{DROPPED}
 						</button>
 					)}
 				</div>
@@ -490,20 +493,17 @@ function StoryDrawer({
 				{tasks.length ? (
 					<div className="story-list">
 						{tasks.map((t) => (
-							<div key={t.id} className="story-item" onClick={() => onOpenDev(t.id)}>
-								<span className="shrink-0 rounded bg-ok-soft px-1.5 text-[12px] text-ok">
-									{t.agent === "dev" ? "开发" : (AGENT_NAME[t.agent] ?? t.agent)}
+							<div key={t.id} className="story-item" onClick={() => onOpenDev(t.id)} title={t.branch ? `分支 ${t.branch}` : undefined}>
+								<span className="shrink-0 rounded-[4px] bg-soft px-1.5 text-[12px] text-text-2">
+									{t.agent === "dev" ? "开发助手" : (AGENT_NAME[t.agent] ?? t.agent)}
 								</span>
 								<span className="t">{t.title}</span>
-								<span className="m">
-									{TASK_STATUS[t.status] ?? t.status}
-									{t.branch ? ` · ${t.branch}` : ""}
-								</span>
+								<span className={`m ${TASK_STATUS_COLOR[t.status] ?? ""}`}>{TASK_STATUS[t.status] ?? t.status}</span>
 							</div>
 						))}
 					</div>
 				) : (
-					<Empty>还没有任务，用底部的按钮派开发、查询或提发布工单</Empty>
+					<p className="m-0 text-[14px] text-muted">还没有任务</p>
 				)}
 			</Section>
 
@@ -511,112 +511,137 @@ function StoryDrawer({
 				title="发布工单"
 				count={tickets.length}
 				extra={
-					<button className="linkbtn" disabled={busy} onClick={() => act(() => post("/api/stories/tickets"), "已刷新")}>
-						刷新状态
-					</button>
+					tickets.length > 0 && (
+						<button className="linkbtn" disabled={busy} onClick={() => act(() => post("/api/stories/tickets"), "已刷新")}>
+							刷新状态
+						</button>
+					)
 				}
 			>
-				{tickets.length ? (
+				{tickets.length > 0 && (
 					<div className="story-list">
 						{tickets.map((t) => {
 							const docTask = taskOf(t.doc?.taskId);
 							const docUrl = docTask?.summary.match(DOC_URL_RE)?.[0];
 							const patrolling = Boolean(t.patrol && !t.patrol.stopped);
+							const schedule = schedules.find((x) => x.id === t.patrol?.scheduleId);
 							const observe = taskOf(t.patrol?.observeTaskId);
-							// 失败的，或者出错后被归档、没有结论的：都要重跑，不然巡检没有基线
+							// 失败的，或者出错后被归档、没有结论的：都要重试，不然巡检没有基线
 							const observeBroken = Boolean(
 								observe && (observe.status === "failed" || (observe.status === "done" && observe.error && !observe.summary.trim())),
 							);
 							const rounds = allTasks
 								.filter((x) => x.patrol && x.title.includes(`巡检 ${t.key} `))
 								.toSorted((a, b) => b.created - a.created);
-							const last = rounds[0];
 							return (
 								<div key={t.key} className="story-ticket">
-									<div className="story-item" title={`来源：${SOURCE_NAME[t.source ?? "auto"]}`}>
+									<div className="story-item" title={SOURCE_NAME[t.source ?? "auto"]}>
 										<a
 											href={ticketUrl(t.key)}
 											target="_blank"
 											rel="noreferrer"
-											className="shrink-0 rounded bg-accent-soft px-1.5 font-medium text-accent no-underline hover:underline"
-											title="在发布系统打开这张工单"
+											className="shrink-0 font-semibold text-accent no-underline tabular-nums hover:underline"
+											title="在发布系统打开"
 										>
 											{t.key} ↗
 										</a>
-										<span className="t">{t.title || "（标题待刷新）"}</span>
-										<span className="m">
-											{t.status || "—"} · {SOURCE_NAME[t.source ?? "auto"]}
-										</span>
+										<span className="t">{t.title || "标题待刷新"}</span>
+										{t.status && <span className="m">{t.status}</span>}
 										<button className="linkbtn" disabled={busy} onClick={() => unbind(t.key)}>
 											解绑
 										</button>
 									</div>
 									<div className="story-ticket-ops">
-										<span>观察文档：</span>
-										{docUrl ? (
-											<a href={docUrl} target="_blank" rel="noreferrer">
-												打开
-											</a>
-										) : docTask ? (
-											<button className="linkbtn" onClick={() => onOpenDev(docTask.id)}>
-												{docTask.status === "running" ? "生成中…" : "看任务"}
-											</button>
-										) : null}
-										<button className="linkbtn" disabled={busy || docTask?.status === "running"} onClick={() => makeDoc(t.key)}>
-											{docTask ? "重新生成" : "生成"}
-										</button>
-										<span className="sep">巡检：</span>
-										{patrolling ? (
-											<>
-												<span>每 30 分钟一轮</span>
-												{last && (
-													<button className="linkbtn" title={`共 ${rounds.length} 轮`} onClick={() => onOpenDev(last.id)}>
-														最近 {hhmm(last.created)} {roundState(last)}
+										<div>
+											<span className="lab">观察文档</span>
+											{docUrl ? (
+												<a href={docUrl} target="_blank" rel="noreferrer">
+													查看 ↗
+												</a>
+											) : docTask?.status === "running" ? (
+												<>
+													<span>正在生成</span>
+													<button className="linkbtn" onClick={() => onOpenDev(docTask.id)}>
+														查看进度
 													</button>
-												)}
-												<button className="linkbtn" onClick={() => onOpenDev(t.patrol!.observeTaskId)}>
-													{observeBroken ? "首次观察（没跑完）" : observe?.status === "running" ? "首次观察中…" : "首次观察"}
+												</>
+											) : docTask ? (
+												<button className="linkbtn" onClick={() => onOpenDev(docTask.id)}>
+													查看任务
 												</button>
-												{observe && observeBroken && (
-													<button className="linkbtn" disabled={busy} onClick={() => rerunObserve(observe.id)}>
-														重跑
+											) : null}
+											{docTask?.status !== "running" && (
+												<button className="linkbtn" disabled={busy} onClick={() => makeDoc(t.key)}>
+													{docTask ? "重新生成" : "生成"}
+												</button>
+											)}
+										</div>
+										<div>
+											<span className="lab">巡检</span>
+											{patrolling ? (
+												<>
+													<span>{schedule ? humanCron(schedule.cron) : "每 30 分钟"}</span>
+													{schedule?.enabled && schedule.nextRun && <span className="num">下次 {when(schedule.nextRun, now)}</span>}
+													{schedule?.until && <span className="num">{when(schedule.until, now)} 自动停止</span>}
+													{schedule && (
+														<button className="linkbtn" disabled={busy} onClick={() => runPatrol(schedule.id)}>
+															运行一次
+														</button>
+													)}
+													<button className="linkbtn" disabled={busy} onClick={() => unpatrol(t.key)}>
+														停止
 													</button>
-												)}
-												<button className="linkbtn" disabled={busy} onClick={() => unpatrol(t.key)}>
-													停止
+												</>
+											) : (
+												<>
+													{t.patrol?.stopped && <span>已停止：{t.patrol.stopped}</span>}
+													{t.ended ? (
+														<span>工单已结束，不再巡检</span>
+													) : (
+														<button
+															className="linkbtn"
+															disabled={busy}
+															onClick={() => patrol(t.key)}
+															title="先做一次首次观察，之后定时检查，没问题不打扰你"
+														>
+															{t.patrol ? "重新开始巡检" : "开始巡检"}
+														</button>
+													)}
+												</>
+											)}
+										</div>
+										{patrolling && observe?.status === "running" && (
+											<div>
+												<span className="lab" />
+												<span>正在做首次观察，做完后每轮巡检都和它对比</span>
+												<button className="linkbtn" onClick={() => onOpenDev(observe.id)}>
+													查看进度
 												</button>
-											</>
-										) : (
-											<>
-												{t.patrol?.stopped && <span className="muted">已停（{t.patrol.stopped}）</span>}
-												<button className="linkbtn" disabled={busy || t.ended} onClick={() => patrol(t.key)}>
-													{t.ended ? "工单已结束" : t.patrol ? "重新开始" : "开始"}
+											</div>
+										)}
+										{patrolling && observe && observeBroken && (
+											<div>
+												<span className="lab" />
+												<span className="text-bad">首次观察没做完，巡检缺少对比的基线</span>
+												<button className="linkbtn" disabled={busy} onClick={() => retryObserve(observe.id)}>
+													重试
 												</button>
-											</>
+											</div>
 										)}
 									</div>
 									{(t.patrol || rounds.length > 0) && (
-										<PatrolPanel
-											t={t}
-											schedule={schedules.find((x) => x.id === t.patrol?.scheduleId)}
-											observe={observe}
-											rounds={rounds}
-											busy={busy}
-											onOpenDev={onOpenDev}
-											onRun={runPatrol}
-										/>
+										<PatrolLog schedule={schedule} observe={observe} rounds={rounds} now={now} onOpenDev={onOpenDev} />
 									)}
 								</div>
 							);
 						})}
 					</div>
-				) : (
-					<Empty>还没有关联的发布工单。填工单号绑定，或者点「提发布工单」，提交后自动挂上</Empty>
 				)}
 				<div className="story-bind">
 					<input
 						value={ticketText}
-						placeholder="GD-12345，多张用空格隔开，也可以贴工单页链接"
+						placeholder="GD-12345 或工单链接，可填多张"
+						aria-label="绑定发布工单"
 						onChange={(e) => setTicketText(e.target.value)}
 						onKeyDown={(e) => e.key === "Enter" && ticketText.trim() && !busy && bind()}
 					/>

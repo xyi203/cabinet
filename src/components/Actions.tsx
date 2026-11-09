@@ -38,7 +38,7 @@ export function ApprovalActions({ a }: { a: ApprovalView }) {
 				id={`apv-note-${a.id}`}
 				value={note}
 				onChange={(e) => setNote(e.target.value)}
-				placeholder="拒绝时可以写一句理由"
+				placeholder="拒绝理由（选填）"
 				className="in wide"
 				aria-label="拒绝理由"
 			/>
@@ -46,23 +46,29 @@ export function ApprovalActions({ a }: { a: ApprovalView }) {
 				className="btn pri sm"
 				disabled={busy}
 				onClick={async () => {
-					if (await confirmDialog({ title: "执行这个写操作？", body: a.command, confirmText: "执行" }))
-						void act(`/api/approvals/${a.id}/approve`, { note }, "已批准，执行中…");
+					if (await confirmDialog({ title: "批准后会马上执行，执行后无法撤回。", body: a.command, confirmText: "批准" }))
+						void act(`/api/approvals/${a.id}/approve`, { note }, "已批准，正在执行");
 				}}
 			>
-				批准执行
+				批准
 			</button>
 			{a.learn && (
 				<button
 					className="btn sm"
 					disabled={busy}
-					title={`确认是只读的话：${a.learn}，之后不再问`}
+					title={a.learn}
 					onClick={async () => {
-						if (await confirmDialog({ title: "执行，并以后直接放行？", body: `${a.command}\n\n${a.learn}`, confirmText: "执行并放行" }))
-							void act(`/api/approvals/${a.id}/remember`, { note }, "已批准，以后同样的命令直接放行");
+						if (
+							await confirmDialog({
+								title: "批准，并且以后同类命令不再问你？",
+								body: `${a.command}\n\n${a.learn}`,
+								confirmText: "批准",
+							})
+						)
+							void act(`/api/approvals/${a.id}/remember`, { note }, "已批准，以后同类命令直接执行");
 					}}
 				>
-					执行并以后放行
+					批准，以后不再问
 				</button>
 			)}
 			<button className="btn ghost sm" disabled={busy} onClick={() => act(`/api/approvals/${a.id}/reject`, { note }, "已拒绝")}>
@@ -93,38 +99,39 @@ export function RowActions({ t, s, onOpen, onMemory }: { t: TaskView; s: State; 
 		body = (
 			<>
 				{draft.mr
-					? btn("打开评审", onOpen, "pri")
+					? btn("查看评审", onOpen, "pri")
 					: btn(
 							"发送",
 							async () => {
-								if (await confirmDialog({ title: `以你的身份发给 ${draft.senderName}？`, body: describeDraft(draft), confirmText: "发送" }))
-									void act(`/api/drafts/${draft.id}/send`, { text: draft.draft, kind: draft.kind }, "已以你的身份发出");
+								// 列表里看不到草稿内容：确认框兼当预览
+								if (await confirmDialog({ title: `以你的身份发给 ${draft.senderName}`, body: describeDraft(draft), confirmText: "发送" }))
+									void act(`/api/drafts/${draft.id}/send`, { text: draft.draft, kind: draft.kind }, "已发送");
 							},
 							"pri",
 						)}
-				{btn("不发", () => act(`/api/drafts/${draft.id}/discard`, {}, "已标记为不发"), "ghost")}
+				{btn("不回复", () => act(`/api/drafts/${draft.id}/discard`, {}, "好的，这条不回复"), "ghost")}
 			</>
 		);
-	else if (t.status === "in_review" && t.need === "send" && dev) body = btn("看改动", onOpen, "pri");
-	else if (t.need === "approve" && t.status === "blocked") body = btn("去审批", onOpen, "pri");
+	else if (t.status === "in_review" && t.need === "send" && dev) body = btn("查看改动", onOpen, "pri");
+	else if (t.need === "approve" && t.status === "blocked") body = btn("审批", onOpen, "pri");
 	else if (t.need === "read" && t.status === "in_review" && dev)
 		body = (
 			<>
-				{btn("看结论", onOpen)}
+				{btn("查看结论", onOpen)}
 				{btn("完成", () => act(`/api/dev/${dev.id}/close`, {}, "已完成"), "ghost")}
 			</>
 		);
-	else if (t.need === "decide" && t.memories) body = btn("去裁定", onMemory, "pri");
+	else if (t.need === "decide" && t.memories) body = btn("去记忆页处理", onMemory, "pri");
 	else if (t.need === "retry" && t.status === "blocked")
 		body = t.retryId ? (
 			<>
-				{btn("重试", () => act(`/api/tasks/${t.retryId}/retry`, {}, "已重新提交"), "pri")}
+				{btn("重试", () => act(`/api/tasks/${t.retryId}/retry`, {}, "正在重试"), "pri")}
 				{btn("忽略", () => act(`/api/tasks/${t.retryId}/dismiss`, {}, "已忽略"), "ghost")}
 			</>
 		) : dev ? (
-			btn("接着做", () => act(`/api/dev/${dev.id}/message`, { text: "上一轮失败了，接着把这个任务做完" }, "已让它接着做"), "pri")
+			btn("重试", () => act(`/api/dev/${dev.id}/message`, { text: "上一轮失败了，接着把这个任务做完" }, "正在重试"), "pri")
 		) : null;
-	else if (t.id.startsWith("q:") && t.hold) body = btn("立即处理", () => act("/api/poll", { id: t.id.slice(2) }, "不等了，马上起草"));
+	else if (t.id.startsWith("q:") && t.hold) body = btn("现在起草", () => act("/api/poll", { id: t.id.slice(2) }, "开始起草"));
 	if (!body) return null;
 	return (
 		<div className="acts" onClick={stop}>

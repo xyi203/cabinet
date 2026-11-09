@@ -1,5 +1,5 @@
 {
-	"_note": "agent 能执行的命令。read 直接放行；write 每次要 Yi 审批；deny 一律拒绝；没列出的子命令、skill 目录里没登记的脚本交给 Yi 审批，审批时可以点「执行并以后放行」记进 read。子命令按词匹配，多个词的要在参数里连续出现。argv0 里的 {skills} 换成 SKILLS_DIR。改完不用重启，下一次运行生效。",
+	"_note": "agent 能执行的命令。read 直接放行；write 每次要 Yi 审批；deny 一律拒绝；没列出的子命令、skill 目录里没登记的脚本交给 Yi 审批，审批时可以点「批准，以后不再问」记进 read。子命令按词匹配，多个词的要在参数里连续出现。argv0 里的 {skills} 换成 SKILLS_DIR。改完不用重启，下一次运行生效。",
 	"_mcpPreview": [
 		"mcp__devops-mcp-prod__issue_create",
 		"mcp__devops-mcp-prod__issue_update",

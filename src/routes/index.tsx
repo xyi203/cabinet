@@ -15,9 +15,10 @@ import { StatsPage } from "../components/Stats";
 import { StoryBoard } from "../components/StoryBoard";
 import { TaskPanel } from "../components/TaskPanel";
 import { ToastHost } from "../components/Toast";
+import { RowActions } from "../components/Actions";
 import { Workbench } from "../components/Workbench";
 import { type DevTask, type State, fetchState, post } from "../lib/api";
-import { waitingOn } from "../lib/format";
+import { ago, date, titleOf, waitingOn } from "../lib/format";
 import { useLiveUpdates } from "../lib/live";
 import { pct, span } from "../components/ui";
 import type { QuotaWindow } from "../lib/api";
@@ -49,14 +50,15 @@ const ALIASES: Record<string, View> = {
 	skills: "settings",
 	audience: "settings",
 };
+/** 侧栏悬停提示：这一页是干什么的 */
 const HINTS: Record<View, string> = {
-	work: "所有的事：等你处理的、在跑的、排队的、今天做完的",
-	stories: "飞书工单按 开发 → 测试 → 发布 推进，挂着哪些任务、发布工单、巡检",
-	cron: "到点派给助手的事：周期提醒、发布巡检",
-	memory: "助手按什么口径做事：约定和线索，冲突在这里裁定",
-	chat: "直接和助手聊；私聊机器人的问答也在这里",
-	ops: "系统怎么在跑：队列、失败、统计、日报、健康",
-	settings: "改了才来：渠道、Worker、受众",
+	work: "等你处理的、正在做的、今天做完的",
+	stories: "飞书项目里你负责的需求，从开发到发布",
+	cron: "到点让助手做的事",
+	memory: "助手记住的你的习惯和偏好",
+	chat: "直接和助手聊天",
+	ops: "队列、失败、花费和每日小结",
+	settings: "消息来源、分派规则、提示词、联系人",
 };
 
 export const Route = createFileRoute("/")({
@@ -82,8 +84,12 @@ function Tabs<T extends string>({ tabs, value, onChange }: { tabs: readonly T[];
 	);
 }
 
-const OPS_TABS = ["队列", "失败", "统计", "日报", "系统健康"] as const;
-const SET_TABS = ["渠道", "路由规则", "提示词", "技能", "受众"] as const;
+/** 多久没收取消息算卡住：和后端自检（server/watchdog.ts）的 10 分钟一致 */
+const POLL_STALE = 600;
+const OPS_TABS = ["队列", "失败", "统计", "日报", "自检"] as const;
+const SET_TABS = ["消息来源", "分派规则", "提示词", "技能", "联系人"] as const;
+/** 页签改名前的旧链接 */
+const TAB_ALIASES: Record<string, string> = { 系统健康: "自检", 渠道: "消息来源", 路由规则: "分派规则", 受众: "联系人" };
 
 function Dashboard() {
 	const search = Route.useSearch();
@@ -98,7 +104,7 @@ function Dashboard() {
 
 	const go = (v: View, extra: { story?: string; tab?: string } = {}) =>
 		void navigate({ to: "/", search: v === "work" ? {} : { view: v, ...extra } });
-	const tab = search.tab;
+	const tab = search.tab && (TAB_ALIASES[search.tab] ?? search.tab);
 	/** agent 任务 id → 它所在的那件事；不在工作台窗口里的（老任务、对话）直接开任务抽屉 */
 	const openDev = (devId: string, backStory?: string) => {
 		const t = state?.items.find((x) => x.devTasks.includes(devId));
@@ -140,20 +146,32 @@ function Dashboard() {
 					<span>Cabinet</span>
 				</div>
 				{(Object.keys(TITLES) as View[]).map((v) => (
-					<button key={v} className={`nav${view === v ? " on" : ""}`} title={HINTS[v]} onClick={() => go(v)}>
+					<button
+						key={v}
+						className={`nav${view === v ? " on" : ""}`}
+						title={HINTS[v]}
+						aria-current={view === v ? "page" : undefined}
+						onClick={() => go(v)}
+					>
 						{TITLES[v]}
-						{v === "work" && waiting > 0 && <span className="n">{waiting}</span>}
+						{v === "work" && waiting > 0 && (
+							<span className="n" aria-label={`${waiting} 件等你处理`}>
+								{waiting}
+							</span>
+						)}
 					</button>
 				))}
 				{state?.quota && (
 					<div className="aside-foot">
-						<MiniQuota label="Claude 5 小时" w={state.quota.windows.five_hour} now={state.now} />
-						<MiniQuota label="7 天" w={state.quota.windows.seven_day} now={state.now} />
+						<div className="quota-h">Claude 用量</div>
+						<MiniQuota label="5 小时内" w={state.quota.windows.five_hour} now={state.now} />
+						<MiniQuota label="本周" w={state.quota.windows.seven_day} now={state.now} />
 					</div>
 				)}
 			</aside>
 			<main className={view === "chat" ? "full" : ""}>
-				{error && !state && <div className="issue">连接不上 cabinet 进程</div>}
+				{error && !state && <div className="issue">连不上 Cabinet 服务，正在重试。确认服务已经启动。</div>}
+				{state && !connected && <div className="issue">和 Cabinet 服务的连接断了，正在重连，页面上的内容可能不是最新的。</div>}
 				{state && !state.auth.authorized && <AuthBanner />}
 				{!state && !error && <div className="empty">加载中…</div>}
 				{state && view === "work" && <Workbench s={state} nav={nav} open={open?.id} />}
@@ -169,9 +187,6 @@ function Dashboard() {
 					<>
 						<div className="phead">
 							<h1>定时</h1>
-							<div className="pulse">
-								<span>到点派给助手的事；每次运行都是工作台里的一件事</span>
-							</div>
 						</div>
 						<Schedules
 							agents={state.agents}
@@ -196,9 +211,6 @@ function Dashboard() {
 					<>
 						<div className="phead">
 							<h1>对话</h1>
-							<div className="pulse">
-								<span>直接和助手聊；飞书私聊机器人的问答也在这里</span>
-							</div>
 						</div>
 						<ChatPage chats={state.chats ?? []} records={state.records.filter((r) => r.kind !== "draft")} now={state.now} />
 					</>
@@ -249,16 +261,16 @@ function Ops({
 				<h1>运行</h1>
 				<div className="pulse">
 					<span>
-						运行中 <b>{s.running}</b>
+						进行中 <b>{s.running}</b>
 					</span>
 					<span>
-						待起草 <b>{s.inflight}</b>
+						等待起草 <b>{s.inflight}</b>
 					</span>
-					<span className={failed.length ? "hot" : ""}>
+					<span className={failed.length ? "bad" : ""}>
 						失败 <b>{failed.length}</b>
 					</span>
-					<span className={s.issues.length ? "hot" : ""}>
-						看门狗 <b>{s.issues.length ? `${s.issues.length} 个问题` : "正常"}</b>
+					<span className={s.issues.length ? "bad" : ""}>
+						自检 <b>{s.issues.length ? `${s.issues.length} 个问题` : "正常"}</b>
 					</span>
 				</div>
 			</div>
@@ -277,24 +289,24 @@ function Ops({
 							>
 								<span className="pill p-fail">失败</span>
 								<div className="tb">
-									<div className="title">{t.title}</div>
+									<div className="title">{titleOf(t)}</div>
 									<div className="meta">
-										<span>{t.label}</span>
-										<span className="bad">{(t.error ?? "").slice(0, 120)}</span>
+										{t.label && <span>{t.label}</span>}
+										{t.error && <span className="bad clamp">{t.error}</span>}
 									</div>
 								</div>
-								<div className="acts" />
+								<RowActions t={t} s={s} onOpen={() => onOpen(t.id)} onMemory={() => {}} />
 							</div>
 						))}
 					</div>
 				) : (
-					<div className="empty">没有没处理的失败</div>
+					<p className="calm">没有失败的任务。</p>
 				))}
 			{cur === "统计" && <StatsPage />}
 			{cur === "日报" && <JournalPage />}
-			{cur === "系统健康" && (
+			{cur === "自检" && (
 				<>
-					<p className="meta note">看门狗每 5 分钟按固定规则查一遍，新问题私聊你一次，恢复后自动清掉。</p>
+					<p className="meta note">每 5 分钟自检一次。发现新问题会在飞书私聊你，恢复后自动消失。</p>
 					<div className="list">
 						<div className="chk">
 							<span className={`dot${s.auth.authorized ? "" : " b"}`} />
@@ -303,17 +315,23 @@ function Ops({
 								<div className="meta">
 									{s.auth.authorized
 										? s.auth.refreshExpiresAt
-											? `正常，${new Date(s.auth.refreshExpiresAt * 1000).toLocaleDateString("zh-CN")} 到期，到期前自动刷新`
+											? `正常，会在到期（${date(s.auth.refreshExpiresAt, s.now)}）前自动续期`
 											: "正常"
-										: "没有授权"}
+										: "还没有授权，在页面顶部授权"}
 								</div>
 							</div>
 						</div>
 						<div className="chk">
-							<span className="dot" />
+							<span className={`dot${!s.pollSince || s.now - s.pollSince > POLL_STALE ? " w" : ""}`} />
 							<div className="tb">
-								<div className="title">轮询</div>
-								<div className="meta">{s.pollSince ? `${Math.round(s.now - s.pollSince)} 秒前拉过一次` : "还没开始"}</div>
+								<div className="title">收取消息</div>
+								<div className="meta">
+									{!s.pollSince
+										? "还没开始收取"
+										: s.now - s.pollSince > POLL_STALE
+											? `${ago(s.now, s.pollSince)}收取过，之后一直没有收取，可能卡住了`
+											: `${ago(s.now, s.pollSince)}收取过`}
+								</div>
 							</div>
 						</div>
 						{s.issues.length ? (
@@ -330,8 +348,8 @@ function Ops({
 							<div className="chk">
 								<span className="dot" />
 								<div className="tb">
-									<div className="title">看门狗</div>
-									<div className="meta">没有发现问题：起草、任务、告警攒批都没有卡住，失败没有扎堆</div>
+									<div className="title">其他检查</div>
+									<div className="meta">起草、任务、告警分析都没有卡住</div>
 								</div>
 							</div>
 						)}
@@ -343,13 +361,14 @@ function Ops({
 }
 
 function Settings({ s, tab, setTab }: { s: State; tab?: string; setTab: (t: string) => void }) {
-	const cur = (SET_TABS as readonly string[]).includes(tab ?? "") ? (tab as (typeof SET_TABS)[number]) : "渠道";
-	const channels: Array<[string, string, string]> = [
-		["飞书", "用你的身份轮询私聊和群里 @你；机器人 @你的当告警攒批", s.auth.authorized ? "已授权" : "没有授权"],
-		["飞书项目", "评论里 @你（meegle）", "轮询"],
-		["机器人", "私聊机器人、卡片按钮（长连接）", "长连接"],
-		["定时", "定时页里的任务到点产生事件", "内置"],
-		["看板", "新任务、草稿转任务、需求页派活", "内置"],
+	const cur = (SET_TABS as readonly string[]).includes(tab ?? "") ? (tab as (typeof SET_TABS)[number]) : "消息来源";
+	// 状态只有两种：能用 / 不能用。只有飞书需要你授权，其余跟着服务一起启动
+	const channels: Array<[string, string, boolean]> = [
+		["飞书", "私聊你的消息、群里 @你 的消息。机器人发的告警会攒一批再分析。", s.auth.authorized],
+		["飞书项目", "工作项评论里 @你 的消息", true],
+		["机器人", "你私聊机器人的消息，以及卡片上的按钮", true],
+		["定时", "定时页里的任务，到点开始做", true],
+		["你派的", "在看板上新建的任务、从草稿转成的任务", true],
 	];
 	return (
 		<>
@@ -357,42 +376,47 @@ function Settings({ s, tab, setTab }: { s: State; tab?: string; setTab: (t: stri
 				<h1>设置</h1>
 			</div>
 			<Tabs tabs={SET_TABS} value={cur} onChange={setTab} />
-			{cur === "渠道" && (
-				<>
-					<div className="list">
-						{channels.map(([n, d, st]) => (
-							<div key={n} className="chk">
-								<span className={`dot${n === "飞书" && !s.auth.authorized ? " b" : ""}`} />
-								<div className="tb">
-									<div className="title">{n}</div>
-									<div className="meta">{d}</div>
-								</div>
-								<span className="meta">{st}</span>
+			{cur === "消息来源" && (
+				<div className="list">
+					{channels.map(([n, d, ok]) => (
+						<div key={n} className="chk">
+							<span className={`dot${ok ? "" : " b"}`} />
+							<div className="tb">
+								<div className="title">{n}</div>
+								<div className="meta">{d}</div>
 							</div>
-						))}
-					</div>
-					<p className="meta note">Webhook（Sentry、GitLab、CI 推送）在 P5 接入：需要先定对外暴露方式。</p>
-				</>
+							<span className="meta">{ok ? "已开启" : "未授权"}</span>
+						</div>
+					))}
+				</div>
 			)}
-			{cur === "路由规则" && <RouteRulesPage />}
+			{cur === "分派规则" && <RouteRulesPage />}
 			{cur === "提示词" && <PromptsPage />}
 			{cur === "技能" && <SkillsPage />}
-			{cur === "受众" && <AudiencePage />}
+			{cur === "联系人" && <AudiencePage />}
 		</>
 	);
 }
 
-/** 侧栏底部的额度条：数字 + 细条，悬停看重置时间 */
+/** 侧栏底部的额度条：已用多少 + 细条，悬停看多久后重置 */
 function MiniQuota({ label, w, now }: { label: string; w?: QuotaWindow; now: number }) {
 	if (!w) return null;
-	const hot = w.utilization >= 0.8;
+	const u = Math.min(1, Math.max(0, w.utilization));
+	const hot = u >= 0.8;
 	return (
-		<div className="quota" title={w.resetsAt ? `${span(w.resetsAt - now)} 后重置` : "重置时间未知"}>
+		<div className="quota" title={w.resetsAt ? `${span(w.resetsAt - now)}后重置` : "不知道什么时候重置"}>
 			<span>
-				{label} <b className={hot ? "bad" : ""}>{pct(w.utilization)}</b>
+				{label} 已用 <b className={hot ? "warn" : ""}>{pct(u)}</b>
 			</span>
-			<div className="bar">
-				<i className={hot ? "hot" : ""} style={{ width: `${Math.min(100, w.utilization * 100)}%` }} />
+			<div
+				className="bar"
+				role="meter"
+				aria-label={`${label}已用`}
+				aria-valuenow={Math.round(u * 100)}
+				aria-valuemin={0}
+				aria-valuemax={100}
+			>
+				<i className={hot ? "hot" : ""} style={{ width: `${u * 100}%` }} />
 			</div>
 		</div>
 	);
@@ -410,7 +434,7 @@ function AuthBanner() {
 	}
 	return (
 		<div className="issue">
-			还没有授权飞书用户身份：读不到你的私聊和 @你 的消息，也不能以你的身份发出草稿。
+			授权飞书账号后，Cabinet 才能读到私聊和 @你 的消息，并替你发出回复。
 			<button className="btn pri sm" onClick={start}>
 				授权飞书
 			</button>

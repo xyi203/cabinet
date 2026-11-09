@@ -32,7 +32,7 @@ export function ToastHost() {
 				<div
 					key={t.id}
 					role={t.bad ? "alert" : "status"}
-					className={`pointer-events-auto rounded-lg border px-3.5 py-2.5 text-[13px] shadow-lg ${
+					className={`pointer-events-auto rounded-[10px] border px-3.5 py-2.5 text-[14px] shadow-lg ${
 						t.bad ? "border-bad/30 bg-bad-soft text-bad" : "border-line bg-panel text-text"
 					}`}
 					onClick={() => setItems((xs) => xs.filter((x) => x.id !== t.id))}

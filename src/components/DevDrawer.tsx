@@ -13,16 +13,19 @@ import {
 } from "../lib/api";
 import { useLiveSteps } from "../lib/live";
 import { AGENT_NAME, money, time } from "../lib/format";
+import { EFFORT } from "./ModelPicker";
+import { dur } from "./ui";
 import { Drawer, type Msg, MsgLine } from "./Drawer";
+import { Md } from "./Md";
 import { ModelPicker } from "./ModelPicker";
 import { confirmDialog } from "./Confirm";
 
 const STATUS: Record<string, string> = {
-	running: "运行中",
+	running: "进行中",
 	pushing: "推送中",
-	review: "待你看",
+	review: "待查看",
 	failed: "失败",
-	pushed: "已提 MR",
+	pushed: "已创建 MR",
 	discarded: "已放弃",
 	done: "已完成",
 };
@@ -60,8 +63,8 @@ export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => vo
 			});
 			setMsg({
 				text: dev
-					? "已指派，开发任务会出现在「工作中」；改完后在任务里审核 diff、推送建 MR"
-					: "已指派，查完会出现在「待你处理」，看完点完成",
+					? "已交给开发助手，可以在「进行中」看进度；改完后在任务里查看改动、推送并创建 MR"
+					: "已交给助手，查完会出现在「等你处理」",
 			});
 			qc.invalidateQueries({ queryKey: ["state"] });
 			setTimeout(onDone, 1500);
@@ -72,14 +75,14 @@ export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => vo
 	}
 	return (
 		<div className="panel dispatch">
-			<div className="label">做什么</div>
+			<div className="label">要做什么</div>
 			<select value={agent} onChange={(e) => setAgent(e.target.value as "assistant" | "dev")}>
-				<option value="assistant">查询：助手只读地查，不建分支</option>
-				<option value="dev">实现：dev 在新分支上改代码</option>
+				<option value="assistant">查一查（只看不改）</option>
+				<option value="dev">改代码（在新分支上改，你确认后再推送）</option>
 			</select>
-			<div className="label">仓库（{"~/code"} 下，按最近修改排序）</div>
+			<div className="label">仓库</div>
 			<select value={repo || (dev ? repos?.[0] : "") || ""} onChange={(e) => setRepo(e.target.value)}>
-				{!dev && <option value="">不限仓库（~/code）</option>}
+				{!dev && <option value="">不指定仓库</option>}
 				{repos?.map((r) => (
 					<option key={r} value={r}>
 						{r}
@@ -88,15 +91,19 @@ export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => vo
 			</select>
 			{dev && (
 				<>
-					<div className="label">分支（留空由 agent 按需求起名；自己填就是 feature/ 或 fix/ 加一个单词，基于远端默认分支新建）</div>
-					<input value={branch} onChange={(e) => setBranch(e.target.value.trim())} placeholder="留空自动起名，例如 feature/commentfilter" />
+					<div className="label">分支</div>
+					<input
+						value={branch}
+						onChange={(e) => setBranch(e.target.value.trim())}
+						placeholder="留空会自动起名，例如 feature/commentfilter"
+					/>
 				</>
 			)}
-			<div className="label">模型与 effort</div>
+			<div className="label">模型</div>
 			<div className="row-inline">
 				<ModelPicker model={model} thinking={thinking} onChange={(m, t) => setPick({ agent, model: m, thinking: t })} />
 			</div>
-			<div className="label">补充说明（可选，以这个为准）</div>
+			<div className="label">补充说明（选填）</div>
 			<textarea
 				value={instructions}
 				onChange={(e) => setInstructions(e.target.value)}
@@ -105,7 +112,7 @@ export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => vo
 			/>
 			<div className="actions-inline">
 				<button className="btn primary" disabled={busy || (dev && !repos?.length)} onClick={submit}>
-					{dev ? "开始实现" : "开始查"}
+					{dev ? "交给开发助手" : "交给助手"}
 				</button>
 			</div>
 			<MsgLine msg={msg} />
@@ -141,10 +148,10 @@ function ToolLine({ item }: { item: TranscriptItem }) {
 		<div className={`chat-tool${item.error ? " err" : ""}${item.done ? "" : " live"}`} onClick={() => setOpen(!open)}>
 			<span className="caret">{open ? "▾" : "▸"}</span>
 			<b>{item.tool}</b> <code>{String(brief).slice(0, 160)}</code>
-			<span className="foot">
+			<span className="foot num">
 				{" "}
-				{item.done ? `${(item.done - item.t).toFixed(1)}s` : "进行中"}
-				{item.error ? " · 被拦截/出错" : ""}
+				{item.done ? dur(item.done - item.t) : "进行中"}
+				{item.error ? "，被拦下或出错" : ""}
 			</span>
 			{open && item.result && <pre>{item.result}</pre>}
 			<Thumbs images={item.images} />
@@ -171,7 +178,7 @@ function UserBubble({ text, first, images, shown }: { text: string; first: boole
 				<div className="chat-user">{text.replace(/^Yi：/, "").replace(/\n\n（这是 Yi 的消息：[\s\S]*$/, "")}</div>
 			) : (
 				<div className="chat-user collapsed" onClick={() => setOpen(true)}>
-					任务说明（点击展开）
+					任务说明（展开）
 				</div>
 			)}
 			<div className="chat-user-images">
@@ -191,9 +198,11 @@ export function Chat({ dev, chatMode = false }: { dev: DevTask; chatMode?: boole
 	});
 	const end = useRef<HTMLDivElement>(null);
 	const count = items?.length ?? 0;
-	// 有新内容时滚到底部
+	const seen = useRef(0);
+	// 运行中来了新内容才滚到底部；打开一个已经结束的任务时停在开头，先看到要做什么，再往下读结论
 	useEffect(() => {
-		if (count) end.current?.scrollIntoView({ block: "end" });
+		if (count && seen.current && count > seen.current) end.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+		if (count) seen.current = count;
 	}, [count]);
 	if (!items?.length) return <div className="foot">{dev.status === "running" ? "已开始，等待第一步…" : "还没有对话记录"}</div>;
 	const firstUser = items.findIndex((it) => it.kind === "user");
@@ -204,14 +213,14 @@ export function Chat({ dev, chatMode = false }: { dev: DevTask; chatMode?: boole
 					<UserBubble key={i} text={it.text ?? ""} first={i === firstUser} images={it.images} shown={chatMode ? dev.request : undefined} />
 				) : it.kind === "assistant" ? (
 					<div key={i} className="chat-agent">
-						{it.text}
+						<Md text={it.text ?? ""} />
 						<Thumbs images={it.images} />
 					</div>
 				) : (
 					<ToolLine key={i} item={it} />
 				),
 			)}
-			{dev.status === "running" && <div className="foot">● agent 正在工作…</div>}
+			{dev.status === "running" && <div className="foot livedot">正在处理</div>}
 			<div ref={end} />
 		</div>
 	);
@@ -248,7 +257,8 @@ export function DevDrawer({
 		if (
 			action === "push" &&
 			!(await confirmDialog({
-				title: `推送 ${d.branch}${d.mrUrl ? "（MR 已存在，只推新提交）" : ` 并建 MR 到 ${d.base}`}？`,
+				title: d.mrUrl ? `把新提交推送到 ${d.branch}？` : `推送 ${d.branch}，并创建合并到 ${d.base} 的 MR？`,
+				body: d.mrUrl ? "MR 已经有了，只推送新提交。" : undefined,
 				confirmText: "推送",
 			}))
 		)
@@ -257,9 +267,8 @@ export function DevDrawer({
 			action === "discard" &&
 			!(await confirmDialog({
 				title: "放弃这个开发任务？",
-				body: `会删除 worktree 和本地分支 ${d.branch}`,
+				body: `会删除它的工作目录和本地分支 ${d.branch}，没推送的改动找不回来。`,
 				confirmText: "放弃",
-				danger: true,
 			}))
 		)
 			return;
@@ -269,13 +278,13 @@ export function DevDrawer({
 			const r = await post(`/api/dev/${d.id}/${action}`, { text });
 			setMsg(
 				action === "push"
-					? { text: `已推送：${r.url || "MR 已更新"}` }
+					? { text: r.url ? `已推送，MR：${r.url}` : "已推送，MR 已更新" }
 					: action === "message"
-						? { text: r.mode === "steered" ? "已插入当前运行，下一个工具步骤后生效" : "已发送，agent 开始新一轮" }
+						? { text: r.mode === "steered" ? "已发送，它会在下一步之前看到" : "已发送，助手开始处理" }
 						: action === "stop"
 							? { text: "已停止" }
 							: action === "close"
-								? { text: "已归档" }
+								? { text: "已完成" }
 								: { text: "已放弃" },
 			);
 			if (action === "message") setText("");
@@ -288,6 +297,7 @@ export function DevDrawer({
 		}
 	}
 	const canPush = (d.status === "review" || d.status === "pushed") && Boolean(diff?.commits);
+	const conclusion = !running && d.status !== "pushing" && Boolean(d.summary?.trim());
 	// 开发任务只查清楚、没改代码，或者 MR 已经提了，也能直接完成；还有没推送的改动时只能推送或放弃
 	const canClose = d.status === "pushed" || (d.status === "review" && Boolean(diff) && !diff!.commits && !diff!.uncommitted);
 	return (
@@ -295,9 +305,7 @@ export function DevDrawer({
 			onBack={onBack}
 			backLabel={backLabel}
 			title={
-				isDev
-					? `开发 · ${d.repo.split("/").pop()} · ${d.branch}`
-					: `${AGENT_NAME[d.agent] ?? d.agent} · ${d.repo ? d.repo.split("/").pop() : "~/code"}`
+				isDev ? `开发助手：${d.repo.split("/").pop()}` : `${AGENT_NAME[d.agent] ?? d.agent}${d.repo ? `：${d.repo.split("/").pop()}` : ""}`
 			}
 			onClose={onClose}
 			actions={
@@ -308,10 +316,10 @@ export function DevDrawer({
 							disabled={d.status === "pushing"}
 							placeholder={
 								d.status === "done"
-									? "任务已完成，发消息会接着这次对话再跑一轮（⌘↩ 发送）"
+									? "已经完成了。再发消息，它会接着这次对话继续做（⌘↩ 发送）"
 									: running
-										? "插话：会在 agent 下一个工具步骤后生效，例如「先别动 pb」（⌘↩ 发送）"
-										: "给 agent 发消息：提问、补充要求、让它继续改（⌘↩ 发送）"
+										? "补充一句，它会在下一步之前看到，例如「先别动 pb」（⌘↩ 发送）"
+										: "提问、补充要求，或让它接着改（⌘↩ 发送）"
 							}
 							onChange={(e) => setText(e.target.value)}
 							onKeyDown={(e) => {
@@ -320,7 +328,7 @@ export function DevDrawer({
 						/>
 						<div className="row">
 							<button className="btn primary" disabled={busy || !text.trim()} onClick={() => act("message")}>
-								{running ? "插话" : "发送"}
+								发送
 							</button>
 							{running && (
 								<button className="btn" disabled={busy} onClick={() => act("stop")}>
@@ -329,16 +337,16 @@ export function DevDrawer({
 							)}
 							{canPush && (
 								<button className="btn" disabled={busy} onClick={() => act("push")}>
-									{d.mrUrl ? "推送新提交" : "推送并建 MR"}
+									{d.mrUrl ? "推送新提交" : "推送并创建 MR"}
 								</button>
 							)}
 							{!running && !ended && (!isDev || canClose) && (
-								<button className="btn" disabled={busy} title="看完了，归档" onClick={() => act("close")}>
+								<button className="btn" disabled={busy} onClick={() => act("close")}>
 									完成
 								</button>
 							)}
 							{!running && isDev && (
-								<button className="btn danger" disabled={busy} onClick={() => act("discard")}>
+								<button className="btn ghost" disabled={busy} onClick={() => act("discard")}>
 									放弃
 								</button>
 							)}
@@ -352,38 +360,69 @@ export function DevDrawer({
 				<span className={`pill ${d.status === "failed" ? "failed" : d.status === "pushed" ? "sent" : "pending"}`}>
 					{STATUS[d.status] ?? d.status}
 				</span>
-				<span>{time(d.created)}</span>
-				{isDev && <span>基于 origin/{d.base}</span>}
-				{d.model && <span>{`${d.model.split("/").pop()} · effort ${d.thinking ?? "默认"}`}</span>}
-				{d.runs > 0 && <span>{`第 ${d.runs} 轮 · ${money(d.usage?.cost)}`}</span>}
+				<span className="num">{time(d.created)}</span>
+				{isDev && (
+					<span>
+						分支 <code>{d.branch}</code>，基于 <code>origin/{d.base}</code>
+					</span>
+				)}
+				{d.model && <span>{`${d.model.split("/").pop()}，思考强度${EFFORT[d.thinking ?? ""] ?? "默认"}`}</span>}
+				{d.runs > 0 && <span className="num">{`第 ${d.runs} 轮，花费 ${money(d.usage?.cost)}`}</span>}
 				{d.mrUrl && (
 					<a href={d.mrUrl} target="_blank" rel="noreferrer">
 						打开 MR
 					</a>
 				)}
 			</div>
-			<div className="label">{isDev ? "需求" : "任务"}</div>
-			<blockquote>{d.request}</blockquote>
+			{/* 跑完了先给结论：打开就能看到答案，过程折起来 */}
+			{conclusion && (
+				<>
+					<div className="label">结论</div>
+					<div className="chat-agent conclusion">
+						<Md text={d.summary} />
+					</div>
+				</>
+			)}
+			{conclusion ? (
+				<details className="ctxwrap">
+					<summary>要做什么</summary>
+					<blockquote>{d.request}</blockquote>
+				</details>
+			) : (
+				<>
+					<div className="label">要做什么</div>
+					<blockquote>{d.request}</blockquote>
+				</>
+			)}
 			{d.error && <div className="err">{d.error}</div>}
 			{diff && (
 				<>
 					<div className="label">
 						改动：{diff.commits ? `${diff.commits.split("\n").length} 个提交` : "还没有提交"}
 						<button className="linkbtn" onClick={() => setShowDiff(!showDiff)}>
-							{showDiff ? "收起" : "展开 diff"}
+							{showDiff ? "收起" : "查看改动"}
 						</button>
 					</div>
 					{diff.uncommitted && <div className="err">还有未提交的改动：{diff.uncommitted}</div>}
 					{showDiff && (
 						<>
 							<pre className="diff">{diff.commits}</pre>
-							<pre className="diff">{diff.diff || "（无改动）"}</pre>
+							<pre className="diff">{diff.diff || "没有改动"}</pre>
 						</>
 					)}
 				</>
 			)}
-			<div className="label">对话</div>
-			<Chat dev={d} />
+			{conclusion ? (
+				<details className="ctxwrap">
+					<summary>过程</summary>
+					<Chat dev={d} />
+				</details>
+			) : (
+				<>
+					<div className="label">过程</div>
+					<Chat dev={d} />
+				</>
+			)}
 		</Drawer>
 	);
 }

@@ -24,7 +24,7 @@ export function NewTask({ agents, onCreated }: { agents: AgentStat[]; onCreated:
 	const model = pick?.agent === agent ? pick.model : (conf?.model ?? "");
 	const thinking = pick?.agent === agent ? pick.thinking : (conf?.thinking ?? "medium");
 	async function submit() {
-		if (!request.trim()) return setMsg({ text: "先写任务内容", bad: true });
+		if (!request.trim()) return setMsg({ text: "先写下要做什么", bad: true });
 		setBusy(true);
 		try {
 			const t = await createAgentTask({
@@ -48,22 +48,24 @@ export function NewTask({ agents, onCreated }: { agents: AgentStat[]; onCreated:
 	return (
 		<div className="panel newtask">
 			<div className="row">
-				<select value={agent} onChange={(e) => setAgent(e.target.value)}>
+				<select value={agent} aria-label="交给谁" onChange={(e) => setAgent(e.target.value)}>
 					{choices.map((a) => (
 						<option key={a.name} value={a.name}>
 							{AGENT_NAME[a.name] ?? a.name}
 						</option>
 					))}
 				</select>
-				<select value={repo} onChange={(e) => setRepo(e.target.value)}>
-					{!dev && <option value="">不限仓库（~/code）</option>}
+				<select value={repo} aria-label="仓库" onChange={(e) => setRepo(e.target.value)}>
+					{!dev && <option value="">不指定仓库</option>}
 					{repos?.map((r) => (
 						<option key={r} value={r}>
 							{r}
 						</option>
 					))}
 				</select>
-				{dev && <input value={branch} onChange={(e) => setBranch(e.target.value.trim())} placeholder="分支：留空由 agent 起名" />}
+				{dev && (
+					<input value={branch} aria-label="分支" onChange={(e) => setBranch(e.target.value.trim())} placeholder="分支，留空会自动起名" />
+				)}
 			</div>
 			<div className="row">
 				<ModelPicker model={model} thinking={thinking} onChange={(m, t) => setPick({ agent, model: m, thinking: t })} />
@@ -76,8 +78,8 @@ export function NewTask({ agents, onCreated }: { agents: AgentStat[]; onCreated:
 				}}
 				placeholder={
 					dev
-						? "要实现什么，例如：给 v1/comment/product-stats 加上和 v1/comment/list 一样的筛选参数（⌘↩ 提交）"
-						: "要它查什么、看什么，例如：查一下 prod 上店铺 12345 最近一周的评论数（⌘↩ 提交）"
+						? "要改什么，例如：给 v1/comment/product-stats 加上和 v1/comment/list 一样的筛选参数（⌘↩ 交给它）"
+						: "要它查什么，例如：查一下 prod 上店铺 12345 最近一周的评论数（⌘↩ 交给它）"
 				}
 			/>
 			<div className="row">

@@ -27,12 +27,12 @@ async function within<T>(job: Promise<T>) {
 	return { settled: await Promise.race([outcome, sleep(2000, undefined, { ref: false })]), outcome };
 }
 
-const DEV_DONE: Record<string, string> = { say: "已发给 agent", push: "已推送", stop: "已停止", discard: "已放弃", complete: "已完成" };
+const DEV_DONE: Record<string, string> = { say: "已发送", push: "已推送", stop: "已停止", discard: "已放弃", complete: "已完成" };
 
 async function devAction(msgId: string, a: string, taskId: string, form: Record<string, string>) {
 	let job: Promise<unknown>;
 	if (a === "say") {
-		if (!form.msg?.trim()) return reply("error", "先写要发给 agent 的话");
+		if (!form.msg?.trim()) return reply("error", "先写要说的话");
 		job = messageDev(taskId, form.msg);
 	} else if (a === "push") job = pushDev(taskId);
 	else if (a === "stop") job = stopDev(taskId);
@@ -46,10 +46,10 @@ async function devAction(msgId: string, a: string, taskId: string, form: Record<
 			log("任务卡片操作失败", a, taskId, r.error);
 			syncDevCard(taskId, reason(r.error));
 		});
-		return reply("info", a === "push" ? "推送中…" : "处理中…", renderDevCard(msgId));
+		return reply("info", a === "push" ? "正在推送…" : "正在处理…", renderDevCard(msgId));
 	}
 	if (settled.ok) {
-		const text = a === "say" && settled.value === "steered" ? "已插进当前这一轮" : (DEV_DONE[a] ?? "已处理");
+		const text = a === "say" && settled.value === "steered" ? "已发送，会接着这一轮处理" : (DEV_DONE[a] ?? "已处理");
 		return reply("success", text, renderDevCard(msgId));
 	}
 	if (!(settled.error instanceof DraftError)) log("任务卡片操作失败", a, taskId, settled.error);
@@ -65,14 +65,14 @@ function failureAction(a: string, taskId: string) {
 		return reply("error", reason(e));
 	}
 	// 卡片由 closeFailure 原地更新
-	return reply("success", a === "retry" ? "已重新起草" : "已忽略");
+	return reply("success", a === "retry" ? "正在重新起草" : "已忽略");
 }
 
 async function approvalAction(a: string, id: string, form: Record<string, string>) {
 	if (a !== "approve" && a !== "reject" && a !== "approve_remember") return reply("error", `不认识的操作 ${a}`);
 	try {
 		const r = await decideApproval(id, a === "reject" ? "reject" : "approve", form.note ?? "", a === "approve_remember");
-		return reply("success", a === "reject" ? "已拒绝" : "已批准，执行中…", approvalCard(r));
+		return reply("success", a === "reject" ? "已拒绝" : "已批准，正在执行…", approvalCard(r));
 	} catch (e) {
 		if (!(e instanceof ApprovalError)) log("审批操作失败", id, e);
 		const cur = getApproval(id);

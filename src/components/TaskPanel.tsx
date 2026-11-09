@@ -2,32 +2,63 @@
 // 当前那份产出（待确认的草稿、agent 任务）嵌在时间线末尾，直接复用原来的草稿抽屉和任务抽屉：改稿、发送、对话、看改动、推送都在那里
 import type { ReactNode } from "react";
 import type { Draft, State, Task, TaskEvent, TaskView } from "../lib/api";
-import { AGENT_NAME, SOURCE, STATUS, describeDraft, isLive } from "../lib/format";
+import { AGENT_NAME, SOURCE, STATUS, describeDraft, hm, isLive, titleOf } from "../lib/format";
 import { ApprovalActions, RowActions } from "./Actions";
 import { DevDrawer } from "./DevDrawer";
+import { Md } from "./Md";
 import { Drawer, Embedded } from "./Drawer";
 import { DraftDrawer } from "./Drawers";
 import { Pill, StoryTag, workerName } from "./Workbench";
 
-const hm = (ts: number) => new Date(ts * 1000).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" });
 const OUTCOME: Record<string, string> = {
-	sent: "已以你的身份发出",
-	discarded: "不发",
-	completed: "标记完成",
+	sent: "已以你的身份发送",
+	discarded: "不回复",
+	completed: "已完成",
 	expired: "你已亲自回复",
 	replied: "机器人已回复",
 	remembered: "已记住",
-	pushed: "已推送建 MR",
+	pushed: "已推送并创建 MR",
+	merged: "已并入新草稿",
+	dismissed: "已忽略",
 	done: "已完成",
 	failed: "失败",
 };
 
 type Item = { at: number; key: string; node: ReactNode };
 
+/**
+ * 分派依据是后端给自己看的（「兜底」「分诊 deep：…」「ack 档…升到 answer」），
+ * 时间线上换成一句人话；档位名（ack / answer / deep / mr）不出现
+ */
+export function ruleText(rule: string) {
+	const r = rule.trim();
+	if (!r || r === "兜底" || r === "唯一的 agent") return "";
+	const fixed: Record<string, string> = {
+		"MR 链接": "消息里有 MR 链接，先做代码评审",
+		"@机器人问答": "有人 @机器人 提问",
+		"回复 agent 任务": "你在追问助手的任务",
+		记住: "你让它记住一件事",
+		看板派活: "你在看板上派的",
+	};
+	if (fixed[r]) return fixed[r];
+	let m = r.match(/^分诊 \w+：(.*)$/s);
+	if (m) return m[1].trim();
+	m = r.match(/^告警(续)?批（(\d+) 条）$/);
+	if (m) return m[1] ? `又来了 ${m[2]} 条告警，并进上一批一起分析` : `攒了 ${m[2]} 条告警一起分析`;
+	m = r.match(/^定时任务：(.*)$/);
+	if (m) return `定时任务「${m[1]}」到点了`;
+	m = r.match(/^草稿指令：(.*)$/);
+	if (m) return `你在卡片上回复「${m[1]}」`;
+	return r
+		.replace(/（[^）]*(档|升到)[^）]*）/g, "")
+		.replace(/；接续 \S+/, "")
+		.trim();
+}
+
 function Ev({ at, children }: { at: number; children: ReactNode }) {
 	return (
 		<div className="ev">
-			<div className="tm">{hm(at)}</div>
+			<div className="tm num">{hm(at)}</div>
 			<div>{children}</div>
 		</div>
 	);
@@ -46,22 +77,20 @@ function eventNode(e: TaskEvent): ReactNode {
 	if (e.k === "route")
 		return (
 			<div className="sys">
-				{e.kind === "command" ? "操作" : "路由"}：{e.rule}
-				{e.agent && e.kind !== "command" && (
-					<em>
-						{" "}
-						· 交给 {AGENT_NAME[e.agent] ?? e.agent}
-						{e.tier ? ` · ${e.tier}` : ""}
-					</em>
+				{e.kind === "command" ? (
+					`你的操作：${e.rule}`
+				) : (
+					<>
+						{ruleText(e.rule) && `${ruleText(e.rule)}，`}
+						{e.agent ? `交给${AGENT_NAME[e.agent] ?? e.agent}` : "已分派"}
+					</>
 				)}
 			</div>
 		);
 	return (
-		<div className="sys">
-			<em>
-				{OUTCOME[e.outcome] ?? e.outcome}
-				{e.detail ? `：${e.detail}` : ""}
-			</em>
+		<div className="sys dim">
+			{OUTCOME[e.outcome] ?? e.outcome}
+			{e.detail ? `：${e.detail}` : ""}
 		</div>
 	);
 }
@@ -120,7 +149,8 @@ export function TaskPanel({
 			node: (
 				<div className="out">
 					<div className="oh">
-						<span>草稿 · {STATUS[d.status] ?? d.status}</span>
+						<span>草稿</span>
+						<span>{STATUS[d.status] ?? d.status}</span>
 					</div>
 					<div className="ob">
 						<div className="quote">{describeDraft(d)}</div>
@@ -138,13 +168,10 @@ export function TaskPanel({
 				node: (
 					<div className="out">
 						<div className="oh">
-							<span>
-								{AGENT_NAME[d.agent] ?? d.agent} 任务 · {d.title}
-							</span>
+							<span>{d.title}</span>
+							<span>{AGENT_NAME[d.agent] ?? d.agent}</span>
 						</div>
-						<div className="ob">
-							<div className="quote">{d.summary || d.error || d.request}</div>
-						</div>
+						<div className="ob">{d.summary ? <Md text={d.summary} /> : <div className="quote">{d.error || d.request}</div>}</div>
 					</div>
 				),
 			});
@@ -155,17 +182,17 @@ export function TaskPanel({
 			node: (
 				<div className="out need">
 					<div className="oh">
-						<span>写操作审批</span>
+						<span>需要你批准</span>
 						<span>24 小时内有效</span>
 					</div>
 					<div className="ob">
 						<pre className="cmd">{a.command}</pre>
 						<div className="kv">
-							<span>说明</span>
+							<span>为什么</span>
 							<div>{a.reason}</div>
 						</div>
 						<div className="kv">
-							<span>来源</span>
+							<span>谁要做</span>
 							<div>{a.origin}</div>
 						</div>
 						<ApprovalActions a={a} />
@@ -176,13 +203,17 @@ export function TaskPanel({
 	items.sort((a, b) => a.at - b.at);
 	const story = t.storyId ? s.stories.find((x) => x.id === t.storyId) : undefined;
 	return (
-		<Drawer title={t.title || "（无内容）"} onClose={onClose} onBack={onBack} backLabel="返回需求">
+		<Drawer title={titleOf(t)} onClose={onClose} onBack={onBack} backLabel="返回需求">
 			<div className="taskhead">
 				<Pill t={t} />
 				<div className="props">
 					<span>
-						来源 <b>{SOURCE[t.source] ?? t.source}</b>
-						{t.label ? <b> · {t.label}</b> : null}
+						来源{" "}
+						<b>
+							{t.label && !t.label.includes(SOURCE[t.source] ?? t.source)
+								? `${SOURCE[t.source] ?? t.source}：${t.label}`
+								: t.label || (SOURCE[t.source] ?? t.source)}
+						</b>
 					</span>
 					{workerName(t) && (
 						<span>
@@ -196,9 +227,8 @@ export function TaskPanel({
 					)}
 					{t.scheduleId && (
 						<span>
-							定时{" "}
 							<button className="link" onClick={onCron}>
-								看定时任务
+								查看定时任务
 							</button>
 						</span>
 					)}
@@ -215,13 +245,13 @@ export function TaskPanel({
 					<Ev at={t.updated}>
 						<div className="out need">
 							<div className="oh">
-								<span>要你拍板</span>
+								<span>需要你决定</span>
 							</div>
 							<div className="ob">
 								<div>{t.title}</div>
 								<div className="oa">
 									<button className="btn pri sm" onClick={onMemory}>
-										去记忆页裁定
+										去记忆页处理
 									</button>
 								</div>
 							</div>
@@ -235,7 +265,7 @@ export function TaskPanel({
 								<span>失败</span>
 							</div>
 							<div className="ob">
-								<div>{t.error || "这次处理失败了"}</div>
+								<div className="err">{t.error || "这次处理失败了"}</div>
 								<RowActions t={t} s={s} onOpen={() => {}} onMemory={onMemory} />
 							</div>
 						</div>

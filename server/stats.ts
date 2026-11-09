@@ -52,14 +52,14 @@ type DraftRow = Pick<typeof schema.drafts.$inferSelect, "status" | "kind">;
 
 /** 草稿的结果：给 Yi 看的叫法 */
 export const OUTCOME: Record<string, string> = {
-	sent: "你发了",
-	completed: "标记完成",
-	expired: "你自己回了",
-	discarded: "不发",
-	merged: "合并到后一条",
-	replaced: "改写替换",
-	pending: "待确认",
-	noreply: "建议不回",
+	sent: "已发送",
+	completed: "已完成",
+	expired: "你亲自回复了",
+	discarded: "不回复",
+	merged: "并入新草稿",
+	replaced: "被改写替换",
+	pending: "待发送",
+	noreply: "建议不回复",
 	sending: "发送中",
 	revising: "改写中",
 };

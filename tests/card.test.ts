@@ -127,7 +127,7 @@ test("只有 Yi 能点草稿卡片", async () => {
 	assert.equal(getDraft("om_card")!.status, "pending");
 });
 
-test("点「不发」：草稿结束，回调直接带回结果卡片", async () => {
+test("点「不回复」：草稿结束，回调直接带回结果卡片", async () => {
 	const r = await click("discard");
 	assert.equal(r.toast.type, "success");
 	assert.equal(getDraft("om_card")!.status, "discarded");
@@ -184,6 +184,18 @@ test("agent 任务卡片：按状态给操作，只有最新一张带按钮", ()
 	assert.deepEqual(buttonsOf(devCard({ ...task, agent: "alert", title: "告警 · 订单群 · 3 条" }, round)), ["say", "complete"]);
 	assert.deepEqual(buttonsOf(devCard(task, round, false)), []);
 	for (const status of ["done", "discarded"]) assert.deepEqual(buttonsOf(devCard({ ...task, status }, round)), []);
+});
+
+test("agent 任务卡片：标题不带内部名词和 ·，「放弃」要二次确认，不用红色按钮", async () => {
+	const { devTitle } = await import("../server/devcard.ts");
+	assert.equal(devTitle(task), "开发任务：order（feature/x）");
+	assert.equal(devTitle({ ...task, agent: "alert", title: "告警 · 订单群 · 3 条" }), "告警：订单群（3 条）");
+	assert.equal(devTitle({ ...task, agent: "assistant", title: "定时 · 早报" }), "定时任务：早报");
+	assert.equal(devTitle({ ...task, agent: "assistant", title: "查一下订单" }), "查一下订单");
+	const els = walk(devCard(task, { what: "第 1 轮完成", body: "改好了" }));
+	const discard = els.find((e) => e.tag === "button" && e.behaviors?.[0]?.value?.a === "discard");
+	assert.ok(discard.confirm?.title?.content);
+	assert.ok(els.every((e) => e.type !== "danger"));
 });
 
 test("agent 任务卡片：元素 name 不重复（飞书会拒发整张卡）", () => {
@@ -273,10 +285,10 @@ test("MR 预审有评论台账：卡片列出将发的评论，按钮是确认�
 	const els = walk(draftCard(d as any, "", mr));
 	const text = JSON.stringify(els);
 	assert.ok(text.includes("a.go:12"));
-	assert.ok(text.includes("将发到 MR 的评论"));
+	assert.ok(text.includes("要发到 MR 的评论"));
 	assert.ok(!text.includes("gitlab-mr-review -->"), "隐藏标记不出现在卡片上");
-	assert.ok(els.some((e) => e.tag === "button" && e.text?.content === "确认，评论发到 MR"));
-	assert.ok(!JSON.stringify(walk(draftCard(d as any, "", { ...mr, done: ["note"] }))).includes("将发到 MR 的评论"));
+	assert.ok(els.some((e) => e.tag === "button" && e.text?.content === "发送评论"));
+	assert.ok(!JSON.stringify(walk(draftCard(d as any, "", { ...mr, done: ["note"] }))).includes("要发到 MR 的评论"));
 });
 
 test("MR 评论台账：校验 SHA、总结、行号", async () => {

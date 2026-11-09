@@ -1,4 +1,4 @@
-// 日报：把某一天的消息、草稿、agent 任务、需求进度、审批和消耗汇成一份 Markdown（不调模型，随时可看）；
+// 日报：把某一天的消息、草稿、助手任务、需求进度、审批和花费汇成一份 Markdown（不调模型，随时可看）；
 // 需要的话再让模型据此写成一段文字总结，存起来。参考 ace-cli 的每日工作日志。
 import { and, gte, lt } from "drizzle-orm";
 import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
@@ -10,13 +10,22 @@ import { DraftError } from "./drafts/store.ts";
 import { OUTCOME } from "./stats.ts";
 import { now } from "./util.ts";
 
-const STAGE: Record<string, string> = { dev: "开发中", test: "测试中", release: "发布中", done: "发布完成", dropped: "不跟了" };
+// 状态的叫法和看板、飞书卡片一致（docs/ui.md）
+const STAGE: Record<string, string> = { dev: "开发中", test: "测试中", release: "发布中", done: "已发布", dropped: "不再跟进" };
+const APPROVAL: Record<string, string> = {
+	pending: "等你批准",
+	running: "执行中",
+	done: "已执行",
+	rejected: "已拒绝",
+	expired: "已过期",
+	failed: "执行失败",
+};
 const DEV_STATUS: Record<string, string> = {
 	running: "进行中",
-	review: "待看",
+	review: "待查看",
 	failed: "失败",
 	pushing: "推送中",
-	pushed: "已提 MR",
+	pushed: "已创建 MR",
 	done: "已完成",
 	discarded: "已放弃",
 };
@@ -59,7 +68,7 @@ export function dayMarkdown(d: ReturnType<typeof dayData>): string {
 	const cost = d.runs.reduce((n, r) => n + r.cost, 0);
 	const incoming = d.triggers.filter((t) => !t.owner).length;
 	out.push(
-		`进来 ${incoming} 条消息，起草 ${d.drafts.length} 份，agent 任务 ${d.tasks.length} 个，运行 ${d.runs.length} 次，消耗 $${cost.toFixed(2)}。`,
+		`进来 ${incoming} 条消息，起草 ${d.drafts.length} 份，助手任务 ${d.tasks.length} 个，运行 ${d.runs.length} 次，花费 $${cost.toFixed(2)}。`,
 		"",
 	);
 	if (d.drafts.length) {
@@ -79,7 +88,7 @@ export function dayMarkdown(d: ReturnType<typeof dayData>): string {
 		out.push("");
 	}
 	if (d.tasks.length) {
-		out.push("## agent 任务", "");
+		out.push("## 助手任务", "");
 		for (const t of d.tasks)
 			out.push(`- [${DEV_STATUS[t.status] ?? t.status}] ${t.title.replace(/\s+/g, " ").slice(0, 80)}${t.mrUrl ? `（${t.mrUrl}）` : ""}`);
 		out.push("");
@@ -94,8 +103,8 @@ export function dayMarkdown(d: ReturnType<typeof dayData>): string {
 		out.push("");
 	}
 	if (d.approvals.length) {
-		out.push("## 写操作审批", "");
-		for (const a of d.approvals) out.push(`- [${a.status}] ${a.reason}${a.origin ? `（${a.origin}）` : ""}`);
+		out.push("## 审批", "");
+		for (const a of d.approvals) out.push(`- [${APPROVAL[a.status] ?? a.status}] ${a.reason}${a.origin ? `（${a.origin}）` : ""}`);
 		out.push("");
 	}
 	return out.join("\n").trim();

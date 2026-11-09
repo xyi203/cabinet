@@ -2,8 +2,9 @@
 // 开发任务：推送 / 放弃 / 停止；只读 agent（告警、咨询……）：完成 / 停止；都能在卡片里直接给 agent 发话。
 // 状态变了（推送中、已推送、完成、放弃）最新那张原地更新；新一轮的卡片发出后，上一张收起按钮。纯函数。
 import path from "node:path";
-import { ALERT_AGENT, PORT } from "./config.ts";
+import { PORT } from "./config.ts";
 import type { DevTask } from "./db/schema.ts";
+import { footnote } from "./drafts/card.ts";
 
 export interface Round {
 	/** 第 N 轮完成 / 第 N 轮失败 */
@@ -13,16 +14,18 @@ export interface Round {
 }
 
 const BODY_MAX = 3000;
-const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…（未完，完整内容见看板）` : s);
+const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…（太长了，完整内容在看板里）` : s);
+const BOARD = `http://127.0.0.1:${PORT}/`;
 const plain = (content: string) => ({ tag: "plain_text", content });
 const note = (content: string, color = "grey") => ({
 	tag: "div",
 	text: { tag: "plain_text", content, text_color: color, text_size: "notation" },
 });
-const button = (id: string, a: string, label: string, type = "default") => ({
+const button = (id: string, a: string, label: string, type = "default", confirm?: { title: string; text: string }) => ({
 	tag: "button",
 	text: plain(label),
 	type,
+	...(confirm ? { confirm: { title: plain(confirm.title), text: plain(confirm.text) } } : {}),
 	behaviors: [{ type: "callback", value: { k: "dev", a, t: id } }],
 });
 const row = (...els: object[]) => ({
@@ -33,35 +36,32 @@ const row = (...els: object[]) => ({
 
 const isDev = (t: Pick<DevTask, "agent">) => t.agent === "dev";
 
+/** 卡片标题。任务标题是存好的（「定时 · 名字」「告警 · 群名 · 3 条」），老数据也在：只在卡片上换成不带 · 的说法 */
 export function devTitle(t: DevTask) {
-	if (isDev(t)) return `开发任务 · ${path.basename(t.repo)} · ${t.branch}`;
-	if (t.agent === ALERT_AGENT) return t.title.slice(0, 60);
-	return `Agent 任务 · ${t.agent} · ${t.title.slice(0, 40)}`;
+	if (isDev(t)) return `开发任务：${path.basename(t.repo)}（${t.branch}）`;
+	const alert = /^告警 · (.+) · (\d+) 条$/.exec(t.title);
+	if (alert) return `告警：${alert[1]}（${alert[2]} 条）`.slice(0, 60);
+	const cron = /^定时 · (.+)$/.exec(t.title);
+	if (cron) return `定时任务：${cron[1]}`.slice(0, 60);
+	return t.title.slice(0, 60);
 }
 
 const STATUS: Record<string, string> = {
-	running: "运行中…",
-	pushing: "推送中…",
+	running: "进行中…",
+	pushing: "正在推送…",
 	pushed: "已推送",
 	done: "已完成",
 	discarded: "已放弃",
 };
+/** 任务状态给人看的叫法（报错提示里用） */
+export const devStatusText = (status: string) =>
+	status === "review" ? "等你查看" : status === "failed" ? "失败" : (STATUS[status] ?? status);
 
+// 颜色：出错红，结束和被新卡片接替的灰，其余（等你看、进行中）青绿
 function header(t: DevTask, round: Round, latest: boolean) {
-	if (!latest) return { subtitle: `${round.what} · 后续见新卡片`, template: "grey" };
+	if (!latest) return { subtitle: `${round.what}，后续在新卡片里`, template: "grey" };
 	const subtitle = t.status === "review" || t.status === "failed" ? round.what : (STATUS[t.status] ?? t.status);
-	const template =
-		t.status === "failed"
-			? "red"
-			: t.status === "done" || t.status === "discarded"
-				? "grey"
-				: t.status === "pushed"
-					? "green"
-					: t.status === "running" || t.status === "pushing"
-						? "wathet"
-						: t.agent === ALERT_AGENT
-							? "orange"
-							: "blue";
+	const template = t.status === "failed" ? "red" : t.status === "done" || t.status === "discarded" ? "grey" : "turquoise";
 	return { subtitle, template };
 }
 
@@ -83,7 +83,7 @@ export function devCard(t: DevTask, round: Round, latest = true, notice = ""): o
 					{
 						tag: "input",
 						name: "msg",
-						placeholder: plain(isDev(t) ? "给 agent 的要求或问题；运行中会插进当前这一轮" : "继续追问；运行中会插进当前这一轮"),
+						placeholder: plain(isDev(t) ? "补充要求或提问；进行中也可以发" : "继续追问；进行中也可以发"),
 						max_length: 1000,
 						width: "fill",
 						input_type: "multiline_text",
@@ -94,7 +94,7 @@ export function devCard(t: DevTask, round: Round, latest = true, notice = ""): o
 						tag: "button",
 						// 卡片里 name 不能重复（和外面的 form 撞名飞书直接拒发）；回调看的是 value.a，不看 name
 						name: "say_submit",
-						text: plain("发给 agent"),
+						text: plain("发送"),
 						type: "primary",
 						form_action_type: "submit",
 						behaviors: [{ type: "callback", value: { k: "dev", a: "say", t: t.id } }],
@@ -105,17 +105,27 @@ export function devCard(t: DevTask, round: Round, latest = true, notice = ""): o
 		const buttons: object[] = [];
 		if (t.status === "running") buttons.push(button(t.id, "stop", "停止"));
 		else if (isDev(t)) {
-			if (t.status === "review") buttons.push(button(t.id, "push", "推送并建 MR", "primary_filled"));
+			if (t.status === "review") buttons.push(button(t.id, "push", "推送并创建 MR", "primary_filled"));
 			if (t.status === "pushed") buttons.push(button(t.id, "push", "推送更新"), button(t.id, "complete", "完成"));
-			buttons.push(button(t.id, "discard", "放弃", "danger"));
+			// 放弃会删掉本地工作目录和分支，删了找不回来：唯一要二次确认的按钮
+			buttons.push(
+				button(t.id, "discard", "放弃", "default", {
+					title: "放弃这个任务？",
+					text:
+						t.status === "pushed"
+							? "会删除本地的工作目录。已推送的分支和 MR 不受影响。"
+							: "会删除本地的工作目录和分支，没推送的改动找不回来。",
+				}),
+			);
 		} else buttons.push(button(t.id, "complete", "完成", "primary_filled"));
 		elements.push(row(...buttons));
 	}
 	elements.push(
-		note(
+		footnote(
 			latest && open
-				? `也可以引用本条回复：直接写的话发给 agent；${isDev(t) ? "推送 / 停止 / 放弃" : "停止 / 完成"}。看板 http://127.0.0.1:${PORT}/?view=agents`
-				: `看板 http://127.0.0.1:${PORT}/?view=agents`,
+				? `也可以引用这张卡片回复：直接写的话会发给${isDev(t) ? "开发助手" : "助手"}；回「${isDev(t) ? "推送」「停止」「放弃" : "停止」「完成"}」就照做`
+				: "",
+			BOARD,
 		),
 	);
 	return {

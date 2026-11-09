@@ -79,5 +79,5 @@ test("统计：今天按小时、7 天按天分桶，按 agent / 档位 / 模型
 	);
 	assert.equal(s.byAgent[0].seconds, 20);
 	assert.equal(s.hitRate, 2 / 4);
-	assert.equal(s.drafts[0].name, "你自己回了");
+	assert.equal(s.drafts[0].name, "你亲自回复了");
 });

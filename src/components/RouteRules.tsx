@@ -1,40 +1,57 @@
-// 设置 → 路由规则：按 Router 的六步排列（docs/flow.md §3），能调的阈值直接改，保存后写 config/routes.json，下一条消息就按新的走
+// 设置 → 分派规则：消息进来后的几个可调阈值（server/rules.ts），保存后写 config/routes.json，下一条消息就按新的走，不用重启
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { type RouteRules, fetchRoutes, saveRoutes } from "../lib/api";
+import { confirmDialog } from "./Confirm";
 import { toast } from "./Toast";
+import { Card } from "./ui";
 
-function Num({
-	id,
-	value,
-	onChange,
-	unit,
-	step = 1,
-}: {
-	id: string;
-	value: number;
-	onChange: (v: number) => void;
+/**
+ * 可调的数值项。后端一律按秒（巡检是 0–1 的比例）存，界面按量级换成天、小时、分钟、秒或百分比，
+ * min / max 是界面单位下的范围，和 server/rules.ts 的校验对齐（个别下限按界面单位取整，比后端略严）
+ */
+interface NumField {
 	unit: string;
-	step?: number;
-}) {
-	return (
-		<span className="numin">
-			<input id={id} className="in" type="number" min={0} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
-			{unit}
-		</span>
-	);
+	/** 1 个界面单位等于多少存储单位 */
+	scale: number;
+	min: number;
+	max: number;
+	/** 只收整数 */
+	int?: boolean;
+	get: (r: RouteRules) => number;
+	put: (r: RouteRules, v: number) => void;
 }
 
-function Step({ n, name, sub, children }: { n: string; name: string; sub?: string; children: React.ReactNode }) {
-	return (
-		<div className="cfg">
-			<div className="lab">
-				{n} {name}
-				{sub && <small>{sub}</small>}
-			</div>
-			<div className="val">{children}</div>
-		</div>
-	);
+type Key = "reopen" | "window" | "delay" | "check" | "quiet" | "maxWait" | "follow" | "patrol";
+const FIELDS: Record<Key, NumField> = {
+	reopen: { unit: "天", scale: 86400, min: 0, max: 30, get: (r) => r.reopen, put: (r, v) => void (r.reopen = v) },
+	window: { unit: "分钟", scale: 60, min: 0, max: 60, get: (r) => r.yiActive.window, put: (r, v) => void (r.yiActive.window = v) },
+	delay: { unit: "秒", scale: 1, min: 0, max: 600, int: true, get: (r) => r.yiActive.delay, put: (r, v) => void (r.yiActive.delay = v) },
+	check: { unit: "秒", scale: 1, min: 1, max: 60, int: true, get: (r) => r.yiActive.check, put: (r, v) => void (r.yiActive.check = v) },
+	quiet: { unit: "秒", scale: 1, min: 10, max: 3600, int: true, get: (r) => r.alert.quiet, put: (r, v) => void (r.alert.quiet = v) },
+	maxWait: { unit: "分钟", scale: 60, min: 1, max: 120, get: (r) => r.alert.maxWait, put: (r, v) => void (r.alert.maxWait = v) },
+	follow: { unit: "小时", scale: 3600, min: 0, max: 24, get: (r) => r.alert.follow, put: (r, v) => void (r.alert.follow = v) },
+	patrol: {
+		unit: "%",
+		scale: 0.01,
+		min: 0,
+		max: 100,
+		int: true,
+		get: (r) => r.cron.patrolPauseAt,
+		put: (r, v) => void (r.cron.patrolPauseAt = v),
+	},
+};
+
+type Form = Record<Key, string> & { senders: string; chats: string };
+type Errors = Partial<Record<keyof Form, string>>;
+
+/** 存储值 → 输入框里的字：最多两位小数，0.5 天这类不会显示成 0.49999 */
+const show = (f: NumField, v: number) => String(Math.round((v / f.scale) * 100) / 100);
+
+function toForm(r: RouteRules): Form {
+	const out = { senders: r.alert.senders.join("\n"), chats: r.alert.chats.join("\n") } as Form;
+	for (const k of Object.keys(FIELDS) as Key[]) out[k] = show(FIELDS[k], FIELDS[k].get(r));
+	return out;
 }
 
 const list = (s: string) =>
@@ -43,124 +60,191 @@ const list = (s: string) =>
 		.map((x) => x.trim())
 		.filter(Boolean);
 
+/** 校验输入并换回存储单位；有错的项不写进 rules */
+function parse(form: Form, base: RouteRules): { rules: RouteRules; errors: Errors } {
+	const rules = structuredClone(base);
+	const errors: Errors = {};
+	for (const k of Object.keys(FIELDS) as Key[]) {
+		const f = FIELDS[k];
+		const s = form[k].trim();
+		const v = Number(s);
+		const range = `填 ${f.min} 到 ${f.max} 之间的${f.int ? "整数" : "数字"}`;
+		if (!s) errors[k] = "不能留空";
+		else if (!/^\d+(\.\d+)?$/.test(s) || v < f.min || v > f.max || (f.int && !Number.isInteger(v))) errors[k] = range;
+		// 百分比存成比例（除以 100 而不是乘 0.01，免得 57% 变成 0.5700000000000001）；其余按秒取整
+		else f.put(rules, f.scale < 1 ? v / Math.round(1 / f.scale) : Math.round(v * f.scale));
+	}
+	if (!errors.quiet && !errors.maxWait && rules.alert.maxWait < rules.alert.quiet) errors.maxWait = "不能短于「收齐一批」的时长";
+	rules.alert.senders = list(form.senders);
+	rules.alert.chats = list(form.chats);
+	const bad = rules.alert.chats.find((c) => !/^oc_[\w-]+$/.test(c));
+	if (bad) errors.chats = `群 ID 以 oc_ 开头，「${bad}」不是群 ID`;
+	return { rules, errors };
+}
+
+const same = (a: RouteRules, b: RouteRules) =>
+	a.reopen === b.reopen &&
+	a.yiActive.window === b.yiActive.window &&
+	a.yiActive.delay === b.yiActive.delay &&
+	a.yiActive.check === b.yiActive.check &&
+	a.alert.quiet === b.alert.quiet &&
+	a.alert.maxWait === b.alert.maxWait &&
+	a.alert.follow === b.alert.follow &&
+	a.alert.senders.join("\n") === b.alert.senders.join("\n") &&
+	a.alert.chats.join("\n") === b.alert.chats.join("\n") &&
+	a.cron.patrolPauseAt === b.cron.patrolPauseAt;
+
+function Section({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
+	return (
+		<section className="mt-6 first:mt-0">
+			<h2 className="m-0 text-[14px] font-semibold text-text">{title}</h2>
+			{desc && <p className="m-0 mt-0.5 text-[12px] text-muted">{desc}</p>}
+			<Card className="mt-2">{children}</Card>
+		</section>
+	);
+}
+
+/** 一项设置：左边名称和一句「它决定什么」，右边控件；wide 时控件另起一行占满 */
+function Row({ id, label, desc, wide, children }: { id?: string; label: string; desc?: string; wide?: boolean; children?: ReactNode }) {
+	return (
+		<div
+			className={`flex flex-col gap-2 border-t border-line px-4 py-3 first:border-t-0 ${wide ? "" : "sm:flex-row sm:items-center sm:gap-6"}`}
+		>
+			<div className="min-w-0 flex-1">
+				<label htmlFor={id} className="block text-[14px] text-text">
+					{label}
+				</label>
+				{desc && <div className="mt-0.5 text-[12px] text-muted">{desc}</div>}
+			</div>
+			{children}
+		</div>
+	);
+}
+
 export function RouteRulesPage() {
 	const qc = useQueryClient();
-	const { data } = useQuery({ queryKey: ["routes"], queryFn: fetchRoutes });
-	const [r, setR] = useState<RouteRules | null>(null);
+	const { data, error } = useQuery({ queryKey: ["routes"], queryFn: fetchRoutes });
+	const [draft, setDraft] = useState<Form | null>(null);
 	const [busy, setBusy] = useState(false);
-	if (!data) return <div className="empty">加载中…</div>;
-	const cur = r ?? data.rules;
-	const set = (patch: (x: RouteRules) => RouteRules) => setR(patch(structuredClone(cur)));
-	const dirty = r !== null && JSON.stringify(r) !== JSON.stringify(data.rules);
-	async function save(next: RouteRules, done: string) {
+	if (error && !data) return <div className="text-[14px] text-bad">读取失败：{(error as Error).message}</div>;
+	if (!data) return <div className="py-10 text-center text-[14px] text-muted">加载中…</div>;
+	const form = draft ?? toForm(data.rules);
+	const { rules, errors } = parse(form, data.rules);
+	const invalid = Object.keys(errors).length > 0;
+	const dirty = draft !== null && (invalid || !same(rules, data.rules));
+	const atDefault = !invalid && same(rules, data.defaults);
+	const edit = (k: keyof Form) => (e: { target: { value: string } }) => setDraft({ ...form, [k]: e.target.value });
+
+	const num = (k: Key, label: string, desc: string) => {
+		const id = `rule-${k}`;
+		const err = errors[k];
+		return (
+			<Row id={id} label={label} desc={desc}>
+				<div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
+					<span className="inline-flex items-center gap-2 text-[14px] text-text-2">
+						<input
+							id={id}
+							inputMode={FIELDS[k].int ? "numeric" : "decimal"}
+							value={form[k]}
+							onChange={edit(k)}
+							aria-invalid={Boolean(err)}
+							aria-describedby={err ? `${id}-err` : undefined}
+							className={`w-20 rounded-md border bg-panel [font-family:inherit] px-2.5 py-1 text-right text-[14px] text-text tabular-nums ${err ? "border-bad" : "border-line"}`}
+						/>
+						<span className="w-8">{FIELDS[k].unit}</span>
+					</span>
+					{err && (
+						<span id={`${id}-err`} className="text-[12px] text-bad">
+							{err}
+						</span>
+					)}
+				</div>
+			</Row>
+		);
+	};
+	const ids = (k: "senders" | "chats", label: string, desc: string, placeholder: string) => {
+		const id = `rule-${k}`;
+		return (
+			<Row id={id} label={label} desc={desc} wide>
+				<textarea
+					id={id}
+					value={form[k]}
+					onChange={edit(k)}
+					placeholder={placeholder}
+					spellCheck={false}
+					rows={Math.min(6, Math.max(2, form[k].split("\n").length))}
+					aria-invalid={Boolean(errors[k])}
+					className={`code w-full resize-y rounded-md border bg-panel px-2.5 py-1.5 text-[12px] leading-5 text-text ${errors[k] ? "border-bad" : "border-line"}`}
+				/>
+				{errors[k] && <div className="text-[12px] text-bad">{errors[k]}</div>}
+			</Row>
+		);
+	};
+
+	async function save() {
 		setBusy(true);
 		try {
-			await saveRoutes(next);
-			setR(null);
+			await saveRoutes(rules);
 			await qc.invalidateQueries({ queryKey: ["routes"] });
-			toast(done);
+			setDraft(null);
+			toast("已保存，从下一条消息开始生效");
 		} catch (e) {
 			toast((e as Error).message, true);
 		} finally {
 			setBusy(false);
 		}
 	}
+	async function discard() {
+		if (await confirmDialog({ title: "放弃未保存的改动？", confirmText: "放弃改动" })) setDraft(null);
+	}
+
 	return (
-		<>
-			<p className="meta note">每条进来的事件按顺序走，命中一步就停。改完点保存，下一条消息就按新的走，不用重启。</p>
-			<div className="list">
-				<Step n="1" name="去重" sub="渠道 + 渠道内 ID">
-					<span className="meta">同一条事件只处理一次，固定</span>
-				</Step>
-				<Step n="2" name="过滤" sub="命中就不处理，记下原因">
-					<span className="meta">自己发的、机器人自己的卡片、PagerDuty 的 [Ack] / [Res]、你已经亲自回了</span>
-				</Step>
-				<Step n="3" name="指令" sub="你对已有的事的操作">
-					<span className="meta">引用卡片回「发 / 改 / 不发 / 完成」、看板按钮、「记住」</span>
-				</Step>
-				<Step n="4" name="归属" sub="追加到已有的事">
-					<span>话题、工作项、MR 关闭后</span>
-					<Num
-						id="rule-reopen"
-						value={Math.round((cur.reopen / 86400) * 10) / 10}
-						step={0.5}
-						unit="天"
-						onChange={(v) => set((x) => ({ ...x, reopen: Math.round(v * 86400) }))}
-					/>
-					<span>内再来消息就重开；私聊和群的主线只接还没关闭的</span>
-				</Step>
-				<Step n="5" name="攒批" sub="告警按群攒一批">
-					<span>静默</span>
-					<Num id="rule-quiet" value={cur.alert.quiet} unit="秒收口" onChange={(v) => set((x) => ((x.alert.quiet = v), x))} />
-					<span>最长</span>
-					<Num id="rule-max" value={cur.alert.maxWait} unit="秒" onChange={(v) => set((x) => ((x.alert.maxWait = v), x))} />
-					<span>同群</span>
-					<Num id="rule-follow" value={cur.alert.follow} unit="秒内续批" onChange={(v) => set((x) => ((x.alert.follow = v), x))} />
-				</Step>
-				<Step n="" name="告警来源" sub="空着就不限">
-					<input
-						id="rule-senders"
-						className="in wide"
-						defaultValue={cur.alert.senders.join(" ")}
-						onBlur={(e) => set((x) => ((x.alert.senders = list(e.target.value)), x))}
-						placeholder="只认这些机器人（发送者 ID，空格分隔）"
-						aria-label="只认这些机器人"
-					/>
-					<input
-						id="rule-chats"
-						className="in wide"
-						defaultValue={cur.alert.chats.join(" ")}
-						onBlur={(e) => set((x) => ((x.alert.chats = list(e.target.value)), x))}
-						placeholder="只认这些群（chat_id，空格分隔）"
-						aria-label="只认这些群"
-					/>
-				</Step>
-				<Step n="" name="你正在聊" sub="多半你自己就回了">
-					<span>触发前</span>
-					<Num
-						id="rule-window"
-						value={cur.yiActive.window}
-						unit="秒内你说过话"
-						onChange={(v) => set((x) => ((x.yiActive.window = v), x))}
-					/>
-					<span>就先等最多</span>
-					<Num id="rule-delay" value={cur.yiActive.delay} unit="秒" onChange={(v) => set((x) => ((x.yiActive.delay = v), x))} />
-					<span>每</span>
-					<Num
-						id="rule-check"
-						value={cur.yiActive.check}
-						unit="秒看一次；0 秒不等"
-						onChange={(v) => set((x) => ((x.yiActive.check = v), x))}
-					/>
-				</Step>
-				<Step n="6" name="分诊" sub="先规则，再模型">
-					<span className="meta">消息带 MR 链接 → 助手 · mr；定时、看板按各自配置；其余由 agents.json 里 _router 的模型判档位</span>
-				</Step>
-				<Step n="" name="定时巡检" sub="手动运行不拦">
-					<span>Claude 5 小时额度用到</span>
-					<Num
-						id="rule-patrol"
-						value={Math.round(cur.cron.patrolPauseAt * 100)}
-						unit="% 就跳过这一轮"
-						onChange={(v) => set((x) => ((x.cron.patrolPauseAt = v / 100), x))}
-					/>
-				</Step>
-			</div>
-			<div className="oa" style={{ marginTop: 14 }}>
-				<button className="btn pri sm" disabled={!dirty || busy} onClick={() => save(cur, "已保存，下一条消息起生效")}>
+		<div className="max-w-[880px]">
+			<Section title="已完成的事">
+				{num("reopen", "重新打开的期限", "话题、工作项或 MR 完成后，这段时间内来了新消息，会重新打开原来那件事，不另起一件。")}
+			</Section>
+
+			<Section title="你正在聊天时" desc="你多半会自己回，所以先等一会儿再起草。">
+				{num("window", "怎样算正在聊天", "你在这段时间内，在同一个聊天里说过话。")}
+				{num("delay", "最多等多久", "填 0 表示不等，直接起草。")}
+				{num("check", "检查间隔", "等的时候，每隔这么久看一次你回了没有。")}
+			</Section>
+
+			<Section title="告警" desc="群里机器人 @你 的消息算作告警。同一个群的告警攒成一批，交给助手一起分析。">
+				{num("quiet", "收齐一批", "这么久没有新告警，就认为这一批到齐了。")}
+				{num("maxWait", "最长等待", "告警一直不停时，等到这么久也开始分析。")}
+				{num("follow", "并入上一批", "同一个群在这段时间内又来告警，且上一批还没完成，就并到一起分析。")}
+				{ids("chats", "告警群", "只有这些群里的算告警，留空表示不限。", "每行一个群 ID，以 oc_ 开头")}
+				{ids("senders", "告警机器人", "只有这些机器人发的算告警，留空表示不限。", "每行一个机器人 ID")}
+			</Section>
+
+			<Section title="定时任务">
+				{num("patrol", "额度紧张时跳过巡检", "Claude 5 小时额度用到这个比例，自动巡检就跳过这一轮；手动运行不受影响。")}
+			</Section>
+
+			<Section title="固定规则">
+				<Row label="不处理" desc="你自己发的消息、机器人自己发的卡片、PagerDuty 的确认和恢复通知，以及你已经回复过的消息。" />
+				<Row label="你的操作" desc="引用卡片回复，或在看板上操作，都算对原来那件事的处理，不会当成新消息。" />
+				<Row label="分派" desc="带 MR 链接的消息交给助手预审；其他消息由模型判断是回个表情、简单回答，还是深入排查。" />
+			</Section>
+
+			{/* 有改动时贴在窗口底部，长页面不用滚到底找保存 */}
+			<div className={`${dirty ? "sticky bottom-0" : ""} mt-6 flex flex-wrap items-center gap-2 border-t border-line bg-bg py-3`}>
+				<button type="button" className="btn primary" disabled={!dirty || invalid || busy} onClick={save}>
 					保存
 				</button>
 				{dirty && (
-					<button className="btn ghost sm" onClick={() => setR(null)}>
-						放弃修改
+					<button type="button" className="btn" disabled={busy} onClick={discard}>
+						放弃改动
 					</button>
 				)}
-				{JSON.stringify(data.rules) !== JSON.stringify(data.defaults) && (
-					<button className="btn ghost sm" disabled={busy} onClick={() => save(data.defaults, "已恢复默认值")}>
+				{invalid && <span className="text-[12px] text-bad">有设置填得不对，改好后才能保存</span>}
+				{!atDefault && (
+					<button type="button" className="btn ghost ml-auto" disabled={busy} onClick={() => setDraft(toForm(data.defaults))}>
 						恢复默认
 					</button>
 				)}
 			</div>
-		</>
+		</div>
 	);
 }

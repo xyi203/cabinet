@@ -110,7 +110,7 @@ const words = (list?: string[]) => (list ?? []).map((w) => w.split(/\s+/));
 // 跑 skill 脚本时前面常带的解释器：skill 文档里经常写 /usr/bin/python3 scripts/xxx
 const INTERPRETERS = new Set(["python3", "/usr/bin/python3", "python", "bash", "sh", "node"]);
 
-/** 审批时「执行并以后放行」要记进 skill-rules.json 的一条：rule 已有就往它的 read 里加，没有就新建 */
+/** 审批时「批准，以后不再问」要记进 skill-rules.json 的一条：rule 已有就往它的 read 里加，没有就新建 */
 export interface Learn {
 	rule: string;
 	/** 新建规则时的 argv0（skill 目录写成 {skills}） */
@@ -365,7 +365,7 @@ export class Guard {
 		const w = hits(rest, rule.write);
 		if (w) return approve(`${name} ${w.join(" ")} 是写操作`);
 		if (hits(rest, rule.read)) return ALLOW;
-		// 没登记的子命令不直接拒绝：交给 Yi 审批，确认是只读的可以点「执行并以后放行」记进规则
+		// 没登记的子命令不直接拒绝：交给 Yi 审批，确认是只读的可以点「批准，以后不再问」记进规则
 		const sub = subcommand(rest, rule);
 		return approve(`${name}${sub ? ` ${sub}` : ""} 还没登记是读还是写（直接放行的有：${joinWords(rule.read) || "无"}）`);
 	}

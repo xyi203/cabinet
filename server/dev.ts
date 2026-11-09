@@ -10,7 +10,7 @@ import { changed } from "./bus.ts";
 import { DATA_DIR, DEFAULT_CWD, GLAB_BIN, OWNER_OPEN_ID, PATHS, PI_MODEL, PORT, TASK_TIMEOUT } from "./config.ts";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "./db/index.ts";
 import { imageKeys, imagesNote, queuePatch, saveImage, sendCardToUserAsBot, sendToUserAsBot } from "./lark/bot.ts";
-import { devCard, devTitle, type Round } from "./devcard.ts";
+import { devCard, devStatusText, devTitle, type Round } from "./devcard.ts";
 import { settle } from "./pipeline.ts";
 import { routeBoard } from "./router/board.ts";
 import type { DevTask } from "./db/schema.ts";
@@ -412,11 +412,11 @@ async function notify(id: string, what: string, body: string, failed = false) {
 		// 卡片被拒也不能漏掉通知：退回富文本
 		log("任务卡片发送失败，改发文字", id, e);
 		const md = [
-			`**${devTitle(t)}** · ${what}`,
+			`**${devTitle(t)}**：${what}`,
 			body.length > 1500 ? `${body.slice(0, 1500)}…` : body,
 			isDev(t)
-				? `引用本条回复：直接写要求或问题会发给 agent；\`推送\` 推送并建 MR；\`停止\`；\`放弃\`。完整 diff 在看板：http://127.0.0.1:${PORT}/?view=agents`
-				: `引用本条回复可以继续追问；\`停止\`；\`完成\` 归档。看板：http://127.0.0.1:${PORT}/?view=agents`,
+				? `引用本条回复：直接写要求或问题会发给开发助手；回「推送」推送并创建 MR，回「停止」「放弃」照做。改动可以到看板查看：http://127.0.0.1:${PORT}/`
+				: `引用本条回复可以继续追问；回「停止」「完成」照做。看板：http://127.0.0.1:${PORT}/`,
 		].join("\n\n");
 		try {
 			setKv(`devdm:${await sendToUserAsBot(OWNER_OPEN_ID, md)}`, id);
@@ -445,8 +445,8 @@ export async function messageDev(id: string, text: string, from = "Yi"): Promise
 	if (!text.trim()) throw new DraftError("消息是空的");
 	if (t.status === "discarded") throw new DraftError("任务已放弃");
 	// 归档时开发任务的 worktree 已经收掉了，没法接着改；查东西的任务会话还在，能接着聊
-	if (t.status === "done" && isDev(t) && !existsSync(t.worktree)) throw new DraftError("worktree 已经收掉了，新建一个任务吧");
-	if (t.status === "pushing") throw new DraftError("正在推送，等一下再发");
+	if (t.status === "done" && isDev(t) && !existsSync(t.worktree)) throw new DraftError("这个任务的工作目录已经清理掉了，请新建一个任务");
+	if (t.status === "pushing") throw new DraftError("正在推送，稍等一下再发");
 	if (t.status === "running" && (await steer(sessionOf(id), `${from}：${text.trim()}`))) {
 		log("开发任务插话", id, from);
 		return "steered";
@@ -458,7 +458,7 @@ export async function messageDev(id: string, text: string, from = "Yi"): Promise
 export async function stopDev(id: string) {
 	const t = getDevTask(id);
 	if (!t) throw new DraftError("任务不存在");
-	if (t.status !== "running") throw new DraftError("任务没有在运行");
+	if (t.status !== "running") throw new DraftError("任务已经停下了");
 	stoppedByYi.add(id);
 	await abortRun(sessionOf(id));
 }
@@ -505,10 +505,10 @@ export async function pushDev(id: string): Promise<string> {
 	const t = getDevTask(id);
 	if (!t) throw new DraftError("任务不存在");
 	if (!isDev(t)) throw new DraftError("只有开发任务能推送");
-	if (t.status !== "review" && t.status !== "pushed") throw new DraftError(`任务现在是「${t.status}」，不能推送`);
+	if (t.status !== "review" && t.status !== "pushed") throw new DraftError(`任务现在是「${devStatusText(t.status)}」，不能推送`);
 	const { commits, uncommitted } = await devDiff(id);
 	if (!commits) throw new DraftError("还没有提交，没有可推送的改动");
-	if (uncommitted) throw new DraftError("worktree 里还有未提交的改动，先让 agent 提交或放弃");
+	if (uncommitted) throw new DraftError("还有没提交的改动：先让开发助手提交，或者放弃");
 	update(id, { status: "pushing" });
 	try {
 		await git(t.worktree, ["push", "-u", "origin", t.branch], 120);
@@ -555,7 +555,7 @@ export async function pushDev(id: string): Promise<string> {
 export async function discardDev(id: string) {
 	const t = getDevTask(id);
 	if (!t) throw new DraftError("任务不存在");
-	if (t.status === "running" || t.status === "pushing") throw new DraftError("任务正在运行，等它结束再放弃");
+	if (t.status === "running" || t.status === "pushing") throw new DraftError("任务还在进行，等它停下再放弃");
 	if (isDev(t)) {
 		if (existsSync(t.worktree)) await git(t.repo, ["worktree", "remove", "--force", t.worktree]);
 		if (t.status !== "pushed") await git(t.repo, ["branch", "-D", t.branch]).catch(() => {});
@@ -573,11 +573,11 @@ export const devTasksList = () => db().select().from(schema.devTasks).all();
 export async function closeTask(id: string) {
 	const t = getDevTask(id);
 	if (!t) throw new DraftError("任务不存在");
-	if (t.status === "running" || t.status === "pushing") throw new DraftError("任务正在运行");
+	if (t.status === "running" || t.status === "pushing") throw new DraftError("任务还在进行，等它停下再完成");
 	if (isDev(t) && existsSync(t.worktree)) {
 		if (t.status !== "pushed") {
 			const { commits, uncommitted } = await devDiff(id);
-			if (commits || uncommitted) throw new DraftError("还有没推送的改动：先推送建 MR，或者放弃");
+			if (commits || uncommitted) throw new DraftError("还有没推送的改动：先推送并创建 MR，或者放弃");
 		}
 		await git(t.repo, ["worktree", "remove", "--force", t.worktree]);
 		if (t.status !== "pushed") await git(t.repo, ["branch", "-D", t.branch]).catch(() => {});

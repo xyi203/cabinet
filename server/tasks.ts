@@ -61,13 +61,15 @@ export interface TaskView {
 }
 
 const OUTCOME: Record<string, string> = {
-	sent: "已发出",
-	discarded: "不发",
-	completed: "已标记完成",
+	sent: "已发送",
+	discarded: "不回复",
+	completed: "已完成",
 	expired: "你已亲自回复",
 	replied: "已回复",
 	remembered: "已记住",
-	pushed: "已提 MR",
+	pushed: "已创建 MR",
+	merged: "已并入新草稿",
+	dismissed: "已忽略",
 	done: "已完成",
 	failed: "失败",
 };
@@ -133,7 +135,7 @@ function view(
 	const lastResult = o.results.toSorted((a, b) => b.at - a.at)[0];
 	let result: string | undefined;
 	if (row.status === "done" || row.status === "cancelled") {
-		if (draft?.status === "noreply") result = "建议不回";
+		if (draft?.status === "noreply") result = "不用回复";
 		else if (dev?.patrol && dev.summary.includes(PATROL_OK)) result = "本轮正常";
 		else if (dev?.summary.trimStart().startsWith(NO_CHANGE)) result = "无变化";
 		else if (lastResult) result = OUTCOME[lastResult.outcome] ?? lastResult.outcome;

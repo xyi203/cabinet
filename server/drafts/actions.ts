@@ -17,7 +17,7 @@ import { DEFAULT_CWD } from "../config.ts";
 import { locks, sem } from "../agent/slots.ts";
 import { gatherContext } from "./context.ts";
 import { describeReply, draftLabel, type Kind, resolveEmoji, resolveSticker, stickerHint } from "./format.ts";
-import { CardInputError, draftCard, parseCardAction, sendText } from "./card.ts";
+import { CardInputError, draftCard, draftStateText, parseCardAction, sendText } from "./card.ts";
 import { claim, DraftError, getDraft, isQuiet, LIVE, pushDraft, setStatus, syncCard } from "./store.ts";
 import { applyMrAction, draftMrs, type MrLedger } from "./mr.ts";
 
@@ -44,13 +44,13 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 	}
 	const d = getDraft(id);
 	if (!d) throw new DraftError("草稿不存在");
-	if (!LIVE.includes(d.status)) throw new DraftError(`这条草稿已经是「${d.status}」状态，不再处理`);
+	if (!LIVE.includes(d.status)) throw new DraftError(`这条草稿现在是「${draftStateText(d.status)}」，不能再操作`);
 	if (action === "send" && d.status === "noreply" && !arg)
-		throw new DraftError("这条建议不回复，没有可发的草稿；需要回复请先改写或直接填写内容");
-	if (action === "revise" && !arg) throw new DraftError("缺少修改意见");
+		throw new DraftError("这条建议不回复，没有草稿可发；要回复的话先写内容，或者改写");
+	if (action === "revise" && !arg) throw new DraftError("先写想怎么改");
 	const busy = { send: "sending", revise: "revising", discard: "discarded", complete: "completed" }[action];
 	if (!busy) throw new DraftError(`未知操作 ${action}`);
-	if (!claim(id, LIVE, busy)) throw new DraftError("这条草稿正在被处理");
+	if (!claim(id, LIVE, busy)) throw new DraftError("这条草稿正在处理，稍等一下");
 	changed();
 	try {
 		if (action === "send") {
@@ -138,19 +138,19 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 // ---------- 卡片按钮 ----------
 
 const DONE_TOAST: Record<string, string> = {
-	send: "已发出",
-	mr_approve: "已在 GitLab approve",
-	mr_note: "评审意见已发到 MR",
+	send: "已发送",
+	mr_approve: "已批准 MR",
+	mr_note: "已发到 MR",
 	emoji: "已回表情",
 	sticker: "已发表情包",
-	discard: "已标记不发",
-	complete: "已标记完成",
-	revise: "已改写，新草稿见下一张卡片",
+	discard: "这条不回复了",
+	complete: "已完成",
+	revise: "已改写，新草稿在下一张卡片",
 };
 const BUSY_TOAST: Record<string, string> = {
-	revise: "改写中，新草稿会另发一张卡片",
-	mr_approve: "approve 中…",
-	mr_note: "发评论中…",
+	revise: "正在改写，好了会另发一张卡片",
+	mr_approve: "正在批准…",
+	mr_note: "正在发到 MR…",
 };
 
 const reason = (e: Error) => (e instanceof DraftError || e instanceof LarkError ? e.message : "执行失败，详情见日志");
@@ -170,7 +170,7 @@ export async function onDraftCardAction(data: unknown) {
 	// 卡片只发在 Yi 的私聊里，这里仍然只认 Yi：以 Yi 身份发出的确认不能由别人点出来
 	if (!OWNER_OPEN_ID || ev.operatorId !== OWNER_OPEN_ID) return toast("error", `只有${OWNER_NAME}能处理草稿`);
 	const d = getDraft(ev.messageId);
-	if (!d) return toast("error", "这张卡片不是草稿，或者草稿已经不在了");
+	if (!d) return toast("error", "找不到这条草稿");
 	let job: Promise<string>;
 	try {
 		if (ev.name === "mr_approve" || ev.name === "mr_note") {
@@ -182,7 +182,7 @@ export async function onDraftCardAction(data: unknown) {
 			if (!pick) throw new CardInputError(ev.name === "emoji" ? "先选一个表情" : "先选一个表情包");
 			job = applyDraftAction(d.id, "send", pick, ev.name === "emoji" ? "reaction" : "sticker");
 		} else if (ev.name === "revise") {
-			if (!ev.form.opinion?.trim()) throw new CardInputError("先写改写意见");
+			if (!ev.form.opinion?.trim()) throw new CardInputError("先写想怎么改");
 			job = applyDraftAction(d.id, "revise", ev.form.opinion);
 		} else if (ev.name === "discard" || ev.name === "complete") job = applyDraftAction(d.id, ev.name);
 		else return toast("error", `不认识的操作 ${ev.name}`);
@@ -202,10 +202,10 @@ export async function onDraftCardAction(data: unknown) {
 			log("草稿卡片操作失败", ev.name, d.id, r.error);
 			syncCard(
 				d.id,
-				`「${ev.name === "revise" ? "AI 改写" : ev.name.startsWith("mr_") ? "MR 操作" : "发送"}」没有成功：${reason(r.error)}`,
+				`「${ev.name === "revise" ? "改写" : ev.name === "mr_approve" ? "批准 MR" : ev.name === "mr_note" ? "发到 MR" : "发送"}」没有成功：${reason(r.error)}`,
 			);
 		});
-		return toast("info", BUSY_TOAST[ev.name] ?? "发送中…", draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id)));
+		return toast("info", BUSY_TOAST[ev.name] ?? "正在发送…", draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id)));
 	}
 	const card = () => draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id));
 	if (settled.ok) return toast("success", DONE_TOAST[ev.name] ?? "已处理", card());

@@ -5,7 +5,8 @@ import { ago, money } from "../lib/format";
 import { Chat } from "./DevDrawer";
 import { RecordList } from "./Lists";
 
-const STATUS: Record<string, string> = { running: "回答中", review: "", failed: "出错了" };
+/** 会话列表里的状态：只说进行中和出错，其余不写 */
+const STATUS: Record<string, string> = { running: "正在回答", failed: "出错了" };
 
 /**
  * 对话：直接和助手聊。左边是最近的会话，右边是整页对话，底部输入框；
@@ -61,22 +62,21 @@ export function ChatPage({ chats, records, now }: { chats: DevTask[]; records: R
 		<div className="chatpage">
 			<aside>
 				<button className="btn primary new" onClick={() => open(null)}>
-					＋ 新对话
+					新对话
 				</button>
 				<div className="sessions">
 					{chats.map((c) => (
 						<div key={c.id} className={`session${c.id === selected ? " on" : ""}`} onClick={() => open(c.id)}>
-							<div className="t">{c.title.replace(/\s+/g, " ").slice(0, 40)}</div>
-							<div className="m">
-								{STATUS[c.status] ?? c.status} {ago(now, c.updated)}
-								{c.usage ? ` · ${money(c.usage.cost)}` : ""}
+							<div className="t">{c.title.replace(/\s+/g, " ")}</div>
+							<div className="m num">
+								{[STATUS[c.status], ago(now, c.updated), c.usage ? `花费 ${money(c.usage.cost)}` : ""].filter(Boolean).join("，")}
 							</div>
 						</div>
 					))}
 					{!chats.length && <div className="foot">还没有对话</div>}
 				</div>
 				<details className="qa-records">
-					<summary>私聊机器人的问答记录</summary>
+					<summary>在飞书私聊机器人的问答</summary>
 					<RecordList records={records} />
 				</details>
 			</aside>
@@ -86,9 +86,9 @@ export function ChatPage({ chats, records, now }: { chats: DevTask[]; records: R
 						<Chat key={current.id} dev={current} chatMode />
 					) : (
 						<div className="empty">
-							直接问助手：查数据、看日志、翻代码、看告警、建定时任务都可以。
+							查数据、看日志、翻代码、看告警，或者让它建一个定时任务。
 							<br />
-							能用全部 skill 和只读工具，写操作会先给你发审批卡片。
+							要改动什么之前，它会先请你批准。
 						</div>
 					)}
 				</div>
@@ -98,7 +98,7 @@ export function ChatPage({ chats, records, now }: { chats: DevTask[]; records: R
 						autoFocus
 						value={text}
 						rows={3}
-						placeholder={running ? "运行中发的话会插进当前这一轮" : "回车发送，Shift + 回车换行"}
+						placeholder={running ? "它还在回答，现在发的话会在下一步之前看到" : "问点什么。回车发送，Shift + 回车换行"}
 						onChange={(e) => setText(e.target.value)}
 						onKeyDown={(e) => {
 							// 输入法选词时的回车不算发送
