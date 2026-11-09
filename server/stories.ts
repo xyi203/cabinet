@@ -408,7 +408,33 @@ export function releasePrompt(s: Story, what: string) {
 	].join("\n");
 }
 
-/** 从需求派活：dev 在新分支上实现，assistant 只读地查或者提发布工单 */
+// 观察文档任务按 docPrompt 最后单独一行给链接；取结论里最后一个飞书文档链接
+const docLink = (text: string) => text.match(/https:\/\/[\w.-]+\.feishu\.cn\/(?:wiki|docx)\/\w+/g)?.at(-1);
+
+/**
+ * 需求上挂着的发布工单、观察文档和首次观察：交给助手时一起带上，「把当前 AB 数据更新到观察文档」这种话
+ * 不用 agent 再去猜是哪张单、哪份文档
+ */
+export function ticketContext(
+	s: Pick<Story, "tickets">,
+	summaryOf: (taskId: string) => string | undefined = (id) => getDevTask(id)?.summary,
+): string {
+	const lines = s.tickets
+		.filter((t) => !t.removed)
+		.map((t) => {
+			const parts = [`- ${t.key}${t.title ? `「${t.title}」` : ""}：${t.status || "状态未知"}${t.ended ? "（已结束）" : ""}`];
+			if (t.doc) {
+				const link = docLink(summaryOf(t.doc.taskId) ?? "");
+				parts.push(`发布观察文档${link ? ` ${link}` : "（链接见任务结论）"}，任务 ${t.doc.taskId}`);
+			}
+			if (t.patrol)
+				parts.push(`首次观察任务 ${t.patrol.observeTaskId}${t.patrol.stopped ? `，巡检已停（${t.patrol.stopped}）` : "，巡检中"}`);
+			return parts.join("；");
+		});
+	return lines.length ? `这条需求挂着的发布工单（来龙去脉用 lookup 沿任务 ID 查）：\n${lines.join("\n")}` : "";
+}
+
+/** 从需求派活：dev 在新分支上实现，assistant 查数据、分析、更新文档（写操作走审批）或者提发布工单 */
 export async function storyTask(
 	id: string,
 	input: { kind: "dev" | "ask" | "release"; text?: string; repo?: string; branch?: string; model?: string; thinking?: string },
@@ -429,7 +455,7 @@ export async function storyTask(
 		if (!text) throw new DraftError("写一下要查什么");
 		return dispatch({
 			agent: "assistant",
-			request: `${header(s)}\n\n${text}`,
+			request: [header(s), ticketContext(s), text].filter(Boolean).join("\n\n"),
 			title: `${text.slice(0, 60)} · ${s.title}`,
 			repo: input.repo,
 			storyId: id,

@@ -1,6 +1,36 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-const { mergeTickets, parseStoryRef, parseTicketInfo, parseTicketKeys, patrolPrompt, observePrompt } = await import("../server/stories.ts");
+const { mergeTickets, parseStoryRef, parseTicketInfo, parseTicketKeys, patrolPrompt, observePrompt, ticketContext } =
+	await import("../server/stories.ts");
+
+test("交给助手时带上挂着的发布工单、观察文档链接和首次观察，解绑的不带", () => {
+	const summaries: Record<string, string> = {
+		"dev-1": "文档已更新。\n\nhttps://shoplazza.feishu.cn/docx/old\nhttps://shoplazza.feishu.cn/wiki/LV5Gwrfw9iTxYHksvbIcYsBKnjc",
+	};
+	const ctx = ticketContext(
+		{
+			tickets: [
+				{
+					key: "GD-1",
+					title: "functions-api AB",
+					status: "M1审核",
+					doc: { taskId: "dev-1" },
+					patrol: { observeTaskId: "dev-2", scheduleId: "s1", started: 0 },
+				},
+				{ key: "GD-2", title: "", status: "已完成", ended: true, doc: { taskId: "dev-9" } },
+				{ key: "GD-3", title: "解绑了", status: "M1审核", removed: true },
+			],
+		},
+		(id) => summaries[id],
+	);
+	assert.match(
+		ctx,
+		/GD-1「functions-api AB」：M1审核；发布观察文档 https:\/\/shoplazza\.feishu\.cn\/wiki\/LV5Gwrfw9iTxYHksvbIcYsBKnjc，任务 dev-1；首次观察任务 dev-2，巡检中/,
+	);
+	assert.match(ctx, /GD-2：已完成（已结束）；发布观察文档（链接见任务结论），任务 dev-9/);
+	assert.doesNotMatch(ctx, /GD-3/);
+	assert.equal(ticketContext({ tickets: [] }), "");
+});
 const { PATROL_OK } = await import("../server/dev.ts");
 
 test("认出文字和链接里的发布工单号，去重转大写", () => {

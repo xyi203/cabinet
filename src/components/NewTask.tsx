@@ -25,12 +25,14 @@ export function NewTask({ agents, onCreated }: { agents: AgentStat[]; onCreated:
 	const thinking = pick?.agent === agent ? pick.thinking : (conf?.thinking ?? "medium");
 	async function submit() {
 		if (!request.trim()) return setMsg({ text: "先写下要做什么", bad: true });
+		// 不替开发任务预选仓库：按最近修改排的第一个只是碰巧
+		if (dev && !repo) return setMsg({ text: "开发任务要选仓库", bad: true });
 		setBusy(true);
 		try {
 			const t = await createAgentTask({
 				agent,
 				request,
-				repo: repo || (dev ? repos?.[0] : undefined),
+				repo: repo || undefined,
 				branch: dev ? branch : undefined,
 				model,
 				thinking,
@@ -56,7 +58,7 @@ export function NewTask({ agents, onCreated }: { agents: AgentStat[]; onCreated:
 					))}
 				</select>
 				<select value={repo} aria-label="仓库" onChange={(e) => setRepo(e.target.value)}>
-					{!dev && <option value="">不指定仓库</option>}
+					<option value="">{dev ? "选仓库" : "不指定仓库"}</option>
 					{repos?.map((r) => (
 						<option key={r} value={r}>
 							{r}

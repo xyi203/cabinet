@@ -299,10 +299,10 @@ function Section({
 type Kind = "dev" | "ask" | "release";
 const KIND_HINT: Record<Kind, string> = {
 	dev: "要改什么？留空就照工单描述来做。改动放在新分支上，你看过之后再推送、创建 MR",
-	ask: "要查什么？只查不改",
+	ask: "要做什么？查数据、分析、更新观察文档都行，工单上挂的发布工单和观察文档会一起交给助手。写飞书、提单会先请你批准",
 	release: "提哪种发布工单？比如 stg 灰度、线上 AB、全量。留空的话助手会先问你，提交前也会请你批准",
 };
-const KIND_START: Record<Kind, string> = { dev: "开始实现", ask: "开始查询", release: "开始提单" };
+const KIND_START: Record<Kind, string> = { dev: "开始实现", ask: "交给助手", release: "开始提单" };
 
 function StoryDrawer({
 	s,
@@ -375,7 +375,7 @@ function StoryDrawer({
 			const r = await post<{ task: DevTask }>(`/api/stories/${s.id}/task`, {
 				kind,
 				text,
-				repo: repo || (kind === "dev" ? repos?.[0] : undefined),
+				repo: repo || undefined,
 				branch: kind === "dev" ? branch : undefined,
 			});
 			setKind(null);
@@ -392,13 +392,9 @@ function StoryDrawer({
 						<>
 							{kind !== "release" && (
 								<div className="row">
-									<select
-										value={repo || (kind === "dev" ? repos?.[0] : "") || ""}
-										onChange={(e) => setRepo(e.target.value)}
-										aria-label="仓库"
-										title="仓库"
-									>
-										{kind === "ask" && <option value="">不限仓库</option>}
+									{/* 开发任务不预选仓库：按最近修改排的第一个只是碰巧，派错了就在不相干的仓库里建 worktree */}
+									<select value={repo} onChange={(e) => setRepo(e.target.value)} aria-label="仓库" title="仓库">
+										<option value="">{kind === "dev" ? "选仓库" : "不限仓库"}</option>
 										{repos?.map((r) => (
 											<option key={r} value={r}>
 												{r}
@@ -421,7 +417,11 @@ function StoryDrawer({
 					<div className="row">
 						{kind ? (
 							<>
-								<button className="btn primary" disabled={busy || (kind === "ask" && !text.trim())} onClick={start}>
+								<button
+									className="btn primary"
+									disabled={busy || (kind === "ask" && !text.trim()) || (kind === "dev" && !repo)}
+									onClick={start}
+								>
 									{KIND_START[kind]}
 								</button>
 								<button className="btn" disabled={busy} onClick={() => setKind(null)}>
@@ -430,11 +430,11 @@ function StoryDrawer({
 							</>
 						) : (
 							<>
-								<button className="btn primary" onClick={() => setKind("dev")}>
-									派开发任务
+								<button className="btn primary" onClick={() => setKind("ask")}>
+									交给助手
 								</button>
-								<button className="btn" onClick={() => setKind("ask")}>
-									查询
+								<button className="btn" onClick={() => setKind("dev")}>
+									派开发任务
 								</button>
 								<button className="btn" onClick={() => setKind("release")}>
 									提发布工单
