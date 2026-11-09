@@ -1944,144 +1944,6 @@ pre.cmd {
 	padding: 0;
 	overflow: visible;
 }
-/* Markdown（Md.tsx）：正文 14、代码 12、标题 16 / 14 加粗，不超出四档字号；块之间 8px，标题前多留一点 */
-.md {
-	white-space: normal;
-	overflow-wrap: anywhere;
-	line-height: 1.7;
-}
-.md > :first-child {
-	margin-top: 0;
-}
-.md > :last-child {
-	margin-bottom: 0;
-}
-.md p {
-	margin: 0 0 8px;
-}
-.md .md-h1,
-.md .md-h2 {
-	font-weight: 600;
-	margin: 16px 0 6px;
-	line-height: 1.5;
-}
-.md .md-h1 {
-	font-size: 16px;
-}
-.md .md-h2 {
-	font-size: 14px;
-}
-.md ul,
-.md ol {
-	margin: 0 0 8px;
-	padding-left: 1.5em;
-}
-.md li {
-	margin: 2px 0;
-}
-.md li > ul,
-.md li > ol {
-	margin: 2px 0 0;
-}
-.md ul > li::marker {
-	color: var(--muted);
-}
-.md ol > li::marker {
-	color: var(--muted);
-	font-variant-numeric: tabular-nums;
-}
-.md li.task {
-	list-style: none;
-	margin-left: -1.3em;
-}
-.md .check {
-	display: inline-block;
-	width: 12px;
-	height: 12px;
-	margin-right: 6px;
-	border: 1.5px solid var(--muted);
-	border-radius: 4px;
-	vertical-align: -1px;
-}
-.md .check.on {
-	background: var(--accent);
-	border-color: var(--accent);
-}
-.md blockquote {
-	margin: 0 0 8px;
-	padding: 2px 0 2px 12px;
-	border: 0;
-	border-left: 3px solid var(--line);
-	border-radius: 0;
-	background: none;
-	color: var(--text-2);
-	white-space: normal;
-}
-.md hr {
-	border: 0;
-	border-top: 1px solid var(--line);
-	margin: 12px 0;
-}
-.md code {
-	padding: 1px 5px;
-	border-radius: 4px;
-	background: var(--soft);
-	font: 12px/1.5 var(--f-mono);
-	overflow-wrap: anywhere;
-}
-.md pre {
-	margin: 0 0 8px;
-	padding: 10px 12px;
-	background: var(--soft);
-	border-radius: 6px;
-	font: 12px/1.6 var(--f-mono);
-	white-space: pre;
-	overflow-x: auto;
-}
-.md a {
-	color: var(--accent);
-	text-decoration: underline;
-	text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent);
-	text-underline-offset: 2px;
-}
-.md s {
-	color: var(--muted);
-}
-.md-table {
-	margin: 0 0 8px;
-	overflow-x: auto;
-	border: 1px solid var(--line);
-	border-radius: 6px;
-}
-.md table {
-	border-collapse: collapse;
-	width: 100%;
-	font-variant-numeric: tabular-nums;
-}
-.md th,
-.md td {
-	padding: 6px 10px;
-	border-top: 1px solid var(--line);
-	text-align: left;
-	vertical-align: top;
-	line-height: 1.5;
-}
-.md thead th {
-	border-top: 0;
-	background: var(--soft);
-	font-weight: 600;
-	white-space: nowrap;
-}
-.md td + td,
-.md th + th {
-	border-left: 1px solid var(--line);
-}
-/* 对话气泡本身是浅底：里面的代码、表头换成面板色才分得开 */
-.chat-agent:not(.conclusion) .md code,
-.chat-agent:not(.conclusion) .md pre,
-.chat-agent:not(.conclusion) .md thead th {
-	background: var(--panel);
-}
 /* 嵌在任务详情里的当前草稿 / 任务：不套边框，用一条分隔线和小标题接在时间线后面；
  * 操作按钮贴在抽屉底部，和独立抽屉的位置一致 */
 .embed {
@@ -2396,4 +2258,165 @@ pre.cmd {
 	.srow {
 		grid-template-columns: minmax(0, 1fr);
 	}
+}
+
+/* ---------- Markdown 预览（components/Markdown.tsx）：结论、评审报告、日报、技能说明 ----------
+ * 字号守四档：正文 14、代码和表格 12、标题 16 / 14；不用斜体（em 按正文显示）；块之间 8px，标题前多留一点 */
+.md {
+	font-size: 14px;
+	line-height: 1.7;
+	color: var(--text);
+	/* 外层气泡（.chat-agent / .step .say）为纯文本设了 pre-wrap，这里换回正常排版 */
+	white-space: normal;
+	/* 用 overflow-wrap 而不是 word-break：后者会把表格列的最小宽度压到一个字 */
+	word-break: normal;
+	overflow-wrap: break-word;
+	min-width: 0;
+}
+.md > :first-child {
+	margin-top: 0;
+}
+.md > :last-child {
+	margin-bottom: 0;
+}
+.md p,
+.md ul,
+.md ol,
+.md pre,
+.md blockquote,
+.md .md-table {
+	margin: 0 0 8px;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+	margin: 16px 0 6px;
+	font-weight: 600;
+	line-height: 1.5;
+	font-size: 14px;
+}
+.md h1,
+.md h2 {
+	font-size: 16px;
+}
+.md h4,
+.md h5,
+.md h6 {
+	color: var(--text-2);
+}
+.md ul,
+.md ol {
+	padding-left: 1.5em;
+}
+.md li {
+	margin: 2px 0;
+}
+.md li > ul,
+.md li > ol {
+	margin: 2px 0 0;
+}
+.md li::marker {
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+/* GFM 任务列表：去掉圆点，勾选框顶到行首，勾选色用强调色 */
+.md li:has(> input[type="checkbox"]) {
+	list-style: none;
+	margin-left: -1.3em;
+}
+.md li > input[type="checkbox"] {
+	margin: 0 6px 0 0;
+	vertical-align: -1px;
+	accent-color: var(--accent);
+}
+.md a {
+	color: var(--accent);
+	text-decoration: underline;
+	text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent);
+	text-underline-offset: 2px;
+}
+.md a:hover {
+	text-decoration-color: currentColor;
+}
+.md strong {
+	font-weight: 600;
+}
+.md em {
+	font-style: normal;
+}
+.md del {
+	color: var(--muted);
+}
+.md code {
+	font: 12px/1.5 var(--f-mono);
+	padding: 1px 5px;
+	border-radius: 4px;
+	background: var(--soft);
+}
+.md pre {
+	padding: 10px 12px;
+	border-radius: 6px;
+	background: var(--soft);
+	overflow: auto;
+	max-height: 480px;
+	font: 12px/1.6 var(--f-mono);
+}
+.md pre code {
+	padding: 0;
+	background: none;
+	white-space: pre;
+}
+.md blockquote {
+	padding: 2px 0 2px 12px;
+	border-left: 3px solid var(--line);
+	color: var(--text-2);
+}
+.md hr {
+	border: none;
+	border-top: 1px solid var(--line);
+	margin: 12px 0;
+}
+.md img {
+	max-width: 100%;
+	border-radius: 6px;
+}
+/* 宽表格只在自己的框里横向滚动，不撑破卡片；外框圆角 6，内部用分隔线 */
+.md-table {
+	overflow-x: auto;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+}
+.md table {
+	border-collapse: collapse;
+	width: 100%;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.md th,
+.md td {
+	min-width: 4em;
+	padding: 6px 10px;
+	border-top: 1px solid var(--line);
+	text-align: left;
+	vertical-align: top;
+	line-height: 1.5;
+}
+.md th + th,
+.md td + td {
+	border-left: 1px solid var(--line);
+}
+.md thead th {
+	border-top: 0;
+	background: var(--soft);
+	font-weight: 600;
+	white-space: nowrap;
+}
+/* 对话气泡底色是 --soft，里面的代码、表头换成面板色才看得出来 */
+.chat-agent:not(.conclusion) .md code,
+.chat-agent:not(.conclusion) .md pre,
+.chat-agent:not(.conclusion) .md thead th {
+	background: var(--panel);
 }

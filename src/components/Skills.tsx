@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { type SkillView, fetchSkillDoc, fetchSkills, post } from "../lib/api";
 import { AGENT_NAME } from "../lib/format";
+import { Markdown, splitFrontmatter } from "./Markdown";
 import { toast } from "./Toast";
 import { Card, Segmented } from "./ui";
 
@@ -38,6 +39,21 @@ function Rules({ s }: { s: SkillView }) {
 					)}
 				</div>
 			))}
+		</div>
+	);
+}
+
+function SkillDoc({ doc }: { doc?: string }) {
+	if (doc === undefined) return <div className="mt-2 text-[12px] text-muted">加载中…</div>;
+	const { meta, body } = splitFrontmatter(doc);
+	return (
+		<div className="mt-2 max-h-[60vh] overflow-auto rounded-md border border-line bg-bg px-4 py-3">
+			{meta && (
+				<pre className="m-0 mb-3 overflow-x-auto border-b border-line pb-3 font-mono text-[12px] leading-5 whitespace-pre-wrap text-muted">
+					{meta}
+				</pre>
+			)}
+			<Markdown text={body} />
 		</div>
 	);
 }
@@ -95,11 +111,7 @@ function Row({ s, everyone }: { s: SkillView; everyone: number }) {
 			{/* 说明和规则放在按钮下方占满整行，窄屏不被按钮挤成一条 */}
 			{s.desc && <div className={`mt-1 text-[12px] text-muted ${open ? "" : "line-clamp-2"}`}>{s.desc}</div>}
 			<Rules s={s} />
-			{open && (
-				<div className="mt-2 max-h-[50vh] overflow-auto rounded-md border border-line bg-bg p-3 text-[12px] leading-5 break-words whitespace-pre-wrap text-text">
-					{doc ?? "加载中…"}
-				</div>
-			)}
+			{open && <SkillDoc doc={doc} />}
 		</div>
 	);
 }

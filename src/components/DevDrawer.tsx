@@ -16,7 +16,7 @@ import { AGENT_NAME, money, time } from "../lib/format";
 import { EFFORT } from "./ModelPicker";
 import { dur } from "./ui";
 import { Drawer, type Msg, MsgLine } from "./Drawer";
-import { Md } from "./Md";
+import { Markdown } from "./Markdown";
 import { ModelPicker } from "./ModelPicker";
 import { confirmDialog } from "./Confirm";
 
@@ -213,7 +213,7 @@ export function Chat({ dev, chatMode = false }: { dev: DevTask; chatMode?: boole
 					<UserBubble key={i} text={it.text ?? ""} first={i === firstUser} images={it.images} shown={chatMode ? dev.request : undefined} />
 				) : it.kind === "assistant" ? (
 					<div key={i} className="chat-agent">
-						<Md text={it.text ?? ""} />
+						<Markdown text={it.text ?? ""} />
 						<Thumbs images={it.images} />
 					</div>
 				) : (
@@ -379,7 +379,7 @@ export function DevDrawer({
 				<>
 					<div className="label">结论</div>
 					<div className="chat-agent conclusion">
-						<Md text={d.summary} />
+						<Markdown text={d.summary} />
 					</div>
 				</>
 			)}

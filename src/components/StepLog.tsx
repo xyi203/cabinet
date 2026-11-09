@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { type Step, type Task, fetchLog } from "../lib/api";
 import { useLiveSteps } from "../lib/live";
 import { dur } from "./ui";
+import { Markdown } from "./Markdown";
 
 /** 执行日志：运行中的任务用 SSE 推来的实时步骤，结束的从会话文件里取 */
 export function StepLog({ task }: { task?: Task }) {
@@ -37,7 +38,7 @@ function StepItem({ s, t0, live }: { s: Step; t0: number; live: boolean }) {
 					<span className="num">{Math.round(s.t - t0)} 秒</span>
 					<b>回答</b>
 				</div>
-				<div className="say">{s.text}</div>
+				<Markdown text={s.text ?? ""} className="say" />
 			</div>
 		);
 	return (

@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { fetchJournal, post } from "../lib/api";
 import { when } from "../lib/format";
-import { Md } from "./Md";
+import { Markdown } from "./Markdown";
 import { toast } from "./Toast";
 import { Card, SectionTitle } from "./ui";
 
@@ -12,6 +12,9 @@ const shift = (date: string, days: number) => {
 	d.setDate(d.getDate() + days);
 	return d.toLocaleDateString("sv-SE");
 };
+
+// 一级标题是「某天工作日报」，页面上已有日期，不再重复
+const body = (text: string) => text.replace(/^# .*(\r?\n)*/, "");
 
 /** 日报：某一天的消息、草稿、任务、需求、审批和花费；可以让 AI 写成一段总结 */
 export function JournalPage() {
@@ -71,7 +74,7 @@ export function JournalPage() {
 						</SectionTitle>
 						{data.summary ? (
 							<>
-								<Md text={data.summary.text} dropTitle />
+								<Markdown text={body(data.summary.text)} />
 								<div className="mt-3 text-[12px] text-muted" title={`由 ${data.summary.model.split("/").pop()} 根据当天明细生成`}>
 									{when(data.summary.at)} 生成
 								</div>
@@ -82,7 +85,7 @@ export function JournalPage() {
 					</Card>
 					<Card className="p-4">
 						<SectionTitle>当天明细</SectionTitle>
-						<Md text={data.markdown} dropTitle />
+						<Markdown text={body(data.markdown)} />
 					</Card>
 				</div>
 			)}

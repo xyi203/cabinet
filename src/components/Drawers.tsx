@@ -4,7 +4,7 @@ import { type Draft, type Task, fetchStickers, post } from "../lib/api";
 import { GLYPH, STATUS, describeDraft, money, time, where } from "../lib/format";
 import { DispatchForm } from "./DevDrawer";
 import { Drawer, Embedded, type Msg, MsgLine } from "./Drawer";
-import { Md } from "./Md";
+import { Markdown } from "./Markdown";
 import { StepLog } from "./StepLog";
 import { confirmDialog } from "./Confirm";
 import { dur } from "./ui";
@@ -119,7 +119,7 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 			{d.note && (
 				<>
 					<div className="label">AI 的备注（只有你能看到）</div>
-					<Md text={d.note} />
+					<Markdown text={d.note} />
 				</>
 			)}
 			{!embedded && (
@@ -226,7 +226,7 @@ function MrPanel({ d }: { d: Draft }) {
 			{d.report && (
 				<>
 					<div className="label">评审报告（只有你能看到）</div>
-					<Md text={d.report} />
+					<Markdown text={d.report} />
 				</>
 			)}
 			{mr && (
