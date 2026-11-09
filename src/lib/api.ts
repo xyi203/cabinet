@@ -156,7 +156,7 @@ export type TaskEvent =
 	| { k: "route"; at: number; rule: string; agent: string | null; tier?: string; kind: string }
 	| { k: "result"; at: number; outcome: string; detail?: string | null; ref?: string | null };
 
-/** 一件事（server/tasks.ts TaskView）：排队里的消息 id 是 q:<消息>，分派前就失败的是 fail-/qa-<消息>，记忆冲突是 mem:<id> */
+/** 一件事（server/tasks.ts TaskView）：排队里的消息 id 是 q:<消息>，分派前就失败的是 fail-/qa-<消息>，记忆冲突是 mem:<id>，挂不上任务的审批是 apv:<id> */
 export interface TaskView {
 	id: string;
 	title: string;

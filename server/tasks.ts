@@ -102,7 +102,29 @@ export function taskViews(records: RecordRow[]): TaskView[] {
 		for (const x of trs) covered.add(x.id.slice(x.id.indexOf(":") + 1));
 		views.push(view(row, o, trs, records));
 	}
-	return [...views, ...queued(t), ...unrouted(records, covered, t), ...conflicts()].toSorted((a, b) => b.updated - a.updated);
+	const out = [...views, ...queued(t), ...unrouted(records, covered, t), ...conflicts()];
+	return [...out, ...looseApprovals(out)].toSorted((a, b) => b.updated - a.updated);
+}
+
+/** 挂不到任何一件事上的待审批（私聊机器人提问发起的只有 label）：单独列一行，看板上也能批，和卡片谁先点谁生效 */
+function looseApprovals(views: TaskView[]): TaskView[] {
+	const shown = new Set(views.flatMap((v) => v.approvals));
+	return pendingApprovals()
+		.filter((a) => !shown.has(a.id))
+		.map((a) => ({
+			id: `apv:${a.id}`,
+			title: `审批：${a.reason}`,
+			source: "bot",
+			label: a.origin,
+			status: "blocked",
+			need: "approve",
+			created: a.created,
+			updated: a.created,
+			drafts: [],
+			devTasks: [],
+			approvals: [a.id],
+			events: [],
+		}));
 }
 
 function view(

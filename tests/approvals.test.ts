@@ -150,3 +150,11 @@ test("devops 两段式工具：预览放行，真正提交才审批", async () =
 	assert.equal(g.verdict("mcp__devops-mcp-prod__apollo_restart_service", { confirmed: false }, "/").kind, "approve");
 });
 
+test("私聊机器人提问发起的审批挂不到任务：看板单列一行，批过就消失", async () => {
+	const { taskViews } = await import("../server/tasks.ts");
+	const id = idOf(createApproval(req({ origin: { label: "你私聊机器人的提问" } })));
+	const v = taskViews([]).find((x) => x.id === `apv:${id}`)!;
+	assert.deepEqual([v.status, v.need, v.approvals, v.label], ["blocked", "approve", [id], "你私聊机器人的提问"]);
+	await decideApproval(id, "reject");
+	assert.ok(!taskViews([]).some((x) => x.id === `apv:${id}`));
+});
