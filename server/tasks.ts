@@ -1,233 +1,299 @@
-// 任务模型（借鉴 multica：6 个状态归入 4 个生命周期分类）
-// todo 待办 / in_progress 进行中 / in_review 审核中 / blocked 已阻塞 / done 已完成 / cancelled 已取消
+// 看板状态：以「一件事」（tasks 表，见 taskstore.ts）为单位，每件带状态、等 Yi 做什么、时间线和挂着的产出。
+// 还没分派的排队消息、分派前就失败的、记忆冲突，也按同样的形状给出（id 带前缀，不在 tasks 表里）。
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { PATHS } from "./config.ts";
+import { and, count, desc, eq, gte, inArray, isNull, or } from "drizzle-orm";
+import { PATHS, PI_MODEL, PI_THINKING } from "./config.ts";
 import { db, schema } from "./db/index.ts";
-import type { Approval, DevTask, Draft, RecordRow } from "./db/schema.ts";
+import type { Draft, RecordRow } from "./db/schema.ts";
 import { describe, learnOf, learnText, pendingApprovals } from "./approvals.ts";
 import { draftLabel } from "./drafts/format.ts";
 import { inflight } from "./drafts/store.ts";
 import { draftMrs } from "./drafts/mr.ts";
-import { PI_MODEL, PI_THINKING } from "./config.ts";
-import { devTasksList } from "./dev.ts";
+import { PATROL_OK, devTasksList } from "./dev.ts";
 import { listStories } from "./stories.ts";
 import { TASK_TIER, loadAgents, withTier } from "./agent/router.ts";
 import { recentRecords } from "./records.ts";
 import { conversationLog, running } from "./agent/driver.ts";
-import { listMemories, type Memory } from "./memory/store.ts";
-import { ALERT_AGENT } from "./config.ts";
+import { listMemories } from "./memory/store.ts";
 import { now } from "./util.ts";
-import { type Issue, watchdogIssues } from "./watchdog.ts";
-import { count, desc, gte } from "drizzle-orm";
+import { watchdogIssues } from "./watchdog.ts";
 import { quotaNow } from "./quota.ts";
+import { type Need, type Outputs, type TaskStatus, applyStatus, outputsOf } from "./taskstore.ts";
 
-const DRAFT_TASK_STATUS: Record<string, string> = {
-	pending: "in_review",
-	noreply: "in_review",
-	sending: "in_progress",
-	revising: "in_progress",
-	sent: "done",
-	completed: "done",
-	discarded: "cancelled",
-	expired: "cancelled",
-	replaced: "cancelled",
-	merged: "cancelled",
-};
-const STATUS_TEXT: Record<string, string> = {
-	pending: "待确认",
-	noreply: "建议不回",
-	sending: "发送中",
-	revising: "改写中",
-	sent: "已发出",
-	completed: "已标记完成",
-	discarded: "不发",
-	expired: "已亲自回复",
-	replaced: "已改写",
-	merged: "已合并",
-};
+export type TaskEvent =
+	| { k: "msg"; at: number; who: string; owner: boolean; text: string; url?: string | null }
+	| { k: "route"; at: number; rule: string; agent: string | null; tier?: string; kind: string }
+	| { k: "result"; at: number; outcome: string; detail?: string | null; ref?: string | null };
 
-export interface Task {
+export interface TaskView {
 	id: string;
-	type: "draft" | "qa" | "dev";
-	status: string;
-	sub: string;
 	title: string;
+	/** lark meego bot board alert cron memory */
+	source: string;
+	/** 谁、在哪 */
 	label: string;
-	chatMode?: string | null;
+	status: TaskStatus;
+	need: Need | null;
+	worker?: string | null;
+	tier?: string | null;
 	created: number;
-	session?: string | null;
-	start?: number;
-	end?: number;
-	seconds?: number | null;
-	usage?: unknown;
-	draft?: string;
-	agent?: string | null;
-	route?: string | null;
-	error?: string | null;
-	answer?: string | null;
-	retryable?: boolean;
+	updated: number;
+	closed?: number | null;
+	storyId?: string | null;
+	scheduleId?: string | null;
+	/** 排队里：Yi 正在这个聊天里聊，等到这个时间再起草 */
+	hold?: number;
+	/** 正在跑的运行（停止、看步骤用） */
 	runId?: string;
-	dev?: string;
+	live?: string;
+	/** 关闭时的一句话结果 */
+	result?: string;
+	error?: string | null;
+	/** 失败可重试时交给 retryTask 的 id（fail-<消息> / qa-<消息>） */
+	retryId?: string;
+	drafts: string[];
+	devTasks: string[];
+	approvals: string[];
+	/** 记忆冲突：两条记忆的 id */
+	memories?: number[];
+	events: TaskEvent[];
 }
 
-const DEV_STATUS: Record<string, [string, string]> = {
-	running: ["in_progress", "开发中"],
-	pushing: ["in_progress", "推送中"],
-	review: ["in_review", "待审核"],
-	failed: ["blocked", "失败"],
-	pushed: ["done", "已提 MR"],
-	// 查询类 agent 任务看完点「完成」就是 done；漏了这一项会被兜底成审核中、一直挂在需介入里
-	done: ["done", "已完成"],
-	discarded: ["cancelled", "已放弃"],
+const OUTCOME: Record<string, string> = {
+	sent: "已发出",
+	discarded: "不发",
+	completed: "已标记完成",
+	expired: "你已亲自回复",
+	replied: "已回复",
+	remembered: "已记住",
+	pushed: "已提 MR",
+	done: "已完成",
+	failed: "失败",
 };
 
-export function buildTasks(drafts: Draft[], records: RecordRow[]): Task[] {
-	const tasks: Task[] = [];
-	const t = now();
-	// 已结束的只看最近 7 天：任务页默认折叠已结束，可以搜；更早的去统计页看
-	const recent = (ts: number) => ts >= t - 7 * 86400;
-	const drafted = new Map(records.filter((r) => r.kind === "draft" && r.status === "drafted" && r.dm).map((r) => [r.dm!, r]));
-	const busy = new Map([...running].filter(([, r]) => r.chatId).map(([id, r]) => [r.chatId!, id]));
+/** 已结束的看最近 7 天；更早的去统计页看 */
+const WINDOW = 7 * 86400;
 
-	for (const [mid, info] of inflight) {
-		const runId = busy.get(info.chatId);
-		const waiting = !runId && info.waitUntil && info.waitUntil > t;
-		tasks.push({
-			id: mid,
-			type: "draft",
-			status: runId ? "in_progress" : "todo",
-			sub: runId ? "起草中" : waiting ? `你在聊，${Math.ceil(info.waitUntil! - t)}s 后起草` : "排队等起草",
-			title: info.text,
-			label: info.label,
-			chatMode: info.chatMode,
-			created: info.since,
-			session: runId,
-			start: info.since,
-			runId,
-		});
+export function taskViews(records: RecordRow[]): TaskView[] {
+	const t = now();
+	const rows = db()
+		.select()
+		.from(schema.tasks)
+		.where(or(gte(schema.tasks.updated, t - WINDOW), isNull(schema.tasks.closed)))
+		.orderBy(desc(schema.tasks.updated))
+		.limit(500)
+		.all();
+	const outs = outputsOf(rows.map((r) => r.id));
+	const trigIds = [...new Set([...outs.values()].flatMap((o) => o.routes.flatMap((r) => r.triggers)))];
+	const triggers = trigIds.length ? db().select().from(schema.triggers).where(inArray(schema.triggers.id, trigIds)).all() : [];
+	const trigById = new Map(triggers.map((x) => [x.id, x]));
+	const views: TaskView[] = [];
+	const covered = new Set<string>();
+	for (const raw of rows) {
+		const o = outs.get(raw.id)!;
+		const row = applyStatus(raw, o);
+		const trs = [...new Set(o.routes.flatMap((r) => r.triggers))]
+			.map((id) => trigById.get(id))
+			.filter((x) => x != null)
+			.toSorted((a, b) => a.at - b.at);
+		for (const x of trs) covered.add(x.id.slice(x.id.indexOf(":") + 1));
+		views.push(view(row, o, trs, records));
 	}
-	for (const d of drafts) {
-		const st = DRAFT_TASK_STATUS[d.status] ?? "in_review";
-		if ((st === "done" || st === "cancelled") && !recent(d.created)) continue;
-		const r = drafted.get(d.id);
-		const end = r?.ts ?? d.created;
-		tasks.push({
-			id: d.id,
-			type: "draft",
-			status: st,
-			sub: STATUS_TEXT[d.status] ?? d.status,
-			title: d.text,
-			label: draftLabel(d),
-			chatMode: d.chatMode,
-			created: d.created,
-			session: d.session,
-			start: end - (r?.seconds ?? 0),
-			end,
-			seconds: r?.seconds,
-			usage: r?.usage,
-			draft: d.id,
-			agent: d.agent,
-			route: d.route,
-		});
+	return [...views, ...queued(t), ...unrouted(records, covered, t), ...conflicts()].toSorted((a, b) => b.updated - a.updated);
+}
+
+function view(
+	input: typeof schema.tasks.$inferSelect,
+	o: Outputs,
+	trs: Array<typeof schema.triggers.$inferSelect>,
+	records: RecordRow[],
+): TaskView {
+	let row = input;
+	const routes = o.routes.toSorted((a, b) => a.at - b.at);
+	const acting = routes.filter((r) => ["draft", "qa", "dev"].includes(r.actionKind));
+	const last = acting.at(-1);
+	const drafts = o.drafts.toSorted((a, b) => a.created - b.created);
+	const devs = o.devs.toSorted((a, b) => a.created - b.created);
+	const draft = drafts.at(-1);
+	const dev = devs.at(-1);
+	const first = trs[0];
+	const events: TaskEvent[] = [
+		...trs.map((x) => ({
+			k: "msg" as const,
+			at: x.at,
+			who: x.actorName || (x.owner ? "Yi" : ""),
+			owner: x.owner,
+			text: x.text,
+			url: x.url,
+		})),
+		...routes.map((r) => ({ k: "route" as const, at: r.at, rule: r.rule, agent: r.agent, tier: r.info?.tier, kind: r.actionKind })),
+		...o.results.map((r) => ({ k: "result" as const, at: r.at, outcome: r.outcome, detail: r.detail, ref: r.ref })),
+	].toSorted((a, b) => a.at - b.at);
+	const lastResult = o.results.toSorted((a, b) => b.at - a.at)[0];
+	let result: string | undefined;
+	if (row.status === "done" || row.status === "cancelled") {
+		if (draft?.status === "noreply") result = "建议不回";
+		else if (dev?.patrol && dev.summary.includes(PATROL_OK)) result = "本轮正常";
+		else if (lastResult) result = OUTCOME[lastResult.outcome] ?? lastResult.outcome;
 	}
-	// 失败：同一条来源之后成功过（或正在重试）就不再算阻塞；records 已按时间倒序
+	// 失败了：按被回复的消息找到那条失败记录，重试走原来的 retryTask
+	let retryId: string | undefined;
+	let error: string | null | undefined = dev?.status === "failed" ? dev.error : undefined;
+	if (row.need === "retry" && last && last.actionKind !== "dev") {
+		const sources = new Set(last.triggers.map((id) => id.slice(id.indexOf(":") + 1)));
+		// records 按时间倒序。失败之后 Yi 点了忽略（retry.ts dismissTask 只记流水），或者亲自回了（跳过走的是不处理的分派，不挂任务）：这件事就结束了
+		const latest = records.find((r) => r.source && sources.has(r.source));
+		if (latest?.status === "dismissed" || latest?.status === "skipped") {
+			const status = latest.status === "dismissed" ? "cancelled" : "done";
+			const closed = latest.ts;
+			db().update(schema.tasks).set({ status, need: null, closed }).where(eq(schema.tasks.id, row.id)).run();
+			row = { ...row, status, need: null, closed };
+			result = latest.status === "dismissed" ? "已忽略" : "你已亲自回复";
+		}
+		const rec = records.find((r) => r.status === "failed" && r.source && sources.has(r.source));
+		if (rec && row.need === "retry") {
+			retryId = `${rec.kind === "draft" ? "fail" : "qa"}-${rec.source}`;
+			error = rec.error;
+		}
+	}
+	const runId =
+		dev && (dev.status === "running" || dev.status === "pushing")
+			? `dev-${dev.id}`
+			: row.status === "in_progress"
+				? [...running].find(([, r]) => r.sessionId && r.sessionId === last?.session)?.[0]
+				: undefined;
+	const label =
+		first?.channel === "cron"
+			? `定时 · ${first.actorName}`
+			: first?.channel === "board"
+				? "看板"
+				: draft
+					? draftLabel(draft)
+					: first?.channel === "bot"
+						? "私聊机器人"
+						: first?.actorName || "";
+	return {
+		id: row.id,
+		title: dev && (row.source === "board" || row.source === "cron" || row.source === "alert") ? dev.title : row.title,
+		source: row.source,
+		label,
+		status: row.status as TaskStatus,
+		need: row.need as Need | null,
+		worker: last?.agent ?? null,
+		tier: last?.info?.tier ?? (last?.actionKind === "dev" ? "task" : null),
+		created: row.created,
+		updated: row.updated,
+		closed: row.closed,
+		storyId: devs.find((d) => d.storyId)?.storyId ?? null,
+		scheduleId: first?.channel === "cron" ? first.thread.slice("cron:".length) : null,
+		runId,
+		live: runId ? running.get(runId)?.label : undefined,
+		result,
+		error,
+		retryId,
+		drafts: drafts.map((d) => d.id),
+		devTasks: devs.map((d) => d.id),
+		approvals: o.approvals.map((a) => a.id),
+		events,
+	};
+}
+
+/** 收到了、还没分派的消息：排队等起草，或者 Yi 正在聊、先等他回 */
+function queued(t: number): TaskView[] {
+	if (!inflight.size) return [];
+	const mids = [...inflight.keys()];
+	const routed = new Set(
+		db()
+			.select({ id: schema.triggers.id })
+			.from(schema.triggers)
+			.where(
+				and(
+					inArray(
+						schema.triggers.id,
+						mids.flatMap((m) => [`lark:${m}`, `meego:${m}`]),
+					),
+					gte(schema.triggers.routeId, 0),
+				),
+			)
+			.all()
+			.map((x) => x.id.slice(x.id.indexOf(":") + 1)),
+	);
+	const busy = new Set([...running.values()].map((r) => r.chatId).filter(Boolean));
+	return [...inflight]
+		.filter(([mid]) => !routed.has(mid))
+		.map(([mid, i]) => ({
+			id: `q:${mid}`,
+			title: i.text,
+			source: i.chatMode === "meego" ? "meego" : "lark",
+			label: i.label,
+			status: busy.has(i.chatId) ? "in_progress" : "todo",
+			need: null,
+			created: i.since,
+			updated: i.since,
+			hold: i.waitUntil && i.waitUntil > t ? i.waitUntil : undefined,
+			drafts: [],
+			devTasks: [],
+			approvals: [],
+			events: [{ k: "msg", at: i.since, who: i.label, owner: false, text: i.text }],
+		}));
+}
+
+/** 分派之前就失败的（比如分诊出错）：还没有任务，按原来的失败记录给出，重试走 retryTask */
+function unrouted(records: RecordRow[], covered: Set<string>, t: number): TaskView[] {
+	const out: TaskView[] = [];
 	const settled = new Set<string>();
 	for (const r of records) {
 		const key = r.source;
-		if (!key) continue;
-		if (["replied", "drafted", "skipped", "dismissed"].includes(r.status)) settled.add(key);
-		else if (r.status === "failed" && !settled.has(key) && !inflight.has(key) && recent(r.ts)) {
-			settled.add(key); // 同一来源只保留最新一次失败
-			tasks.push({
-				id: `${r.kind === "draft" ? "fail" : "qa"}-${key}`,
-				type: r.kind as Task["type"],
-				status: "blocked",
-				sub: "失败",
-				title: r.question ?? "",
-				label: r.label ?? "",
-				created: r.ts,
-				session: r.session,
-				start: r.ts - (r.seconds ?? 0),
-				end: r.ts,
-				seconds: r.seconds,
-				error: r.error,
-				retryable: Boolean(r.retry),
-				agent: r.agent,
-			});
-		}
-	}
-	for (const r of records) {
-		if (r.status === "skipped" && recent(r.ts))
-			tasks.push({
-				id: `skip-${r.source}`,
-				type: "draft",
-				status: "cancelled",
-				sub: "已亲自回复",
-				title: r.question ?? "",
-				label: r.label ?? "",
-				created: r.ts,
-				chatMode: r.chatId?.startsWith("meego-") ? "meego" : null,
-			});
-		if (r.kind === "qa" && (r.status === "replied" || r.status === "remembered") && recent(r.ts))
-			tasks.push({
-				id: `qa-${r.source ?? r.ts}`,
-				type: "qa",
-				status: "done",
-				sub: r.status === "replied" ? "已回复" : "已记住",
-				title: r.question ?? "",
-				label: r.label ?? "问答",
-				created: r.ts,
-				session: r.session,
-				start: r.ts - (r.seconds ?? 0),
-				end: r.ts,
-				seconds: r.seconds,
-				usage: r.usage,
-				answer: r.answer,
-			});
-	}
-	for (const [runId, run] of running) {
-		if (run.chatId || run.label === "分诊") continue; // 起草的进行中已经由 inflight / revising 表示
-		tasks.push({
-			id: `run-${runId}`,
-			type: "qa",
-			status: "in_progress",
-			sub: "回答中",
-			title: run.label,
-			label: run.label,
-			created: run.started,
-			session: run.sessionId,
-			start: run.started,
-			runId,
+		if (!key || settled.has(key)) continue;
+		settled.add(key);
+		if (r.status !== "failed" || covered.has(key) || inflight.has(key) || r.ts < t - WINDOW) continue;
+		out.push({
+			id: `${r.kind === "draft" ? "fail" : "qa"}-${key}`,
+			title: r.question ?? "",
+			source: r.kind === "draft" ? "lark" : "bot",
+			label: r.label ?? "",
+			status: "blocked",
+			need: "retry",
+			created: r.ts,
+			updated: r.ts,
+			error: r.error,
+			retryId: r.retry ? `${r.kind === "draft" ? "fail" : "qa"}-${key}` : undefined,
+			drafts: [],
+			devTasks: [],
+			approvals: [],
+			events: [{ k: "msg", at: r.ts, who: r.label ?? "", owner: false, text: r.question ?? "" }],
 		});
 	}
-	for (const d of devTasksList()) {
-		// 对话页的聊天不进任务看板
-		if (d.chat) continue;
-		const [status, devSub] = DEV_STATUS[d.status] ?? ["in_review", d.status];
-		// 查询类 agent 的结果是给 Yi 看的，不是审代码
-		const sub = d.agent !== "dev" && d.status === "review" ? "待看" : devSub;
-		if ((status === "done" || status === "cancelled") && !recent(d.updated)) continue;
-		const runId = d.status === "running" ? `dev-${d.id}` : undefined;
-		tasks.push({
-			id: d.id,
-			type: "dev",
-			status,
-			sub,
-			title: d.title,
-			label: d.agent === "dev" ? `${path.basename(d.repo)} · ${d.branch}` : `${d.agent}${d.repo ? ` · ${path.basename(d.repo)}` : ""}`,
-			created: d.created,
-			session: `dev-${d.id}`,
-			start: d.created,
-			end: d.updated,
-			usage: d.usage,
-			error: d.error,
-			agent: d.agent,
-			dev: d.id,
-			runId,
+	return out;
+}
+
+/** 有冲突的记忆：两条一组，等 Yi 在记忆页裁定 */
+function conflicts(): TaskView[] {
+	const ms = listMemories(["contested"]);
+	const seen = new Set<number>();
+	const out: TaskView[] = [];
+	for (const m of ms) {
+		if (seen.has(m.id)) continue;
+		const group = [m, ...ms.filter((x) => x.id !== m.id && (m.conflicts.includes(x.id) || x.conflicts.includes(m.id)))];
+		for (const x of group) seen.add(x.id);
+		out.push({
+			id: `mem:${m.id}`,
+			title: `记忆冲突：${group.map((x) => `「${x.content.slice(0, 30)}」`).join(" / ")}`,
+			source: "memory",
+			label: "记忆",
+			status: "blocked",
+			need: "decide",
+			created: m.updated,
+			updated: m.updated,
+			memories: group.map((x) => x.id),
+			drafts: [],
+			devTasks: [],
+			approvals: [],
+			events: [],
 		});
 	}
-	return tasks.toSorted((a, b) => b.created - a.created);
+	return out;
 }
 
 function todayTriggers(since: number): number {
@@ -269,108 +335,6 @@ function agentStats(records: RecordRow[], today: string) {
 	});
 }
 
-/**
- * 待你处理：需要 Yi 判断的事汇成一张表。
- * now：有人在等（待确认的草稿、起草失败、告警结论）；soon：agent 任务待看或失败；later：建议不回的草稿、有争议的记忆。
- * 推送规则（docs/pipeline.md）：now 和 soon 都已经私聊过，这里是汇总；有争议的记忆只在这里，不推送。
- */
-export interface InboxItem {
-	kind: "draft" | "failure" | "dev" | "memory" | "watch" | "approval";
-	/** 打开用：草稿 id、看板任务 id、agent 任务 id、记忆 id */
-	ref: string;
-	level: "now" | "soon" | "later";
-	why: string;
-	title: string;
-	label: string;
-	at: number;
-	/** 审批：可以「执行并以后放行」时，记进规则的是什么 */
-	learn?: string;
-}
-
-const LEVEL = { now: 0, soon: 1, later: 2 };
-
-export function buildInbox(
-	drafts: Draft[],
-	tasks: Task[],
-	devTasks: DevTask[],
-	contested: Memory[],
-	issues: Issue[] = [],
-	approvals: Approval[] = [],
-): InboxItem[] {
-	const items: InboxItem[] = issues.map((i) => ({
-		kind: "watch",
-		ref: i.key,
-		level: "now",
-		why: i.title,
-		title: i.detail,
-		label: "Watchdog",
-		at: now(),
-	}));
-	// 写操作审批：agent 在等，24 小时不处理就过期
-	for (const a of approvals) {
-		const learn = learnOf(a);
-		items.push({
-			kind: "approval",
-			ref: a.id,
-			level: "now",
-			why: `写操作待审批：${a.reason}`,
-			title: describe(a),
-			label: a.origin,
-			at: a.created,
-			learn: learn && learnText(learn),
-		});
-	}
-	for (const d of drafts) {
-		if (d.status !== "pending" && d.status !== "noreply") continue;
-		items.push({
-			kind: "draft",
-			ref: d.id,
-			level: d.status === "pending" ? "now" : "later",
-			why: d.status === "pending" ? "草稿待确认" : "建议不回，确认一下",
-			title: d.text,
-			label: draftLabel(d),
-			at: d.created,
-		});
-	}
-	for (const t of tasks) {
-		// agent 任务失败在下面按 devTasks 列，这里只管起草和问答
-		if (t.status !== "blocked" || t.type === "dev") continue;
-		items.push({
-			kind: "failure",
-			ref: t.id,
-			level: t.type === "draft" ? "now" : "soon",
-			why: `${t.type === "draft" ? "起草失败" : "问答失败"}：${(t.error ?? "").slice(0, 80)}`,
-			title: t.title,
-			label: t.label,
-			at: t.created,
-		});
-	}
-	for (const t of devTasks) {
-		if (t.chat || (t.status !== "review" && t.status !== "failed")) continue;
-		const alert = t.agent === ALERT_AGENT;
-		items.push({
-			kind: "dev",
-			ref: t.id,
-			level: alert && t.status === "review" ? "now" : "soon",
-			why: t.status === "failed" ? "agent 任务失败" : alert ? "告警结论待看" : t.agent === "dev" ? "开发任务待审核" : "agent 任务待看",
-			title: t.title,
-			label: t.agent,
-			at: t.updated,
-		});
-	}
-	for (const m of contested)
-		items.push({
-			kind: "memory",
-			ref: String(m.id),
-			level: "later",
-			why: "记忆有冲突，等你裁定",
-			title: m.content,
-			label: m.kind,
-			at: m.updated,
-		});
-	return items.toSorted((a, b) => LEVEL[a.level] - LEVEL[b.level] || b.at - a.at);
-}
-
 /** MR 预审的草稿带上对应的 MR 和已经做过的动作（approve、发评论），看板上按这个出按钮 */
 function withMr(drafts: Draft[]) {
 	const mrs = draftMrs(drafts);
@@ -380,7 +344,7 @@ function withMr(drafts: Draft[]) {
 export function dashboardState() {
 	const drafts = db().select().from(schema.drafts).orderBy(desc(schema.drafts.created)).limit(300).all();
 	const records = recentRecords(1000);
-	const tasks = buildTasks(drafts, records);
+	const items = taskViews(records);
 	const today = new Date().toLocaleDateString("sv-SE");
 	const todays = records.filter((r) => new Date(r.ts * 1000).toLocaleDateString("sv-SE") === today);
 	const usage = { input: 0, output: 0, cacheRead: 0, cost: 0 };
@@ -399,10 +363,11 @@ export function dashboardState() {
 			discarded: outcomes.discarded ?? 0,
 			failed: outcomes.failed ?? 0,
 			usage,
-			pending: drafts.filter((d) => d.status === "pending" || d.status === "noreply").length,
+			waiting: items.filter((x) => x.status === "in_review" || x.status === "blocked").length,
 		},
 		running: running.size,
 		inflight: inflight.size,
+		items,
 		drafts: withMr(drafts.slice(0, 200)),
 		agents: agentStats(records, today),
 		devTasks: devTasksList()
@@ -415,11 +380,15 @@ export function dashboardState() {
 			.toSorted((a, b) => b.updated - a.updated)
 			.slice(0, 50),
 		records: records.slice(0, 300),
-		// 需求任务：最近动过的在前
+		// 需求：最近动过的在前
 		stories: listStories().toSorted((a, b) => b.updated - a.updated),
-		tasks,
+		// 写操作审批：卡片和看板都能批；learn 是「执行并以后放行」会记进规则的那条
+		approvals: pendingApprovals().map((a) => {
+			const learn = learnOf(a);
+			return { ...a, command: describe(a), learn: learn && learnText(learn) };
+		}),
+		issues: watchdogIssues(),
 		quota: quotaNow(),
-		inbox: buildInbox(drafts, tasks, devTasksList(), listMemories(["contested"]), watchdogIssues(), pendingApprovals()),
 	};
 }
 

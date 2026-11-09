@@ -100,8 +100,39 @@ export const routes = sqliteTable(
 		actionKind: text("action_kind").notNull(),
 		actionId: text("action_id"),
 		at: real("at").notNull(),
+		/** 这次分派属于哪件事（tasks.id）；remember、不处理的为空 */
+		taskId: text("task_id"),
 	},
-	(t) => [index("routes_action").on(t.actionKind, t.actionId)],
+	(t) => [index("routes_action").on(t.actionKind, t.actionId), index("routes_task").on(t.taskId)],
+);
+
+/**
+ * Task：一件事（docs/router-worker.md §2）。一条消息、一批告警、一次定时运行、一个看板派活各是一件；
+ * 同一话题 / 工作项 / MR 的后续消息、改写、追问、审批都挂在同一件上（routes.task_id）。
+ * 草稿、agent 任务、审批仍在各自的表里，是这件事的产出；status / need 由 taskstore.ts 按产出推出来再存下，看板和归属判断都读它。
+ */
+export const tasks = sqliteTable(
+	"tasks",
+	{
+		/** tsk-<时间><随机> */
+		id: text("id").primaryKey(),
+		title: text("title").notNull(),
+		/** 第一条 trigger 的渠道：lark meego bot board alert cron */
+		source: text("source").notNull(),
+		/** 归属键：第一条 trigger 的 thread（lark:<chat>[#<话题>]、meego:<工作项>、alert:<chat>、cron:<定时任务>、board:<任务>） */
+		thread: text("thread").notNull(),
+		/** 正文提到的 MR（gitlab:<项目>!<iid>）：之后提到同一个 MR 的消息也归到这里 */
+		refs: text("refs", { mode: "json" }).$type<string[]>().notNull().default([]),
+		/** todo in_progress in_review blocked done cancelled */
+		status: text("status").notNull(),
+		/** 等 Yi 做什么：send 待发送 / approve 待审批 / read 看结论 / decide 要拍板 / retry 失败；只在 in_review、blocked 时有 */
+		need: text("need"),
+		created: real("created").notNull(),
+		updated: real("updated").notNull(),
+		/** 进入 done / cancelled 的时间；重开时清掉 */
+		closed: real("closed"),
+	},
+	(t) => [index("tasks_thread").on(t.thread), index("tasks_updated").on(t.updated)],
 );
 
 /** Result：一个 action 的最终结果。只经 settle() 写入；effect 说这次结果影响到了哪里 */

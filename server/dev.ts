@@ -12,6 +12,7 @@ import { db, deleteKv, getKv, listKv, schema, setKv } from "./db/index.ts";
 import { imageKeys, imagesNote, queuePatch, saveImage, sendCardToUserAsBot, sendToUserAsBot } from "./lark/bot.ts";
 import { devCard, devTitle, type Round } from "./devcard.ts";
 import { decide, receive, settle } from "./pipeline.ts";
+import { taskOfAction } from "./taskstore.ts";
 import type { DevTask } from "./db/schema.ts";
 import { DraftError, getDraft } from "./drafts/store.ts";
 import { sem } from "./agent/slots.ts";
@@ -126,9 +127,17 @@ const isDev = (t: Pick<DevTask, "agent">) => t.agent === "dev";
 
 /** 看板派活（或从草稿转成任务）是一条 Yi 发起的 trigger，直接分派给选定的 agent；别处来的活带着自己的 trigger */
 function routeTask(id: string, agent: string, request: string, input: DispatchInput): number {
-	if (input.triggers?.length) return decide(input.triggers, { agent, rule: input.rule ?? "派活", actionKind: "dev", actionId: id });
+	const task = { title: input.title, noTask: input.chat, taskId: input.draftId ? taskOfAction(input.draftId) : undefined };
+	if (input.triggers?.length)
+		return decide(input.triggers, { agent, rule: input.rule ?? "派活", actionKind: "dev", actionId: id, ...task });
 	const tid = receive({ channel: "board", externalId: id, thread: `board:${id}`, actorId: OWNER_OPEN_ID, owner: true, text: request });
-	return decide([tid], { agent, rule: input.draftId ? `草稿转任务（${input.draftId}）` : "看板派活", actionKind: "dev", actionId: id });
+	return decide([tid], {
+		agent,
+		rule: input.draftId ? `草稿转任务（${input.draftId}）` : "看板派活",
+		actionKind: "dev",
+		actionId: id,
+		...task,
+	});
 }
 
 const branchExists = (repo: string, branch: string) =>

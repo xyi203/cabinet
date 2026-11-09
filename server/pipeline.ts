@@ -9,6 +9,7 @@ import { db, schema } from "./db/index.ts";
 import type { ResultRow, RouteRow, Subscription, TriggerRow } from "./db/schema.ts";
 import { SUBSCRIBE_TTL } from "./config.ts";
 import { MR_RE } from "./agent/router.ts";
+import { assignTask } from "./taskstore.ts";
 import { now } from "./util.ts";
 
 export type Channel = "lark" | "meego" | "bot" | "board" | "alert" | "cron";
@@ -69,11 +70,19 @@ export interface RouteInput {
 	info?: Record<string, string>;
 	actionKind: ActionKind;
 	actionId?: string | null;
+	/** 挂到指定的任务上（草稿转任务）；不给就按 thread / MR 归属（taskstore.ts assignTask） */
+	taskId?: string | null;
+	/** 新建任务时的标题 */
+	title?: string;
+	/** 不算一件事：对话页的聊天 */
+	noTask?: boolean;
 }
 
 /** 记下一次分派，把这批 trigger 标成已分派（不处理的标成跳过），返回 route id */
 export function decide(triggerIds: string[], r: RouteInput): number {
-	return db().transaction((tx) => {
+	// 归属要查已有任务的状态，放在事务外面先定
+	const taskId = assignTask(triggerIds, r);
+	const id = db().transaction((tx) => {
 		const row = tx
 			.insert(schema.routes)
 			.values({
@@ -85,6 +94,7 @@ export function decide(triggerIds: string[], r: RouteInput): number {
 				actionKind: r.actionKind,
 				actionId: r.actionId ?? null,
 				at: now(),
+				taskId,
 			})
 			.returning({ id: schema.routes.id })
 			.get();
@@ -95,6 +105,8 @@ export function decide(triggerIds: string[], r: RouteInput): number {
 				.run();
 		return row.id;
 	});
+	if (taskId) changed();
+	return id;
 }
 
 /**

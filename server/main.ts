@@ -17,6 +17,7 @@ import { scheduleVectors } from "./memory/store.ts";
 import { log, markStopping } from "./util.ts";
 import { startSchedules, stopSchedules } from "./schedules.ts";
 import { startStories } from "./stories.ts";
+import { backfillTasks } from "./taskstore.ts";
 import { startQuota, stopQuota } from "./quota.ts";
 import { startWatchdog, stopWatchdog } from "./watchdog.ts";
 
@@ -27,6 +28,8 @@ if (missing.length) {
 }
 for (const d of [PATHS.sessions, PATHS.stickers, PATHS.images]) mkdirSync(d, { recursive: true });
 db();
+// 任务表上线前的分派补挂到任务上（只跑一次）
+backfillTasks();
 importLegacyMemory();
 // 审批处理要在 durable 恢复运行之前挂上：接回的运行也可能调写操作
 startApprovals();
