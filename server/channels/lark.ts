@@ -1,21 +1,16 @@
 // 飞书渠道：用 Yi 的用户身份轮询私聊和 @Yi 的群消息（机器人事件收不到这两类），
-// 人发的起草代回复，机器人 @Yi 的当告警攒批；草稿以 Yi 的身份发回原会话。
+// 拉回来的消息交给 router 分流（server/router/index.ts）；草稿以 Yi 的身份发回原会话。
 import path from "node:path";
-import { addAlert, batching, isAlert } from "../alerts.ts";
-import { ALERT_ENABLED, DRAFT_ENABLED, DRAFT_SKIP_CHATS, OWNER_OPEN_ID, PATHS, POLL_HOT_N, POLL_INTERVAL, POLL_TOP_N } from "../config.ts";
+import { DRAFT_ENABLED, DRAFT_SKIP_CHATS, PATHS, POLL_HOT_N, POLL_INTERVAL, POLL_TOP_N } from "../config.ts";
 import type { Draft } from "../db/schema.ts";
 import { resolveSticker } from "../drafts/format.ts";
-import { asksYi } from "../drafts/context.ts";
-import { abortIfYiReplied, makeDraft } from "../drafts/make.ts";
-import { expireDrafts, expireReactedDrafts } from "../drafts/replied.ts";
-import { type ChatRef, DraftError, inflight } from "../drafts/store.ts";
-import { isHandled, markHandled } from "../handled.ts";
+import { expireReactedDrafts } from "../drafts/replied.ts";
+import { DraftError } from "../drafts/store.ts";
+import { routeChat } from "../router/index.ts";
 import { listChats, listMessages, reactAsUser, sendImageAsUser, sendTextAsUser } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import { log, now } from "../util.ts";
 import type { Channel } from "./index.ts";
-
-const startDraft = (chat: ChatRef, msgs: Message[]) => void makeDraft(chat, msgs, markHandled);
 
 /** 每个会话上一次成功拉消息开始的时间：后排的会话隔 POLL_INTERVAL 才拉，从这里接着拉 */
 const fetchedAt = new Map<string, number>();
@@ -41,42 +36,8 @@ async function poll(since: number, full: boolean) {
 			log("轮询会话失败", chat.chat_id, e);
 			continue;
 		}
-		const done = isHandled(msgs.map((m) => m.message_id));
-		const fresh: Message[] = [];
-		const skip: string[] = [];
-		for (const m of msgs) {
-			if (done.has(m.message_id) || inflight.has(m.message_id) || batching(m.message_id) || m.deleted) continue;
-			// 机器人 @Yi 的是告警：不起草回复，攒一批交给 alert agent；收口时才记成已处理
-			if (ALERT_ENABLED && isAlert(chat, m)) {
-				addAlert(chat, m, markHandled);
-				continue;
-			}
-			if (asksYi(chat.chat_mode, m)) {
-				inflight.set(m.message_id, {
-					chatId: chat.chat_id,
-					chatMode: chat.chat_mode,
-					label: chat.chat_mode === "p2p" ? m.sender.name : `${chat.name} · ${m.sender.name}`,
-					text: m.content.slice(0, 300),
-					since: now(),
-				});
-				fresh.push(m);
-			} else {
-				skip.push(m.message_id);
-				if (m.sender.id === OWNER_OPEN_ID) {
-					expireDrafts(chat, m);
-					abortIfYiReplied(chat, m);
-				}
-			}
-		}
-		markHandled(skip);
-		if (fresh.length) {
-			log(
-				"待起草",
-				chat.chat_id,
-				fresh.map((m) => m.message_id),
-			);
-			startDraft(chat, fresh);
-		}
+		// 怎么处理交给 router：告警攒批、起草、Yi 亲自回复作废草稿
+		routeChat(chat, msgs);
 	}
 	// 表情回复要逐条查，不跟着快速轮次跑
 	if (full || started - reactionsCheckedAt >= POLL_INTERVAL) {

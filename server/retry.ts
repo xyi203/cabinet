@@ -3,7 +3,7 @@ import { closeFailure } from "./drafts/failure.ts";
 import { makeDraft } from "./drafts/make.ts";
 import { DraftError, inflight } from "./drafts/store.ts";
 import { markHandled } from "./poller.ts";
-import { handle } from "./qa.ts";
+import { answer } from "./qa.ts";
 import { record, recentRecords } from "./records.ts";
 import { now } from "./util.ts";
 
@@ -27,7 +27,7 @@ export function retryTask(taskId: string) {
 			return;
 		}
 		if (r.kind === "qa" && taskId === `qa-${r.source}`) {
-			void handle(r.retry as any, `retry-${Date.now()}`);
+			void answer(r.retry as any, `retry-${Date.now()}`);
 			return;
 		}
 	}

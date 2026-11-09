@@ -2,17 +2,15 @@
 import { DRAFT_ENABLED, MEEGO_CHAT, MEEGO_ENABLED, OWNER_OPEN_ID } from "../config.ts";
 import { getKv, setKv } from "../db/index.ts";
 import type { Draft } from "../db/schema.ts";
-import { makeDraft } from "../drafts/make.ts";
 import { expireMeegoDrafts } from "../drafts/replied.ts";
-import { type ChatRef, DraftError, inflight } from "../drafts/store.ts";
+import { DraftError, inflight } from "../drafts/store.ts";
+import { routeMeego } from "../router/index.ts";
 import { isHandled, markHandled } from "../handled.ts";
 import { getMessage, listChats, listMessages } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import { parseMeegoCard, projectKey, sendMeegoComment } from "../meego.ts";
-import { log, now } from "../util.ts";
+import { log } from "../util.ts";
 import type { Channel } from "./index.ts";
-
-const startDraft = (chat: ChatRef, msgs: Message[]) => void makeDraft(chat, msgs, markHandled);
 
 async function meegoChat(): Promise<string> {
 	const cached = MEEGO_CHAT || getKv("meego_chat", "");
@@ -55,24 +53,12 @@ async function pollMeego(since: number) {
 			meego: card,
 			sender: { id: card.senderId, name: card.senderName, sender_type: "user" },
 		};
-		inflight.set(m.message_id, {
-			chatId: `meego-${card.workItemId}`,
-			chatMode: "meego",
-			label: `飞书项目 · ${card.senderName}`,
-			text: card.comment.slice(0, 300),
-			since: now(),
-		});
 		byItem.set(card.workItemId, [...(byItem.get(card.workItemId) ?? []), msg]);
 	}
 	markHandled(skip);
-	for (const [wid, list] of byItem) {
-		log(
-			"待起草（飞书项目）",
-			wid,
-			list.map((m) => m.message_id),
-		);
-		startDraft({ chat_id: `meego-${wid}`, chat_mode: "meego", name: (list.at(-1)!.meego as any).workItemTitle }, list);
-	}
+	// 同一工作项的一批交给 router 起草
+	for (const [wid, list] of byItem)
+		routeMeego({ chat_id: `meego-${wid}`, chat_mode: "meego", name: (list.at(-1)!.meego as any).workItemTitle }, list);
 }
 
 async function send(d: Draft) {

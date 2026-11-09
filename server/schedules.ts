@@ -5,8 +5,7 @@
 import { eq, like } from "drizzle-orm";
 import { loadAgents } from "./agent/router.ts";
 import { changed } from "./bus.ts";
-import { routeRules } from "./rules.ts";
-import { fiveHourUsed } from "./quota.ts";
+import { cronSkip } from "./router/board.ts";
 import { db, schema } from "./db/index.ts";
 import type { Schedule } from "./db/schema.ts";
 import { NO_CHANGE, dispatch, getDevTask } from "./dev.ts";
@@ -161,17 +160,12 @@ export async function fire(s: Schedule, at = now(), manual = false): Promise<str
 		text: s.prompt,
 		at,
 	});
-	// 巡检一天几十轮：Claude 5 小时额度快用完时跳过，把额度留给起草；手动触发不拦
-	const used = fiveHourUsed();
-	if (s.patrol && !manual && used != null && used >= routeRules().cron.patrolPauseAt) {
-		decide([tid], { rule: `跳过：Claude 5 小时额度已用 ${Math.round(used * 100)}%`, actionKind: "none" });
-		log("巡检跳过：额度紧张", s.id, used);
-		return;
-	}
+	// 要不要跳过这一轮由 router 判（额度紧的巡检、上一次还在跑）
 	const prev = s.lastTask ? getDevTask(s.lastTask) : undefined;
-	if (prev?.status === "running") {
-		decide([tid], { rule: `跳过：上一次（${prev.id}）还在跑`, actionKind: "none" });
-		log("定时任务跳过：上一次还在跑", s.id, prev.id);
+	const skip = cronSkip(s, manual, prev);
+	if (skip) {
+		decide([tid], { rule: `跳过：${skip}`, actionKind: "none" });
+		log("定时任务跳过", s.id, skip);
 		return;
 	}
 	const when = new Date(at * 1000).toLocaleString("sv-SE", { hour12: false }).slice(0, 16);

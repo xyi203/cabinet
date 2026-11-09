@@ -154,3 +154,22 @@ test("路由规则：没有 config/routes.json 时用默认值；保存时校验
 	assert.throws(() => saveRouteRules({ alert: { quiet: 900, maxWait: 600 } }), /最长攒批不能比静默收口短/);
 	assert.throws(() => saveRouteRules({ cron: { patrolPauseAt: 2 } }), /巡检额度上限/);
 });
+
+test("router：定时任务上一次还在跑就跳过；看板派活每次一件，草稿转任务挂回原来那件", async () => {
+	const { cronSkip, routeBoard } = await import("../server/router/board.ts");
+	assert.equal(cronSkip({ patrol: false }, false, { id: "dv9", status: "running" }), "上一次（dv9）还在跑");
+	assert.equal(cronSkip({ patrol: false }, false, { id: "dv9", status: "review" }), undefined);
+	assert.equal(cronSkip({ patrol: true }, false), undefined, "查不到额度时不拦");
+	const r1 = decide([msg("m30", "lark:oc_30#t")], { agent: "assistant", rule: "分诊", actionKind: "draft" });
+	draftFor(r1, "d30", "pending");
+	const conv = routeBoard("dv30", "dev", "按草稿改", { agent: "dev", request: "按草稿改", draftId: "d30" } as any);
+	assert.equal(taskOf(conv), taskOf(r1));
+	const a = routeBoard("dv31", "dev", "加个筛选", { agent: "dev", request: "加个筛选" } as any);
+	const b = routeBoard("dv32", "dev", "再加个排序", { agent: "dev", request: "再加个排序" } as any);
+	assert.notEqual(taskOf(a), taskOf(b));
+	assert.equal(
+		taskOf(routeBoard("dv33", "assistant", "聊聊", { agent: "assistant", request: "聊聊", chat: true } as any)),
+		null,
+		"对话页的聊天不算一件事",
+	);
+});

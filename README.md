@@ -35,6 +35,9 @@ server/          后端（Node 直接跑 TypeScript）
     context.ts   起草前补齐上下文
     make.ts      起草流程与重启接回
     actions.ts   发 / 改 / 不发 / 完成（以 Yi 身份发出的唯一入口）
+  router/        统一入口：index.ts 分流轮询到的消息和私聊机器人（告警攒批、起草、Yi 亲自回复、记住、指令、问答），board.ts 看板派活和定时跳过
+  rules.ts       路由阈值：读 config/routes.json，看板「设置 → 路由规则」能改
+  taskstore.ts   Task：一件事，分派时归属、按产出推状态
   channels/      渠道接口：lark（轮询私聊 / @Yi）、meego（飞书项目）、bot（长连接、卡片回调）；poll / listen / send
   cards.ts       卡片按钮的统一入口：草稿、agent 任务、起草失败
   devcard.ts     agent 任务的通知卡片

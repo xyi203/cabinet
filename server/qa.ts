@@ -11,7 +11,7 @@ import { decide, openRoute, receive, settle } from "./pipeline.ts";
 import { record } from "./records.ts";
 import { forgetRun, runPi } from "./agent/driver.ts";
 import { ASSISTANT, TASK_TIER, loadAgents, withTier } from "./agent/router.ts";
-import { closeTask, devTaskOfDm, discardDev, messageDev, pushDev, stopDev } from "./dev.ts";
+import { closeTask, discardDev, messageDev, pushDev, stopDev } from "./dev.ts";
 import { deleteKv, listKv, setKv } from "./db/index.ts";
 import { enqueueMemory } from "./memory/extract.ts";
 import { rememberStatement } from "./memory/remember.ts";
@@ -20,8 +20,8 @@ import { isStopping, log, now } from "./util.ts";
 
 const seen = new Set<string>();
 
-/** 长连接偶尔重推同一事件 */
-function firstSeen(id: string) {
+/** 长连接偶尔重推同一事件（router 判去重、接回时标记） */
+export function firstSeen(id: string) {
 	if (seen.has(id)) return false;
 	seen.add(id);
 	if (seen.size > 2000) seen.delete(seen.values().next().value!);
@@ -63,7 +63,7 @@ async function buildPrompt(ev: BotEvent, text: string) {
 	return parts.join("\n\n");
 }
 
-async function remember(ev: BotEvent, text: string, tid: string) {
+export async function remember(ev: BotEvent, text: string, tid: string) {
 	const content = text.replace(/^记住[:：,，\s]*/, "").trim();
 	const routeId = decide([tid], { rule: "记住", actionKind: "remember", actionId: ev.messageId });
 	if (ev.senderId !== OWNER_OPEN_ID) return void (await reply(ev, `写入记忆需要${OWNER_NAME}确认，可以请${OWNER_NAME}来说「记住 …」。`));
@@ -103,7 +103,7 @@ async function remember(ev: BotEvent, text: string, tid: string) {
 const DRAFT_CMD = /^(发|不发|改|表情包|表情|完成|已处理)(?:$|[\s:：,，]+([\s\S]*))/;
 
 /** Yi 私聊机器人的草稿指令；返回 false 表示不是指令，当普通问题处理 */
-async function draftCommand(ev: BotEvent, text: string, tid: string): Promise<boolean> {
+export async function draftCommand(ev: BotEvent, text: string, tid: string): Promise<boolean> {
 	const m = DRAFT_CMD.exec(text);
 	if (!m) return false;
 	const cmd = m[1];
@@ -150,7 +150,7 @@ async function draftCommand(ev: BotEvent, text: string, tid: string): Promise<bo
 }
 
 /** Yi 在飞书里引用开发任务通知回复：推送 / 停止 / 放弃，其余原样转给 agent */
-async function devReply(ev: BotEvent, id: string, text: string) {
+export async function devReply(ev: BotEvent, id: string, text: string) {
 	try {
 		if (text === "推送") return void (await reply(ev, `已推送：${(await pushDev(id)) || "MR 已更新"}`));
 		if (text === "停止") {
@@ -173,12 +173,10 @@ async function devReply(ev: BotEvent, id: string, text: string) {
 	}
 }
 
-export async function handle(ev: BotEvent, attempt?: string) {
-	const text = stripMentions(ev);
-	if (!text) return;
-	// 发给机器人的消息就是 trigger：accept() 已经做过程序规则（只认 Yi 的私聊、配置的群里 @机器人）
+/** 发给机器人的消息就是 trigger（accept() 已经做过程序规则）；同一条重复记只记一次 */
+export function botTrigger(ev: BotEvent, text = stripMentions(ev)): string {
 	const key = ev.rootId ?? ev.messageId;
-	const tid = receive({
+	return receive({
 		channel: "bot",
 		externalId: ev.messageId,
 		thread: `bot:${ev.chatId}#${key}`,
@@ -186,16 +184,14 @@ export async function handle(ev: BotEvent, attempt?: string) {
 		owner: ev.senderId === OWNER_OPEN_ID,
 		text,
 	});
-	if (text.startsWith("记住")) return remember(ev, text, tid);
-	if (ev.chatType === "p2p" && ev.senderId === OWNER_OPEN_ID) {
-		// 引用了开发任务的通知：这条就是发给 dev agent 的
-		const devId = devTaskOfDm(ev.parentId ?? ev.rootId);
-		if (devId) {
-			decide([tid], { rule: "回复 agent 任务", actionKind: "command", actionId: devId });
-			return devReply(ev, devId, text);
-		}
-		if (await draftCommand(ev, text, tid)) return;
-	}
+}
+
+/** 问答：router 判定不是「记住」、也不是指令之后交到这里；重启接回、手动重试也从这里进 */
+export async function answer(ev: BotEvent, attempt?: string) {
+	const text = stripMentions(ev);
+	if (!text) return;
+	const key = ev.rootId ?? ev.messageId;
+	const tid = botTrigger(ev, text);
 	const cwd = DEFAULT_CWD;
 	// Yi 私聊直接问的：交给 assistant，按 deep 档查
 	const agentName = loadAgents().router.agent ?? ASSISTANT;
@@ -299,12 +295,6 @@ export function resumePendingQa() {
 	for (const { value } of listKv<{ ev: BotEvent; attempt?: string }>("pending:qa:")) {
 		log("接回未完成的问答", value.ev.chatId, value.ev.messageId);
 		firstSeen(value.ev.messageId);
-		void handle(value.ev, value.attempt);
+		void answer(value.ev, value.attempt);
 	}
-}
-
-export function onBotEvent(ev: BotEvent) {
-	if (!ev.messageId || !firstSeen(ev.messageId) || !accept(ev)) return;
-	log("收到", ev.chatId, ev.messageId, stripMentions(ev).slice(0, 80));
-	void handle(ev);
 }
