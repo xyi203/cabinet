@@ -10,9 +10,24 @@ const { stripMentions } = await import("../server/qa.ts");
 const { LEGACY_TIER, fastRoute, parseTier, sessionKey, withTier } = await import("../server/agent/router.ts");
 
 test("草稿拆出评审报告和备注", () => {
-	assert.deepEqual(splitNote("看过了\n【评审报告】❌ 有问题\n【备注】别承诺"), { body: "看过了", note: "别承诺", report: "❌ 有问题" });
-	assert.deepEqual(splitNote("好\n【备注】a\n【评审报告】b"), { body: "好", note: "a", report: "b" });
-	assert.deepEqual(splitNote("只有正文"), { body: "只有正文", note: "", report: "" });
+	assert.deepEqual(splitNote("看过了\n【评审报告】❌ 有问题\n【备注】别承诺"), {
+		body: "看过了",
+		note: "别承诺",
+		report: "❌ 有问题",
+		comments: "",
+	});
+	assert.deepEqual(splitNote("好\n【备注】a\n【评审报告】b"), { body: "好", note: "a", report: "b", comments: "" });
+	assert.deepEqual(splitNote("只有正文"), { body: "只有正文", note: "", report: "", comments: "" });
+});
+
+test("MR 预审草稿拆出评论台账，台账后面跟着别的段也拆得开", () => {
+	assert.deepEqual(splitNote('【无需回复】已回 Get\n【评审报告】⚠️ 小问题\n【备注】a\n【MR评论】\n```json\n{"x":1}\n```'), {
+		body: "【无需回复】已回 Get",
+		note: "a",
+		report: "⚠️ 小问题",
+		comments: '```json\n{"x":1}\n```',
+	});
+	assert.deepEqual(splitNote('好\n【MR评论】{"x":1}\n【备注】b'), { body: "好", note: "b", report: "", comments: '{"x":1}' });
 });
 
 test("表情草稿识别，非法表情退回文字", () => {

@@ -9,6 +9,7 @@ import type { Message } from "../lark/types.ts";
 import {
 	ASSISTANT,
 	LEGACY_TIER,
+	MR_RE,
 	glabRepo,
 	loadAgents,
 	mrBrief,
@@ -40,6 +41,7 @@ import { contextBlock, gatherContext } from "./context.ts";
 import { where as whereOf } from "./card.ts";
 import { notifyFailure } from "./failure.ts";
 import { draftLabel, isAckOnly, stickerHint } from "./format.ts";
+import { ackMr } from "./mr.ts";
 import { ownerActive, ownerReplyCovers, staleReason } from "./replied.ts";
 import { type ChatRef, claim, inflight, LIVE, pushDraft, type Source } from "./store.ts";
 
@@ -250,6 +252,9 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 	const label = draftLabel(source);
 	const started = now();
 	const requestId = requestIdOf(msgs, attempt);
+	// 发来要预审的 MR：排队、等 Yi、预审之前先回个 Get，对方知道收到了；手动重试不再回
+	const mrMsg = msgs.findLast((m) => MR_RE.test(m.content));
+	if (mrMsg && !attempt) await ackMr(chat.chat_mode, mrMsg).catch((e) => log("MR 回 Get 失败", e));
 	await locks.run(`draft-${chat.chat_id}`, async () => {
 		const saved = getKv<Pending | null>(pendingKey, null)?.stage;
 		const resuming = Boolean(saved && hasRun(`${requestId}${saved.suffix ?? ""}`));

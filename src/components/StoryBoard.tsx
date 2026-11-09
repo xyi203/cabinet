@@ -1,6 +1,17 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
-import { type DevTask, type State, type Story, fetchRepos, post } from "../lib/api";
+import { useNavigate } from "@tanstack/react-router";
+import {
+	type DevTask,
+	type Schedule,
+	type State,
+	type Story,
+	type StoryTicket,
+	fetchRepos,
+	fetchSchedules,
+	post,
+	runSchedule,
+} from "../lib/api";
 import { AGENT_NAME, ago, ticketUrl } from "../lib/format";
 import { Drawer, type Msg, MsgLine } from "./Drawer";
 
@@ -30,9 +41,12 @@ const ticketsOf = (s: Story) => s.tickets.filter((t) => !t.removed);
 const SOURCE_NAME: Record<string, string> = { auto: "自动", manual: "手动", created: "提单" };
 /** 巡检正常时结论第一行就是这句（server/dev.ts 的 PATROL_OK） */
 const PATROL_OK = "本轮巡查正常";
+const mdhm = (ts: number) =>
+	new Date(ts * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 const hhmm = (ts: number) => new Date(ts * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
 const roundState = (t: DevTask) =>
-	t.status === "running" ? "进行中" : t.status === "failed" ? "失败" : t.summary.trim().startsWith(PATROL_OK) ? "正常" : "有异常";
+	// 审批结果回来接着跑的那轮，第一行先说审批，「本轮巡查正常」在后面；异常的结论不会带这句
+	t.status === "running" ? "进行中" : t.status === "failed" ? "失败" : t.summary.includes(PATROL_OK) ? "正常" : "有异常";
 /** 观察文档的链接：写在生成文档那个任务的结论里 */
 const DOC_URL_RE = /https:\/\/[\w.-]*feishu\.cn\/(?:docx|wiki|docs)\/[\w-]+/;
 
@@ -71,9 +85,19 @@ function StoryCard({ s, state, onOpen }: { s: Story; state: State; onOpen: (s: S
 }
 
 /** 需求：飞书工单（我的待办里的需求、缺陷）按阶段排成四列，阶段由你推，不回写飞书项目 */
-export function StoryBoard({ state, onOpenDev }: { state: State; onOpenDev: (id: string) => void }) {
+export function StoryBoard({
+	state,
+	initialOpen,
+	onOpenDev,
+}: {
+	state: State;
+	initialOpen?: string;
+	/** storyId：从哪条需求点开的，任务抽屉里能返回 */
+	onOpenDev: (id: string, storyId?: string) => void;
+}) {
 	const qc = useQueryClient();
-	const [open, setOpen] = useState<string | null>(null);
+	const navigate = useNavigate();
+	const [open, setOpen] = useState<string | null>(initialOpen ?? null);
 	const [showDropped, setShowDropped] = useState(false);
 	const [msg, setMsg] = useState<Msg>(null);
 	const [busy, setBusy] = useState(false);
@@ -153,14 +177,78 @@ export function StoryBoard({ state, onOpenDev }: { state: State; onOpenDev: (id:
 					s={current}
 					tasks={tasksOf(state, current.id)}
 					allTasks={state.devTasks}
-					onClose={() => setOpen(null)}
+					onClose={() => {
+						setOpen(null);
+						// 从定时任务页点进来的：关掉时把地址栏的 story 去掉，刷新不再弹出
+						if (initialOpen) void navigate({ to: "/", search: { view: "stories" } });
+					}}
 					onOpenDev={(id) => {
 						setOpen(null);
-						onOpenDev(id);
+						onOpenDev(id, current.id);
 					}}
 				/>
 			)}
 		</>
+	);
+}
+
+/** 一轮结论的第一行（正常时就是「本轮巡查正常」，异常时是异常和证据） */
+const firstLine = (x: DevTask) => (x.summary.trim().split("\n")[0] || x.error || "").slice(0, 80);
+const ROUND_COLOR: Record<string, string> = { 正常: "text-ok", 有异常: "text-bad", 失败: "text-bad", 进行中: "text-accent" };
+
+/** 一张工单的巡检：计划、首次观察、每一轮的结果都在这里看，不用去定时任务页 */
+function PatrolPanel({
+	t,
+	schedule,
+	observe,
+	rounds,
+	busy,
+	onOpenDev,
+	onRun,
+}: {
+	t: StoryTicket;
+	schedule?: Schedule;
+	observe?: DevTask;
+	rounds: DevTask[];
+	busy: boolean;
+	onOpenDev: (id: string) => void;
+	onRun: (scheduleId: string) => void;
+}) {
+	return (
+		<details className="story-patrol">
+			<summary>
+				巡检记录 {rounds.length} 轮{schedule?.enabled && schedule.nextRun ? ` · 下次 ${hhmm(schedule.nextRun)}` : ""}
+				{schedule?.until ? ` · ${mdhm(schedule.until)} 自动停` : ""}
+				{schedule?.model ? ` · ${schedule.model.split("/").pop()}` : ""}
+			</summary>
+			<div className="story-patrol-body">
+				{observe && (
+					<button type="button" className="story-patrol-row" onClick={() => onOpenDev(observe.id)}>
+						<span className="w-24 shrink-0 text-muted tabular-nums">{mdhm(observe.created)}</span>
+						<span className="shrink-0 font-medium text-text">首次观察</span>
+						<span className="min-w-0 flex-1 truncate text-muted">{firstLine(observe) || TASK_STATUS[observe.status]}</span>
+					</button>
+				)}
+				{rounds.map((r) => {
+					const st = roundState(r);
+					return (
+						<button key={r.id} type="button" className="story-patrol-row" onClick={() => onOpenDev(r.id)}>
+							<span className="w-24 shrink-0 text-muted tabular-nums">{mdhm(r.created)}</span>
+							<span className={`shrink-0 font-medium ${ROUND_COLOR[st] ?? "text-text"}`}>{st}</span>
+							<span className="min-w-0 flex-1 truncate text-muted">{firstLine(r)}</span>
+						</button>
+					);
+				})}
+				{!rounds.length && <div className="px-2 py-1 text-muted">还没有跑过巡检</div>}
+				{schedule && t.patrol && !t.patrol.stopped && (
+					<div className="px-2 pt-1">
+						<button className="linkbtn" disabled={busy} onClick={() => onRun(schedule.id)}>
+							立即巡检一轮
+						</button>
+					</div>
+				)}
+			</div>
+		</details>
 	);
 }
 
@@ -217,6 +305,7 @@ function StoryDrawer({
 }) {
 	const qc = useQueryClient();
 	const { data: repos } = useQuery({ queryKey: ["repos"], queryFn: fetchRepos });
+	const { data: schedules = [] } = useQuery({ queryKey: ["schedules"], queryFn: fetchSchedules, refetchInterval: 30_000 });
 	const [kind, setKind] = useState<Kind | null>(null);
 	const [text, setText] = useState("");
 	const [repo, setRepo] = useState("");
@@ -257,6 +346,11 @@ function StoryDrawer({
 				}),
 			"已重跑首次观察，跑完后巡检就有基线可比",
 		);
+	const runPatrol = (scheduleId: string) =>
+		act(async () => {
+			const id = await runSchedule(scheduleId);
+			if (id) onOpenDev(id);
+		}, "已开跑一轮巡检");
 	const unpatrol = (key: string) => act(() => post(`/api/stories/${s.id}/unpatrol`, { key }), `已停止巡检 ${key}`);
 	const stage = (st: string) => act(() => post(`/api/stories/${s.id}/stage`, { stage: st }), `已移到「${STAGE_NAME[st]}」`);
 	const start = () =>
@@ -492,6 +586,17 @@ function StoryDrawer({
 											</>
 										)}
 									</div>
+									{(t.patrol || rounds.length > 0) && (
+										<PatrolPanel
+											t={t}
+											schedule={schedules.find((x) => x.id === t.patrol?.scheduleId)}
+											observe={observe}
+											rounds={rounds}
+											busy={busy}
+											onOpenDev={onOpenDev}
+											onRun={runPatrol}
+										/>
+									)}
 								</div>
 							);
 						})}

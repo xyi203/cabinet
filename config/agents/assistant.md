@@ -15,12 +15,31 @@
 
 ## MR 预审（提示里给了 MR 时）
 
-结果先给 Yi 看，不会直接发到 MR 上。
+收到 MR 时机器人已经替 Yi 回了 Get，对方知道在看了。你只出评审结果给 Yi 过目，**不要自己往 MR 上发任何评论或 approve**：Yi 在卡片上确认后，系统按你给的台账发到 GitLab。
 
-- 用 `glab mr view <iid> -R gitlab.shoplazza.site/<项目路径>` 看描述，`glab mr diff <iid> -R gitlab.shoplazza.site/<项目路径>` 看改动（-R 必须带 host，否则 glab 去 gitlab.com 查会 404）；本地仓库在当前目录或其子目录时可以用 `git -C <目录> log/show` 看上下文。
-- 按 check skill 的标准审：只报真会出错的问题（逻辑错误、并发、空指针、边界、兼容、安全、性能退化），不报代码风格；最多列 5 条，按严重程度排序，每条带 `文件:行号` 和一句修改建议。
-- 先写一行结论：`✅ 可以通过` / `⚠️ 有小问题，可以合` / `❌ 建议修改后再合`，再写一句话概括这次改了什么。
-- 输出：第一部分是给对方的回复草稿（以 Yi 的口吻，一两句，例如「看过了，有 2 个小问题，见下」或「LGTM，可以合」），涉及合并与否时不替 Yi 承诺；另起一行以 `【评审报告】` 开头写完整结论和问题列表，只给 Yi 看；需要提醒 Yi 再另起一行 `【备注】`。
+- 先 read `review` skill 的 `SKILL.md` 和 `references/gitlab-mr.md`，按 gitlab-mr.md 第 1–7 步（解析输入 → 团队规则 → 发现 → 核验 → 分级 → 报告与台账）走，档位默认 standard（消息里说「快速过一下」「深审」再换）；用到哪个参考文件就 read 哪个（mr-finder-briefs.md、mr-verify.md、post-inline-comments.md，复审读 mr-re-review.md）。
+- 你没有子代理：档位表里派子代理的发现和核验都由你自己按角度逐个做完，报告里注明「全部由主线程完成」。没有写权限，skill 里 `mktemp` 存临时文件的步骤跳过，长材料直接读。
+- glab 的 `-R` / `--hostname` 必须带 `gitlab.shoplazza.site`，否则去 gitlab.com 查会 404。本地 clone 在当前目录或 `~/code/<仓库名>`：`git fetch origin refs/merge-requests/<iid>/head` 后用 `git diff <base_sha> <head_sha>`、`git show <sha>:<路径>`；没有 clone 就用 `glab mr diff` 和 `glab api` 读文件。
+- 第 8 步不执行，但评论正文要按 `post-inline-comments.md` 的格式写好（行内评论的标题行、`<details>` 折叠、末尾 `<!-- gitlab-mr-review -->`；总结评论带 `<!-- gitlab-mr-review head_sha=<head_sha> level=<档位> -->`）。行号从 `git show <head_sha>:<路径>` 读绝对行号，必须落在 diff 的 hunk 里；锚不上的发现放进总结评论。已在 discussions 里被提过的不再写。只有 CONFIRMED 的进台账，PLAUSIBLE 只写进评审报告。
+
+输出三段，顺序固定：
+
+1. 第一行 `【无需回复】已回 Get，评审意见等 Yi 确认后发到 MR`。只有对方在消息里明确问了别的问题（不只是「帮忙看下」）时，才改成以 Yi 口吻的一两句回复，不替 Yi 承诺合不合。
+2. 另起一行 `【评审报告】`，按 gitlab-mr.md 第 7 步写给 Yi 看的报告：先一行结论 `✅ 可以通过` / `⚠️ 有小问题，可以合` / `❌ 建议修改后再合`，再写待确认问题、转达事项和统计。
+3. 最后另起一行 `【MR评论】`，紧跟一个 JSON（可以包在 ```json 里），就是第 7 步的台账、会原样发到 GitLab：
+
+```json
+{
+	"base_sha": "<diff_refs.base_sha>",
+	"start_sha": "<diff_refs.start_sha>",
+	"head_sha": "<diff_refs.head_sha>",
+	"level": "standard",
+	"inline": [{ "old_path": "<改动前路径>", "new_path": "<改动后路径>", "new_line": 123, "body": "<行内评论正文>" }],
+	"summary": "<总结评论正文>"
+}
+```
+
+针对已删除行时用 `old_line` 代替 `new_line`；零发现时 `inline` 为空数组，总结评论照写。需要提醒 Yi 的另起一行 `【备注】`，放在【MR评论】之前。
 
 ## 文档
 

@@ -332,6 +332,11 @@ export interface Schedule {
 	nextRun: number | null;
 	lastRun: number | null;
 	lastTask: string | null;
+	model?: string | null;
+	/** 到这个时间自动停（巡检用） */
+	until?: number | null;
+	/** 发布工单巡检建的定时任务 */
+	patrol?: boolean;
 }
 export const fetchSchedules = () => getJson<{ items: Schedule[] }>("/api/schedules").then((d) => d.items);
 export const saveSchedule = (s: Partial<Schedule> & Pick<Schedule, "name" | "cron" | "agent" | "prompt">) =>

@@ -268,5 +268,10 @@ test("devops publish 查询放行、auth 拒绝；只读 agent 能 fetch tag 和
 	allow("git remote -v", gp);
 	allow("git remote get-url origin", gp);
 	deny("git fetch upstream refs/heads/x", gp);
+	allow("git fetch origin refs/merge-requests/12/head", gp);
+	deny("git fetch origin refs/merge-requests/12/head:refs/heads/master", gp);
+	allow("git cat-file -e abc123", gp);
+	allow("git ls-tree -r --name-only abc123", gp);
+	deny("git cat-file --filters abc123:a.go", gp);
 	deny("git remote add x https://e.com/x.git", gp);
 });

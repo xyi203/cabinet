@@ -7,7 +7,7 @@ import type { Draft, MeegoCard } from "../db/schema.ts";
 import { queuePatch, sendCardToUserAsBot, sendToUserAsBot } from "../lark/bot.ts";
 import { log, now } from "../util.ts";
 import { draftCard, where } from "./card.ts";
-import { draftMrs } from "./mr.ts";
+import { draftMrs, type MrLedger, parseLedger, saveLedger } from "./mr.ts";
 import { describeReply, type Kind, NO_REPLY_MARK, parseDraftBody, splitNote } from "./format.ts";
 
 export class DraftError extends Error {}
@@ -119,7 +119,17 @@ function draftText(source: Source, kind: Kind, body: string, note: string, repor
 
 /** 把草稿私聊给 Yi（一张可以直接操作的卡片），草稿 id 就是这条私聊的消息 id；replaces 是被改写掉的上一版 */
 export async function pushDraft(source: Source, draft: string, replaces?: string): Promise<string> {
-	const { body: rawBody, note, report } = splitNote(draft);
+	const { body: rawBody, note: rawNote, report, comments } = splitNote(draft);
+	const mr = draftMrs([{ id: "", routeId: source.routeId ?? null }]).get("");
+	// MR 预审的评论台账：Yi 在卡片上过目，点「发到 MR」时照着发
+	let ledger: MrLedger | undefined;
+	let note = rawNote;
+	if (mr && comments) {
+		const got = parseLedger(comments);
+		if (typeof got === "string")
+			note = [rawNote, `MR 评论台账读不出来（${got}），「发到 MR」只能把评审报告整段发成一条评论`].filter(Boolean).join("\n");
+		else ledger = got;
+	}
 	const noReply = rawBody.startsWith(NO_REPLY_MARK);
 	const { kind, content: body } = noReply ? { kind: "text" as Kind, content: rawBody } : parseDraftBody(rawBody);
 	const row = {
@@ -145,11 +155,7 @@ export async function pushDraft(source: Source, draft: string, replaces?: string
 		try {
 			dmId = await sendCardToUserAsBot(
 				OWNER_OPEN_ID,
-				draftCard(
-					{ id: "", context: "", agent: null, session: null, route: null, ...row } as Draft,
-					"",
-					draftMrs([{ id: "", routeId: source.routeId ?? null }]).get(""),
-				),
+				draftCard({ id: "", context: "", agent: null, session: null, route: null, ...row } as Draft, "", mr && { ...mr, ledger }),
 			);
 		} catch (e) {
 			// 卡片被平台拒了（结构不对、超长）也不能丢草稿：退回富文本
@@ -163,6 +169,7 @@ export async function pushDraft(source: Source, draft: string, replaces?: string
 			.values({ id: dmId, ...row })
 			.run();
 	});
+	if (ledger) saveLedger(dmId, ledger);
 	if (isCard) setKv(cardKey(dmId), true);
 	if (replaces) syncCard(replaces);
 	changed();

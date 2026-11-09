@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { type AgentStat, type Schedule, deleteSchedule, fetchSchedules, runSchedule, saveSchedule } from "../lib/api";
+import { type AgentStat, type Schedule, type Story, deleteSchedule, fetchSchedules, runSchedule, saveSchedule } from "../lib/api";
 import { AGENT_NAME, time } from "../lib/format";
 import { type Msg, MsgLine } from "./Drawer";
 import { confirmDialog } from "./Confirm";
@@ -14,7 +14,24 @@ const EXAMPLES = [
 type Draft = Pick<Schedule, "name" | "cron" | "agent" | "prompt"> & { id?: string };
 
 /** 定时任务：到点交给只读 agent 跑一次，结论私聊给你（server/schedules.ts） */
-export function Schedules({ agents, onOpen }: { agents: AgentStat[]; onOpen: (taskId: string) => void }) {
+export function Schedules({
+	agents,
+	stories,
+	onOpen,
+	onOpenStory,
+}: {
+	agents: AgentStat[];
+	stories: Story[];
+	onOpen: (taskId: string) => void;
+	onOpenStory: (storyId: string) => void;
+}) {
+	// 巡检定时任务挂在哪条需求的哪张工单上（需求的 tickets[].patrol.scheduleId）
+	const patrolOf = (id: string) => {
+		for (const st of stories) {
+			const t = st.tickets.find((x) => x.patrol?.scheduleId === id && !x.removed);
+			if (t) return { story: st, key: t.key };
+		}
+	};
 	const qc = useQueryClient();
 	const { data: items = [] } = useQuery({ queryKey: ["schedules"], queryFn: fetchSchedules, refetchInterval: 30_000 });
 	const [edit, setEdit] = useState<Draft | null>(null);
@@ -100,6 +117,7 @@ export function Schedules({ agents, onOpen }: { agents: AgentStat[]; onOpen: (ta
 			{items.map((s) => (
 				<div key={s.id} className={`sched${s.enabled ? "" : " off"}`}>
 					<div className="head">
+						{s.patrol && <span className="tag">巡检</span>}
 						<b>{s.name}</b>
 						<code>{s.cron}</code>
 						<span>{AGENT_NAME[s.agent] ?? s.agent}</span>
@@ -108,6 +126,18 @@ export function Schedules({ agents, onOpen }: { agents: AgentStat[]; onOpen: (ta
 							{s.lastRun ? ` · 上次 ${time(s.lastRun)}` : ""}
 						</span>
 					</div>
+					{s.patrol &&
+						(() => {
+							const p = patrolOf(s.id);
+							return p ? (
+								<div className="foot">
+									工单 {p.key} · 需求「{p.story.title}」{s.until ? ` · ${time(s.until)} 自动停` : ""}{" "}
+									<button className="linkbtn" onClick={() => onOpenStory(p.story.id)}>
+										在需求里看全部巡检 ↗
+									</button>
+								</div>
+							) : null;
+						})()}
 					<div className="desc">{s.prompt}</div>
 					<div className="row-inline">
 						<button className="btn" disabled={busy} onClick={() => act(() => runSchedule(s.id).then(onOpen), "已开跑")}>

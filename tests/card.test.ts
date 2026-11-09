@@ -252,3 +252,44 @@ test("MR 预审草稿卡片：有 approve / 发评论按钮，name 不重复，�
 	assert.deepEqual(callbacks(draftCard({ ...d, report: "" } as any, "", mr)), ["mr_approve"]);
 	assert.deepEqual(callbacks(draftCard(d as any)), []);
 });
+
+test("MR 预审有评论台账：卡片列出将发的评论，按钮是确认发送；发过之后不再列", () => {
+	const ledger = {
+		base_sha: "b",
+		start_sha: "s",
+		head_sha: "h",
+		inline: [
+			{
+				old_path: "a.go",
+				new_path: "a.go",
+				new_line: 12,
+				body: "🔴 **Important**：空指针\n\n<details>\n<summary>为什么</summary>\n\n- 证据\n\n</details>\n\n<!-- gitlab-mr-review -->",
+			},
+		],
+		summary: "**gitlab-mr-review**（standard）：改了下单",
+	};
+	const mr = { project: "shoplaza/x", iid: "7", url: "u", done: [] as Array<"approve" | "note">, ledger };
+	const d = { ...base, status: "noreply", draft: "【无需回复】已回 Get", report: "⚠️ 小问题" };
+	const els = walk(draftCard(d as any, "", mr));
+	const text = JSON.stringify(els);
+	assert.ok(text.includes("a.go:12"));
+	assert.ok(text.includes("将发到 MR 的评论"));
+	assert.ok(!text.includes("gitlab-mr-review -->"), "隐藏标记不出现在卡片上");
+	assert.ok(els.some((e) => e.tag === "button" && e.text?.content === "确认，评论发到 MR"));
+	assert.ok(!JSON.stringify(walk(draftCard(d as any, "", { ...mr, done: ["note"] }))).includes("将发到 MR 的评论"));
+});
+
+test("MR 评论台账：校验 SHA、总结、行号", async () => {
+	const { parseLedger } = await import("../server/drafts/mr.ts");
+	const ok = parseLedger(
+		'```json\n{"base_sha":"b","start_sha":"s","head_sha":"h","inline":[{"new_path":"a.go","new_line":3,"body":"x"}],"summary":"y"}\n```',
+	);
+	assert.ok(typeof ok === "object");
+	assert.equal(ok.inline[0].old_path, "a.go");
+	assert.equal(typeof parseLedger("{"), "string");
+	assert.match(
+		parseLedger('{"base_sha":"b","start_sha":"s","head_sha":"h","summary":"y","inline":[{"new_path":"a.go","body":"x"}]}') as string,
+		/第 1 条/,
+	);
+	assert.match(parseLedger('{"base_sha":"b","start_sha":"s","head_sha":"h"}') as string, /summary/);
+});

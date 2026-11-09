@@ -7,7 +7,7 @@ import { OWNER_NAME, OWNER_OPEN_ID, PATHS } from "../config.ts";
 import type { Draft } from "../db/schema.ts";
 import { channelOfDraft } from "../channels/index.ts";
 import { getMessage, LarkError, react } from "../lark/bot.ts";
-import { ASSISTANT, LEGACY_TIER, TASK_TIER, loadAgents, withTier } from "../agent/router.ts";
+import { ASSISTANT, LEGACY_TIER, TASK_TIER, loadAgents, resolveCwd, withTier } from "../agent/router.ts";
 import { settle } from "../pipeline.ts";
 import { record } from "../records.ts";
 import { runPi } from "../agent/driver.ts";
@@ -19,7 +19,12 @@ import { gatherContext } from "./context.ts";
 import { describeReply, draftLabel, type Kind, resolveEmoji, resolveSticker, stickerHint } from "./format.ts";
 import { CardInputError, draftCard, parseCardAction, sendText } from "./card.ts";
 import { claim, DraftError, getDraft, isQuiet, LIVE, pushDraft, setStatus, syncCard } from "./store.ts";
-import { applyMrAction, draftMrs } from "./mr.ts";
+import { applyMrAction, draftMrs, type MrLedger } from "./mr.ts";
+
+/** MR 预审的改写：Yi 多半是要删改某几条评论，把当前的报告和台账原样给回去 */
+function mrRevision(report: string, ledger?: MrLedger) {
+	return `当前评审报告：\n${report || "（无）"}\n\n当前将发到 MR 的评论台账：\n${ledger ? JSON.stringify(ledger, null, 2) : "（无）"}\n\nYi 没提到的评论原样保留，不要重新审一遍。`;
+}
 
 /** 发回草稿来的那个渠道（channels/）：飞书私聊和群、飞书项目评论 */
 async function sendDraft(d: Draft) {
@@ -64,9 +69,10 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 			});
 			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: "sent" });
 		} else if (action === "revise") {
-			// 改写要能查事实：按 deep 档跑；改版前的草稿记的是旧 agent 名，一律交给 assistant
+			// 改写要能查事实：按 deep 档跑，MR 预审按 mr 档（同一个模型接着改评论）；改版前的草稿记的是旧 agent 名，一律交给 assistant
 			const name = LEGACY_TIER[d.agent ?? ""] ? ASSISTANT : (d.agent ?? ASSISTANT);
-			const agent = withTier(loadAgents().agents[name] ?? {}, TASK_TIER);
+			const mr = draftMrs([d]).get(id);
+			const agent = withTier(loadAgents().agents[name] ?? {}, mr ? "mr" : TASK_TIER);
 			// 早于上下文功能的草稿没有存前文，改写时现补
 			let context = d.context;
 			if (!context && d.chatMode !== "meego") {
@@ -77,12 +83,18 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 			const { text } = await locks.run(`draft-${d.chatId}`, () =>
 				sem.run(() =>
 					runPi({
-						cwd: DEFAULT_CWD,
+						cwd: mr ? resolveCwd(agent, { rule: "", mrProject: mr.project, mrIid: mr.iid }) : DEFAULT_CWD,
 						sessionId: d.session,
 						requestId: `revise:${id}`,
 						tier: "rewrite",
 						// 附上原文和当前草稿，不依赖会话里还留着上一版（会话可能被压缩）
-						prompt: `${context ? `相关前文：\n${context}\n\n` : ""}需要回复的消息：\n${d.text}\n\n当前草稿：\n${describeReply(d.kind, d.draft)}\n\n${stickerHint()}\n\nYi 的修改意见：${arg}\n\n（当前草稿的 ID：draft:${id}）\n\n请按意见重写，只输出新的草稿。`,
+						prompt: `${context ? `相关前文：\n${context}\n\n` : ""}需要回复的消息：\n${d.text}\n\n当前草稿：\n${describeReply(d.kind, d.draft)}\n\n${
+							mr ? mrRevision(d.report, mr.ledger) : stickerHint()
+						}\n\nYi 的修改意见：${arg}\n\n（当前草稿的 ID：draft:${id}）\n\n${
+							mr
+								? "请按意见重写，按 MR 预审的输出格式完整输出（回复、【评审报告】、【MR评论】三段都要有）。"
+								: "请按意见重写，只输出新的草稿。"
+						}`,
 						extraSystem: [PATHS.draftRules],
 						label: draftLabel(d),
 						agent,
@@ -188,7 +200,10 @@ export async function onDraftCardAction(data: unknown) {
 		void outcome.then((r) => {
 			if (r.ok) return;
 			log("草稿卡片操作失败", ev.name, d.id, r.error);
-			syncCard(d.id, `「${ev.name === "revise" ? "AI 改写" : ev.name.startsWith("mr_") ? "MR 操作" : "发送"}」没有成功：${reason(r.error)}`);
+			syncCard(
+				d.id,
+				`「${ev.name === "revise" ? "AI 改写" : ev.name.startsWith("mr_") ? "MR 操作" : "发送"}」没有成功：${reason(r.error)}`,
+			);
 		});
 		return toast("info", BUSY_TOAST[ev.name] ?? "发送中…", draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id)));
 	}

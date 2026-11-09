@@ -59,7 +59,9 @@ export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => vo
 				thinking,
 			});
 			setMsg({
-				text: dev ? "已指派，开发任务会出现在「工作中」；改完后在任务里审核 diff、推送建 MR" : "已指派，查完会出现在「待你处理」，看完点完成",
+				text: dev
+					? "已指派，开发任务会出现在「工作中」；改完后在任务里审核 diff、推送建 MR"
+					: "已指派，查完会出现在「待你处理」，看完点完成",
 			});
 			qc.invalidateQueries({ queryKey: ["state"] });
 			setTimeout(onDone, 1500);
@@ -215,7 +217,18 @@ export function Chat({ dev, chatMode = false }: { dev: DevTask; chatMode?: boole
 	);
 }
 
-export function DevDrawer({ dev: d, onClose }: { dev: DevTask; task?: Task; onClose: () => void }) {
+export function DevDrawer({
+	dev: d,
+	onClose,
+	onBack,
+	backLabel,
+}: {
+	dev: DevTask;
+	task?: Task;
+	onClose: () => void;
+	onBack?: () => void;
+	backLabel?: string;
+}) {
 	const qc = useQueryClient();
 	const running = d.status === "running";
 	const isDev = d.agent === "dev";
@@ -279,6 +292,8 @@ export function DevDrawer({ dev: d, onClose }: { dev: DevTask; task?: Task; onCl
 	const canClose = d.status === "pushed" || (d.status === "review" && Boolean(diff) && !diff!.commits && !diff!.uncommitted);
 	return (
 		<Drawer
+			onBack={onBack}
+			backLabel={backLabel}
 			title={
 				isDev
 					? `开发 · ${d.repo.split("/").pop()} · ${d.branch}`

@@ -1,10 +1,11 @@
-// 草稿文本：正文、【评审报告】、【备注】的拆分，表情 / 表情包的识别，给人看的标签。纯函数，只读表情包目录
+// 草稿文本：正文、【评审报告】、【MR评论】、【备注】的拆分，表情 / 表情包的识别，给人看的标签。纯函数，只读表情包目录
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { COMMON_EMOJI, EMOJI_ALIASES, EMOJI_TYPES, PATHS } from "../config.ts";
 
 const NOTE_MARK = "【备注】";
 const REPORT_MARK = "【评审报告】";
+const COMMENTS_MARK = "【MR评论】";
 export const NO_REPLY_MARK = "【无需回复】";
 const REACTION_MARK = "【表情】";
 const STICKER_MARK = "【表情包】";
@@ -12,14 +13,19 @@ const STICKER_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 
 export type Kind = "text" | "reaction" | "sticker";
 
-/** 草稿 = 回复正文 + 【评审报告】（CR agent）+ 【备注】，后两段只给 Yi 看 */
-export function splitNote(draft: string): { body: string; note: string; report: string } {
-	let [body, note] = partition(draft, NOTE_MARK);
+/** 草稿 = 回复正文 + 【评审报告】（MR 预审）+ 【MR评论】（预审的评论台账 JSON）+ 【备注】，后三段只给 Yi 看 */
+export function splitNote(draft: string): { body: string; note: string; report: string; comments: string } {
+	// 台账一般写在最后；后面若还跟着别的段，截到下一个段标记为止
+	let [rest, comments] = partition(draft, COMMENTS_MARK);
+	const end = Math.min(...[NOTE_MARK, REPORT_MARK].map((m) => comments.indexOf(m)).filter((i) => i >= 0), comments.length);
+	rest += comments.slice(end);
+	comments = comments.slice(0, end);
+	let [body, note] = partition(rest, NOTE_MARK);
 	let report: string;
 	[body, report] = partition(body, REPORT_MARK);
 	if (note.includes(REPORT_MARK)) [note, report] = partition(note, REPORT_MARK); // 模型把备注写在报告前面时
 	// 模型偶尔在正文前写「草稿：」，发出去就露馅了
-	return { body: body.trim().replace(/^草稿[:：]\s*/, ""), note: note.trim(), report: report.trim() };
+	return { body: body.trim().replace(/^草稿[:：]\s*/, ""), note: note.trim(), report: report.trim(), comments: comments.trim() };
 }
 
 function partition(s: string, mark: string): [string, string] {

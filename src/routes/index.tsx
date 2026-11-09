@@ -63,8 +63,10 @@ type View = keyof typeof TITLES;
 // 当前视图放在地址栏（?view=todo），刷新和收藏都能回到原处
 export const Route = createFileRoute("/")({
 	component: Dashboard,
-	validateSearch: (search: Record<string, unknown>): { view?: View } => ({
+	// story：需求页打开哪条（定时任务页的巡检点过来时带上）
+	validateSearch: (search: Record<string, unknown>): { view?: View; story?: string } => ({
 		view: typeof search.view !== "string" ? undefined : search.view in TITLES ? (search.view as View) : ALIASES[search.view],
+		story: typeof search.story === "string" || typeof search.story === "number" ? String(search.story) : undefined,
 	}),
 });
 
@@ -77,8 +79,12 @@ function Nav({ v, current, badge, hot }: { v: View; current: View; badge?: numbe
 }
 
 function Dashboard() {
-	const view = Route.useSearch().view ?? "home";
-	const [open, setOpen] = useState<{ draft?: Draft; task?: Task; dev?: string } | null>(null);
+	const search = Route.useSearch();
+	const view = search.view ?? "home";
+	// backStory：任务是从哪条需求点开的，任务抽屉里「返回需求」回到它
+	const [open, setOpen] = useState<{ draft?: Draft; task?: Task; dev?: string; backStory?: string } | null>(null);
+	// 返回同一条需求时地址栏不变，靠它让需求页重新打开那条
+	const [storyReopen, setStoryReopen] = useState(0);
 	const [connected, setConnected] = useState(true);
 	// 有实时推送时轮询只作兜底；断线时加快
 	const { data: state, error } = useQuery({ queryKey: ["state"], queryFn: fetchState, refetchInterval: connected ? 15_000 : 5_000 });
@@ -172,8 +178,22 @@ function Dashboard() {
 				{view === "stats" && <StatsPage />}
 				{state && view === "tasks" && <TasksPage state={state} onOpen={openTask} onOpenDev={(id) => setOpen({ dev: id })} />}
 				{state && view === "dispatch" && <DispatchPage state={state} onOpenDev={(id) => setOpen({ dev: id })} />}
-				{state && view === "schedules" && <Schedules agents={state.agents} onOpen={(id) => setOpen({ dev: id })} />}
-				{state && view === "stories" && <StoryBoard state={state} onOpenDev={(id) => setOpen({ dev: id })} />}
+				{state && view === "schedules" && (
+					<Schedules
+						agents={state.agents}
+						stories={state.stories ?? []}
+						onOpen={(id) => setOpen({ dev: id })}
+						onOpenStory={(id) => void navigate({ to: "/", search: { view: "stories", story: id } })}
+					/>
+				)}
+				{state && view === "stories" && (
+					<StoryBoard
+						key={`${search.story ?? ""}:${storyReopen}`}
+						state={state}
+						initialOpen={search.story}
+						onOpenDev={(id, storyId) => setOpen({ dev: id, backStory: storyId })}
+					/>
+				)}
 				{state && view === "todo" && <Inbox items={inbox} drafts={state.drafts} now={state.now} onOpen={openInbox} />}
 				{state && view === "qa" && (
 					<ChatPage chats={state.chats ?? []} records={state.records.filter((r) => r.kind !== "draft")} now={state.now} />
@@ -191,6 +211,17 @@ function Dashboard() {
 					dev={state.devTasks.find((x) => x.id === open.dev) as DevTask}
 					task={state.tasks.find((t) => t.dev === open.dev)}
 					onClose={() => setOpen(null)}
+					backLabel="返回需求"
+					onBack={
+						open.backStory
+							? () => {
+									const id = open.backStory!;
+									setOpen(null);
+									setStoryReopen((n) => n + 1);
+									void navigate({ to: "/", search: { view: "stories", story: id } });
+								}
+							: undefined
+					}
 				/>
 			) : open?.draft && isLive(open.draft) ? (
 				<DraftDrawer key={open.draft.id} draft={open.draft} task={open.task} onClose={() => setOpen(null)} />

@@ -64,8 +64,24 @@ const secretPattern =
 	/(^|\/)(\.env[^/]*|\.ssh|\.aws|\.kube|\.netrc|\.npmrc|\.git-credentials|id_[a-z0-9]+|[^/]*\.(pem|key|p12)|credentials[^/]*)(\/|$)/i;
 
 // 只放行这些 git 子命令；--output/--ext-diff 会写文件或执行外部程序，--no-index 能读仓库外任意文件
-const gitReadOnly = new Set(["log", "show", "diff", "blame", "status", "branch", "tag", "rev-parse", "ls-files", "grep"]);
-const gitBannedArg = /^(--output|--ext-diff|--textconv|--no-index|-c$|--exec|--upload-pack|--config|--open-files-in-pager|-O)/;
+const gitReadOnly = new Set([
+	"log",
+	"show",
+	"diff",
+	"blame",
+	"status",
+	"branch",
+	"tag",
+	"rev-parse",
+	"ls-files",
+	"ls-tree",
+	"cat-file",
+	"grep",
+]);
+// --filters 让 cat-file 跑仓库配置的 smudge 过滤器（外部程序）
+const gitBannedArg = /^(--output|--ext-diff|--textconv|--filters|--no-index|-c$|--exec|--upload-pack|--config|--open-files-in-pager|-O)/;
+// MR 审查要拉 MR 的 head（review skill）：不带「:目标」，只落到 FETCH_HEAD，不动本地分支
+const mrRef = /^refs\/merge-requests\/\d+\/head$/;
 
 // 开发任务在自己的 worktree 里可以做的本地 git 写操作；push / fetch / 切分支 / reset 一律不放
 const gitLocalWrite = new Set(["add", "commit", "restore", "rm", "mv"]);
@@ -268,11 +284,11 @@ export class Guard {
 			args = [args[0], ...args.slice(3)];
 			cwd = target;
 		}
-		// 只读 agent 核对发布区间要先拉 tag：fetch 只许 --tags / --prune / -q 和 origin，不带别的 refspec
+		// 只读 agent 核对发布区间要先拉 tag、审 MR 要拉 MR 的 head：fetch 只许 --tags / --prune / -q、origin 和 MR 的 ref
 		if (args[1] === "fetch" && !this.writeRoots.length)
-			return args.slice(2).every((a) => ["--tags", "--prune", "-q", "--quiet", "origin"].includes(a))
+			return args.slice(2).every((a) => ["--tags", "--prune", "-q", "--quiet", "origin"].includes(a) || mrRef.test(a))
 				? undefined
-				: "git fetch 只允许 --tags / --prune 和 origin";
+				: "git fetch 只允许 --tags / --prune、origin 和 refs/merge-requests/<iid>/head";
 		// 查看远端地址：remote、remote -v、remote get-url <名字>
 		if (args[1] === "remote")
 			return args.length === 2 || (args.length === 3 && args[2] === "-v") || (args.length === 4 && args[2] === "get-url")

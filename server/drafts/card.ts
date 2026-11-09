@@ -3,13 +3,13 @@
 // 对方的原话用 plain_text 展示，不当 markdown 渲染：不让别人的消息在卡片里伪造出链接或格式。
 import { COMMON_EMOJI, PORT } from "../config.ts";
 import type { Draft } from "../db/schema.ts";
-import type { DraftMr } from "./mr.ts";
+import type { DraftMr, MrLedger } from "./mr.ts";
 import { describeReply, listStickers, NO_REPLY_MARK } from "./format.ts";
 
 /** 飞书输入框 max_length 的上限；更长的草稿卡片里不给编辑框，原样发或 AI 改写 */
 export const INPUT_MAX = 1000;
 // 卡片请求体上限 30 KB，中文一个字 3 字节，还要再转义一层：各段分别截断
-const LIMIT = { source: 800, context: 800, draft: 2500, report: 2500, note: 500, notice: 300 };
+const LIMIT = { source: 800, context: 800, draft: 2500, report: 2500, note: 500, notice: 300, comment: 600, comments: 4000 };
 
 const STATE: Record<string, { text: string; template: string }> = {
 	pending: { text: "待确认", template: "blue" },
@@ -85,7 +85,30 @@ export function where(d: Pick<Draft, "chatMode" | "chatName" | "senderName">) {
 export const editable = (d: Pick<Draft, "kind" | "status" | "draft">) =>
 	d.kind === "text" && d.status !== "noreply" && d.draft.length <= INPUT_MAX;
 
-/** MR 预审的后续动作：GitLab 上 approve、评审报告发成 MR 评论；草稿发没发都能点，做过的显示成已完成 */
+/** GitLab 评论里的折叠块和隐藏标记卡片不认，换成卡片能看的样子 */
+const cardMd = (s: string) =>
+	s
+		.replace(/<!--[\s\S]*?-->/g, "")
+		.replace(/<summary>([\s\S]*?)<\/summary>/g, "*$1*")
+		.replace(/<\/?details>/g, "")
+		.trim();
+
+/** 将要发到 MR 的评论（台账原样）：Yi 确认的就是这些，要改用「AI 改写」 */
+function ledgerPanel(ledger: MrLedger): object {
+	let budget = LIMIT.comments;
+	const take = (s: string) => {
+		const out = cut(cardMd(s), Math.min(LIMIT.comment, Math.max(budget, 80)));
+		budget -= out.length;
+		return out;
+	};
+	const items = ledger.inline.map((c, i) => md(`**${i + 1}. \`${c.new_path}:${c.new_line ?? c.old_line}\`**\n${take(c.body)}`));
+	return panel(`**将发到 MR 的评论**（${ledger.inline.length} 条行内 + 1 条总结，确认后才发）`, [
+		...items,
+		md(`**总结评论**\n${take(ledger.summary)}`),
+	]);
+}
+
+/** MR 预审的后续动作：GitLab 上 approve、评审意见发到 MR；草稿发没发都能点，做过的显示成已完成 */
 function mrActions(d: Draft, mr: DraftMr): object[] {
 	const btn = (a: "approve" | "note", label: string, doneLabel: string) =>
 		mr.done.includes(a)
@@ -100,8 +123,11 @@ function mrActions(d: Draft, mr: DraftMr): object[] {
 					},
 				];
 	const cols: Array<[object]> = [[btn("approve", "GitLab 通过（approve）", "已在 GitLab approve")[0]]];
-	if (d.report.trim()) cols.push([btn("note", "评审意见发到 MR", "评审意见已发到 MR")[0]]);
-	return [md(`**MR**：[${mr.project}!${mr.iid}](${mr.url})`), columns(...cols)];
+	if (mr.ledger) cols.push([btn("note", "确认，评论发到 MR", "评论已发到 MR")[0]]);
+	else if (d.report.trim()) cols.push([btn("note", "评审意见发到 MR", "评审意见已发到 MR")[0]]);
+	const out: object[] = [md(`**MR**：[${mr.project}!${mr.iid}](${mr.url})`)];
+	if (mr.ledger && !mr.done.includes("note")) out.push(ledgerPanel(mr.ledger));
+	return [...out, columns(...cols)];
 }
 
 export function draftCard(d: Draft, notice = "", mr?: DraftMr): object {
