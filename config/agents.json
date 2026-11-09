@@ -64,7 +64,7 @@
 		"prompt": "agents/alert.md"
 	},
 	"_router": {
-		"model": "codex/gpt-6-luna",
+		"model": ["codex/gpt-6-luna", "claude/claude-haiku-5-5", "claude/claude-sonnet-5-5"],
 		"agent": "assistant"
 	}
 }

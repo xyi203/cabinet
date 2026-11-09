@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { abortRun, forgetRun, runPi, steer } from "./agent/driver.ts";
-import { complete, modelOptions } from "./agent/models.ts";
+import { modelOptions } from "./agent/models.ts";
 import { changed } from "./bus.ts";
 import { DATA_DIR, DEFAULT_CWD, GLAB_BIN, OWNER_OPEN_ID, PATHS, PI_MODEL, PORT, TASK_TIMEOUT } from "./config.ts";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "./db/index.ts";
@@ -16,7 +16,7 @@ import { routeBoard } from "./router/board.ts";
 import type { DevTask } from "./db/schema.ts";
 import { DraftError, getDraft } from "./drafts/store.ts";
 import { sem } from "./agent/slots.ts";
-import { ASSISTANT, LEGACY_TIER, TASK_TIER, loadAgents, withTier } from "./agent/router.ts";
+import { ASSISTANT, LEGACY_TIER, TASK_TIER, completeAny, loadAgents, routerModels, withTier } from "./agent/router.ts";
 import { exec, isStopping, log, now } from "./util.ts";
 
 const WORKTREES = path.join(DATA_DIR, "worktrees");
@@ -158,7 +158,10 @@ export function branchFrom(raw: string): string | undefined {
 export async function nameBranch(
 	request: string,
 	taken: (b: string) => Promise<boolean>,
-	ask = (text: string) => complete(loadAgents().router.model ?? PI_MODEL, BRANCH_SYSTEM, text),
+	ask = (text: string) => {
+		const { router } = loadAgents();
+		return completeAny(router.model ? routerModels(router) : [PI_MODEL], BRANCH_SYSTEM, text);
+	},
 ): Promise<string> {
 	const raw = await ask(request.slice(0, 2000)).catch(() => "");
 	const name = branchFrom(raw) ?? `feature/task${Date.now().toString(36)}`;

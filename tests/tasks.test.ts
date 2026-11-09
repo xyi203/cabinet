@@ -173,3 +173,14 @@ test("router：定时任务上一次还在跑就跳过；看板派活每次一�
 		"对话页的聊天不算一件事",
 	);
 });
+
+test("分诊模型：给列表按顺序试，给一个字符串也行，没配用 luna", async () => {
+	const { routerModels } = await import("../server/agent/router.ts");
+	assert.deepEqual(routerModels({ model: ["codex/gpt-6-luna", "claude/claude-haiku-5-5", "claude/claude-sonnet-5-5"] }), [
+		"codex/gpt-6-luna",
+		"claude/claude-haiku-5-5",
+		"claude/claude-sonnet-5-5",
+	]);
+	assert.deepEqual(routerModels({ model: "claude/claude-haiku-5-5" }), ["claude/claude-haiku-5-5"]);
+	assert.deepEqual(routerModels({}), ["codex/gpt-6-luna"]);
+});

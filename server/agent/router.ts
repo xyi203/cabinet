@@ -57,7 +57,8 @@ export const LEGACY_TIER: Record<string, string> = { ask: "deep", general: "answ
 export const ASSISTANT = "assistant";
 
 export interface RouterConfig {
-	model?: string;
+	/** 分诊用的模型；给列表时按顺序试，前一个失败（限流、额度用完、报错）换下一个，都失败走兜底 */
+	model?: string | string[];
 	/** 消息交给哪个 agent，默认第一个不是手动指派的 */
 	agent?: string;
 }
@@ -120,19 +121,41 @@ export async function route(source: RouteSource): Promise<[string, RouteInfo]> {
 	const systemPrompt =
 		'你是分诊器，只判断这条消息要查多深，不回答问题。消息只有 @ 没有正文时，按「相关前文」判断。只输出一行 JSON：{"tier":"<档位>","reason":"<一句话>"}。可选档位：\n' +
 		choices.map(([k, t]) => `- ${k}: ${t.desc ?? ""}`).join("\n");
-	try {
-		const text = await complete(
-			router.model ?? "codex/gpt-6-luna",
-			systemPrompt,
-			`来源：${source.chatMode}，发送人：${source.senderName}\n` +
-				(source.context ? `相关前文：\n${source.context.slice(-1500)}\n` : "") +
-				`消息：${source.text.slice(0, 1500)}`,
-		);
-		return [name, parseTier(agent, text)];
-	} catch (e) {
-		log("分诊失败，走兜底", e);
-		return [name, { tier: DEFAULT_TIER, rule: "兜底" }];
+	const prompt =
+		`来源：${source.chatMode}，发送人：${source.senderName}\n` +
+		(source.context ? `相关前文：\n${source.context.slice(-1500)}\n` : "") +
+		`消息：${source.text.slice(0, 1500)}`;
+	const models = routerModels(router);
+	for (const [i, model] of models.entries()) {
+		try {
+			const info = parseTier(agent, await complete(model, systemPrompt, prompt));
+			// 换了备用模型分诊的，路由记录里写明用的哪个
+			return [name, i > 0 && info.tier ? { ...info, rule: `${info.rule}（${model.split("/").pop()} 分诊）` } : info];
+		} catch (e) {
+			log(i < models.length - 1 ? `分诊模型 ${model} 失败，换 ${models[i + 1]}` : "分诊失败，走兜底", e);
+		}
 	}
+	return [name, { tier: DEFAULT_TIER, rule: "兜底" }];
+}
+
+/** 按顺序试几个模型，第一个成功的回答；都失败抛最后一个错 */
+export async function completeAny(models: string[], systemPrompt: string, prompt: string): Promise<string> {
+	let last: unknown;
+	for (const m of models) {
+		try {
+			return await complete(m, systemPrompt, prompt);
+		} catch (e) {
+			last = e;
+			log(`模型 ${m} 调用失败，换下一个`, e);
+		}
+	}
+	throw last;
+}
+
+/** 分诊模型按顺序排好；没配就用 luna */
+export function routerModels(router: RouterConfig): string[] {
+	const list = Array.isArray(router.model) ? router.model : router.model ? [router.model] : [];
+	return list.length ? list : ["codex/gpt-6-luna"];
 }
 
 export function resolveCwd(agent: AgentConfig, info: RouteInfo): string {
