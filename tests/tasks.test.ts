@@ -153,6 +153,9 @@ test("路由规则：没有 config/routes.json 时用默认值；保存时校验
 	assert.deepEqual(routeRules(), RULE_DEFAULTS);
 	assert.throws(() => saveRouteRules({ alert: { quiet: 900, maxWait: 600 } }), /最长攒批不能比静默收口短/);
 	assert.throws(() => saveRouteRules({ cron: { patrolPauseAt: 2 } }), /巡检额度上限/);
+	// 私聊先等 90 秒、deep 档等到 5 分钟；超范围的不让存
+	assert.deepEqual([RULE_DEFAULTS.yiActive.p2p, RULE_DEFAULTS.yiActive.deep], [90, 300]);
+	assert.throws(() => saveRouteRules({ yiActive: { ...RULE_DEFAULTS.yiActive, p2p: 5000 } }), /私聊起草前先等/);
 });
 
 test("router：定时任务上一次还在跑就跳过；看板派活每次一件，草稿转任务挂回原来那件", async () => {

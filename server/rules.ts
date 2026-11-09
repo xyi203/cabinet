@@ -10,6 +10,8 @@ import {
 	PATHS,
 	PATROL_PAUSE_AT,
 	SUBSCRIBE_TTL,
+	DEEP_WAIT,
+	P2P_WAIT,
 	YI_ACTIVE_CHECK,
 	YI_ACTIVE_DELAY,
 	YI_ACTIVE_WINDOW,
@@ -21,8 +23,11 @@ export class RuleError extends Error {}
 export interface RouteRules {
 	/** 归属：话题 / 工作项 / MR 关闭后这么多秒内再来消息就重开同一件事；订阅接续也按它失效（秒） */
 	reopen: number;
-	/** 你正在聊：触发消息前 window 秒内你说过话，先等最多 delay 秒再处理，每 check 秒看一次你回了没；delay 为 0 不等 */
-	yiActive: { window: number; delay: number; check: number };
+	/**
+	 * 你正在聊：触发消息前 window 秒内你说过话，先等最多 delay 秒再处理，每 check 秒看一次你回了没；delay 为 0 不等。
+	 * 私聊另外总要等到消息来了 p2p 秒再起草，分诊成 deep 的等到 deep 秒（0 = 不等）
+	 */
+	yiActive: { window: number; delay: number; check: number; p2p: number; deep: number };
 	/** 告警攒批：quiet 秒没有新的就收口，最长 maxWait 秒；同群 follow 秒内再来、上一批没归档就并进去。senders / chats 为空时不限 */
 	alert: { quiet: number; maxWait: number; follow: number; senders: string[]; chats: string[] };
 	/** 定时：巡检时 Claude 5 小时额度用到这个比例就跳过（手动运行不拦） */
@@ -31,7 +36,7 @@ export interface RouteRules {
 
 export const RULE_DEFAULTS: RouteRules = {
 	reopen: SUBSCRIBE_TTL,
-	yiActive: { window: YI_ACTIVE_WINDOW, delay: YI_ACTIVE_DELAY, check: YI_ACTIVE_CHECK },
+	yiActive: { window: YI_ACTIVE_WINDOW, delay: YI_ACTIVE_DELAY, check: YI_ACTIVE_CHECK, p2p: P2P_WAIT, deep: DEEP_WAIT },
 	alert: { quiet: ALERT_QUIET, maxWait: ALERT_MAX_WAIT, follow: ALERT_FOLLOW, senders: [...ALERT_SENDERS], chats: [...ALERT_CHATS] },
 	cron: { patrolPauseAt: PATROL_PAUSE_AT },
 };
@@ -72,6 +77,8 @@ export function saveRouteRules(input: unknown): RouteRules {
 		["你在聊的判断窗口", r.yiActive.window, 0, 3600],
 		["你在聊时最多等", r.yiActive.delay, 0, 600],
 		["你在聊时检查间隔", r.yiActive.check, 1, 60],
+		["私聊起草前先等", r.yiActive.p2p, 0, 1800],
+		["私聊 deep 档等到", r.yiActive.deep, 0, 3600],
 		["告警静默收口", r.alert.quiet, 10, 3600],
 		["告警最长攒批", r.alert.maxWait, 10, 7200],
 		["告警续批窗口", r.alert.follow, 0, 86400],

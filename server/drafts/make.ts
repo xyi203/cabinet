@@ -124,6 +124,8 @@ interface Drafting {
 	aborted?: boolean;
 	/** 是 Yi 在看板上点了「不用起草」中止的，不是他亲自回复了 */
 	dismissed?: boolean;
+	/** 分诊成 deep 的私聊：先不起草，等到这个时间（秒）再来 */
+	deferUntil?: number;
 }
 const drafting = new Map<string, Drafting>();
 
@@ -138,21 +140,33 @@ export function abortIfYiReplied(chat: ChatRef, m: Message) {
 	abortRun(d.key).catch((e) => log("中止起草失败", d.key, e));
 }
 
-/** Yi 正在这个聊天里聊：先等一会儿再起草，多半他自己就回了。等的期间隔几秒看一次，他回了消息、表情或对方又接着发了就不再等
- * （之后起草前照常再判一次，按跳过处理） */
-async function waitIfYiActive(chat: ChatRef, msgs: Message[]) {
-	const { window, delay, check } = routeRules().yiActive;
-	if (delay <= 0 || chat.chat_mode === "meego") return;
-	let recent: Message[];
-	try {
-		recent = await listMessages({ chatId: chat.chat_id }, { order: "desc", pageSize: 30 });
-	} catch (e) {
-		log("检查 Yi 是否在聊失败", chat.chat_id, e);
-		return;
+/** 消息来了 sec 秒的时间点（秒）：按最后一条算，轮询晚到的部分不再重复等 */
+const sinceLast = (msgs: Message[], sec: number) => msgs.at(-1)!.create_time / 1000 + sec;
+
+/**
+ * 起草前先等一会儿，多半 Yi 自己就回了：私聊总要等到消息来了 p2p 秒；Yi 正在这个聊天里聊时再至少等 delay 秒。
+ * 11-09 私聊草稿 27/37 被 Yi 亲自回复作废，一半在 75 秒内
+ */
+async function waitBeforeDraft(chat: ChatRef, msgs: Message[]) {
+	const { window, delay, p2p } = routeRules().yiActive;
+	if (chat.chat_mode === "meego") return;
+	let until = chat.chat_mode === "p2p" && p2p > 0 ? sinceLast(msgs, p2p) : 0;
+	if (delay > 0) {
+		try {
+			const recent = await listMessages({ chatId: chat.chat_id }, { order: "desc", pageSize: 30 });
+			if (ownerActive(recent, msgs, window * 1000)) until = Math.max(until, now() + delay);
+		} catch (e) {
+			log("检查 Yi 是否在聊失败", chat.chat_id, e);
+		}
 	}
-	if (!ownerActive(recent, msgs, window * 1000)) return;
-	log(`Yi 正在聊，最多等 ${delay}s 再起草`, chat.chat_id);
-	const until = now() + delay;
+	await waitUntil(chat, msgs, until, chat.chat_mode === "p2p" ? "私聊" : "Yi 正在聊");
+}
+
+/** 等到 until（秒）再起草。期间隔几秒看一次，Yi 回了消息、表情或对方又接着发了就不再等（之后起草前照常再判一次，按跳过处理）；看板上点「立即起草」也不等 */
+async function waitUntil(chat: ChatRef, msgs: Message[], until: number, why: string) {
+	const { check } = routeRules().yiActive;
+	if (until <= now() + 1) return;
+	log(`${why}，等 ${Math.round(until - now())}s 再起草`, chat.chat_id);
 	for (const m of msgs) {
 		const i = inflight.get(m.message_id);
 		if (i) i.waitUntil = until;
@@ -261,11 +275,17 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 		const saved = getKv<Pending | null>(pendingKey, null)?.stage;
 		const resuming = Boolean(saved && hasRun(`${requestId}${saved.suffix ?? ""}`));
 		// 重启接回、手动重试不等：前者已经在跑，后者是 Yi 自己点的。等的时候不占并发名额
-		if (!resuming && !attempt) await waitIfYiActive(chat, msgs);
+		if (!resuming && !attempt) await waitBeforeDraft(chat, msgs);
 		const self: Drafting = { msgs };
 		drafting.set(chat.chat_id, self);
 		try {
 			await sem.run(() => draftLocked(self));
+			// 分诊成 deep 的私聊：分派记好了，等的时候让出并发名额，到点再进来接着起草（第二次进来沿用这次的分派）
+			if (self.deferUntil) {
+				await waitUntil(chat, msgs, self.deferUntil, "私聊 deep 档");
+				self.deferUntil = undefined;
+				await sem.run(() => draftLocked(self));
+			}
 		} finally {
 			drafting.delete(chat.chat_id);
 		}
@@ -298,6 +318,11 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			return;
 		}
 		const stale = msgs.some((m) => dismissed.has(m.message_id)) ? "Yi 标记不用起草" : await staleReason(chat, msgs);
+		// 已经分派过（私聊 deep 档等到点再来、或重启接回）：按作废收尾那条分派，不另记一条跳过
+		if (stale && open) {
+			yiRepliedMidway(chat, source, label, open.id, stale);
+			return;
+		}
 		if (stale) {
 			log(
 				`${stale}，跳过起草`,
@@ -369,6 +394,12 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 					info: routeExtra as Record<string, string>,
 					actionKind: "draft",
 				});
+			// deep 档贵，Yi 多半在几分钟里自己回了：私聊先等到消息来了 deep 秒（重启接回、手动重试、第二次进来不等）
+			const deepWait = routeRules().yiActive.deep;
+			if (!open && !attempt && chat.chat_mode === "p2p" && info.tier === "deep" && deepWait > 0 && sinceLast(msgs, deepWait) > now() + 1) {
+				self.deferUntil = sinceLast(msgs, deepWait);
+				return;
+			}
 			// 之后同一件事（这个话题、这个 MR）的消息都进这个会话，跨渠道也接得上
 			if (sid && info.tier !== "ack") subscribe(keys, { agent: name, session: sid, info: routeExtra as Record<string, string>, routeId });
 			Object.assign(source, { agent: name, session: sid, route: info.rule, routeId });

@@ -48,8 +48,14 @@ export const SESSION_MAX_TOKENS = Number(env("SESSION_MAX_TOKENS", "50000"));
 export const YI_ACTIVE_WINDOW = Number(env("YI_ACTIVE_WINDOW", "300"));
 export const YI_ACTIVE_DELAY = Number(env("YI_ACTIVE_DELAY", "20"));
 export const YI_ACTIVE_CHECK = Number(env("YI_ACTIVE_CHECK", "5"));
+// 私聊不管你在不在聊，都等到消息来了 P2P_WAIT 秒再起草；分诊成 deep 的等到 DEEP_WAIT 秒。
+// 11-09 私聊 37 份草稿 27 份被你亲自回复作废（$3.4，占起草花费 93%）：你一半在 75 秒内回，deep 档多在 2~8 分钟
+export const P2P_WAIT = Number(env("P2P_WAIT", "90"));
+export const DEEP_WAIT = Number(env("DEEP_WAIT", "300"));
 // 发布工单巡检：首次观察用 agent 默认模型（Opus），之后每轮用便宜些的模型、每轮新会话；最多巡检这么多天
 export const PATROL_MODEL = env("PATROL_MODEL", "claude/claude-sonnet-5-5");
+// 发布观察文档：照模板整理工单和变更，用不着 Opus；首次观察要建基线，仍用 agent 默认模型
+export const DOC_MODEL = env("DOC_MODEL", "claude/claude-sonnet-5-5");
 export const PATROL_CRON = env("PATROL_CRON", "*/30 * * * *");
 export const PATROL_DAYS = Number(env("PATROL_DAYS", "3"));
 // 全量后巡检：工单走到「prod 部署」后，在这些分钟各巡检一轮，跑完自动停（逗号分隔）

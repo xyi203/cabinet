@@ -7,7 +7,7 @@ import { changed } from "./bus.ts";
 import { db, schema } from "./db/index.ts";
 import type { Story, StoryTicket } from "./db/schema.ts";
 import { callMcp } from "./agent/mcp.ts";
-import { PATROL_CRON, PATROL_DAYS, PATROL_FULL_MINUTES, PATROL_MODEL, OWNER_OPEN_ID, SKILLS_DIR } from "./config.ts";
+import { DOC_MODEL, PATROL_CRON, PATROL_DAYS, PATROL_FULL_MINUTES, PATROL_MODEL, OWNER_OPEN_ID, SKILLS_DIR } from "./config.ts";
 import { dispatch, getDevTask, PATROL_OK } from "./dev.ts";
 import { sendToUserAsBot } from "./lark/bot.ts";
 import { deleteSchedule, listSchedules, saveSchedule } from "./schedules.ts";
@@ -356,7 +356,7 @@ export function patrolPrompt(s: Story, key: string, observeTaskId?: string, full
 		observeTaskId
 			? `1. 先 lookup ${observeTaskId}，读首次观察结尾的「【巡检范围与基线】」；首次观察还没跑完就先只看放量时间线和 Sentry 新增。`
 			: `1. 没有首次观察：先用 devops 的 issue_get_info ${key} 读服务、版本和发布方式，基线取发布前的数据。`,
-		`2. 按 ${OBSERVATION_DIR}/references/patrol.md 做增量检查：只读这份，不重读 SKILL.md、不重走七步，不启动 loop。`,
+		`2. 按 ${OBSERVATION_DIR}/references/patrol.md 做增量检查：只读这份，不重读 SKILL.md、不重走七步，不启动 loop。命令拿不准就先跑 \`<脚本> <子命令> --help\`（直接放行），不要猜子命令：猜错的会卡在审批上。`,
 		`3. 没有异常：回复第一行只写「${PATROL_OK}」，后面最多一两句（这一轮会直接归档、不打扰 Yi）。`,
 		"4. 有异常：第一行写清异常和证据，再给建议（停止放量 / 回滚 / 继续观察）。满足 patrol.md 的停止条件时，第一行写「建议停止巡检」和原因。",
 	].join("\n");
@@ -365,7 +365,14 @@ export function patrolPrompt(s: Story, key: string, observeTaskId?: string, full
 /** 生成发布观察文档：派一个助手任务（写飞书走审批），任务记在工单上，文档链接从任务结论里取 */
 export async function startDoc(storyId: string, key: string) {
 	const { s } = liveTicket(storyId, key);
-	const task = await dispatch({ agent: "assistant", request: docPrompt(s, key), title: `观察文档 ${key} · ${s.title}`, storyId });
+	// 写文档是照模板整理，用不着默认的 Opus：一份 GD-45214 用 Opus 跑了 $2
+	const task = await dispatch({
+		agent: "assistant",
+		request: docPrompt(s, key),
+		title: `观察文档 ${key} · ${s.title}`,
+		storyId,
+		model: DOC_MODEL,
+	});
 	patchTicket(storyId, key, (t) => ({ ...t, doc: { taskId: task.id } }));
 	return task;
 }

@@ -105,6 +105,16 @@ interface ScriptRule {
 	deny: string[][];
 }
 
+/**
+ * 只是查用法：带 --help / -h，其余都是子命令词（不带取值、路径、其他选项）；或者只有 --version。
+ * agent 每轮新会话都要先查一遍 CLI 怎么用，这类调用之前每次都要 Yi 审批（一天 5 次 --help、1 次 --version）
+ */
+export function helpOnly(rest: string[]): boolean {
+	if (rest.length === 1 && (rest[0] === "--version" || rest[0] === "-V")) return true;
+	if (!rest.some((a) => a === "--help" || a === "-h")) return false;
+	return rest.every((a) => a === "--help" || a === "-h" || /^\+?[a-z][\w-]*$/i.test(a));
+}
+
 const words = (list?: string[]) => (list ?? []).map((w) => w.split(/\s+/));
 
 // 跑 skill 脚本时前面常带的解释器：skill 文档里经常写 /usr/bin/python3 scripts/xxx
@@ -355,6 +365,7 @@ export class Guard {
 		const larkBad = name === "lark-cli" ? larkBadArg(rest) : undefined;
 		if (larkBad) return deny(larkBad);
 		if (name === "meegle" && rest.includes("--params")) return deny("meegle 不允许 --params");
+		if (helpOnly(rest)) return ALLOW;
 		if (name === "glab" && rest[0] === "api") {
 			const m = rest.findIndex((a) => a === "-X" || a === "--method");
 			const write =
@@ -402,6 +413,7 @@ export class Guard {
 		// skill 目录里还没登记规则的脚本：交给 Yi 审批（可以顺手记成只读），不直接拒绝
 		const script = this.anyScript ? this.skillScript(args, cwd) : undefined;
 		if (script) {
+			if (helpOnly(script.rest)) return ALLOW;
 			const sub = subcommand(script.rest);
 			return approve(`${script.skill} 的脚本 ${path.basename(script.file)}${sub ? ` ${sub}` : ""} 还没登记命令规则`);
 		}

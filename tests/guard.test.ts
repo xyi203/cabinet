@@ -275,3 +275,30 @@ test("devops publish 查询放行、auth 拒绝；只读 agent 能 fetch tag 和
 	deny("git cat-file --filters abc123:a.go", gp);
 	deny("git remote add x https://e.com/x.git", gp);
 });
+
+test("查用法直接放行：--help 只跟子命令词，或者只有 --version；带取值、路径、deny 的子命令不算", async () => {
+	const { helpOnly } = await import("../server/agent/guard.ts");
+	assert.equal(helpOnly(["--help"]), true);
+	assert.equal(helpOnly(["issues", "--help"]), true);
+	assert.equal(helpOnly(["docs", "+update", "-h"]), true);
+	assert.equal(helpOnly(["--version"]), true);
+	assert.equal(helpOnly(["issues"]), false);
+	assert.equal(helpOnly(["delete", "--id", "1", "--help"]), false);
+	assert.equal(helpOnly(["run", "--config=/tmp/x.json", "--help"]), false);
+	assert.equal(helpOnly(["--version", "push"]), false);
+});
+
+test("登记过的命令：--help 放行，deny 的子命令带 --help 也拒绝，没登记的照常审批", () => {
+	const g = new Guard({
+		roots: [],
+		bash: ["foo"],
+		skillsDir: "/x",
+		rules: { foo: { argv0: ["foo"], read: ["list"], deny: ["auth"] } },
+	});
+	const v = (command: string) => g.verdict("bash", { command }, "/").kind;
+	assert.equal(v("foo --help"), "allow");
+	assert.equal(v("foo info -h"), "allow");
+	assert.equal(v("foo --version"), "allow");
+	assert.equal(v("foo auth --help"), "deny");
+	assert.equal(v("foo info GD-1"), "approve");
+});

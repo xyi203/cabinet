@@ -22,12 +22,14 @@ interface NumField {
 	put: (r: RouteRules, v: number) => void;
 }
 
-type Key = "reopen" | "window" | "delay" | "check" | "quiet" | "maxWait" | "follow" | "patrol";
+type Key = "reopen" | "window" | "delay" | "check" | "p2p" | "deep" | "quiet" | "maxWait" | "follow" | "patrol";
 const FIELDS: Record<Key, NumField> = {
 	reopen: { unit: "天", scale: 86400, min: 0, max: 30, get: (r) => r.reopen, put: (r, v) => void (r.reopen = v) },
 	window: { unit: "分钟", scale: 60, min: 0, max: 60, get: (r) => r.yiActive.window, put: (r, v) => void (r.yiActive.window = v) },
 	delay: { unit: "秒", scale: 1, min: 0, max: 600, int: true, get: (r) => r.yiActive.delay, put: (r, v) => void (r.yiActive.delay = v) },
 	check: { unit: "秒", scale: 1, min: 1, max: 60, int: true, get: (r) => r.yiActive.check, put: (r, v) => void (r.yiActive.check = v) },
+	p2p: { unit: "秒", scale: 1, min: 0, max: 1800, int: true, get: (r) => r.yiActive.p2p, put: (r, v) => void (r.yiActive.p2p = v) },
+	deep: { unit: "分钟", scale: 60, min: 0, max: 60, get: (r) => r.yiActive.deep, put: (r, v) => void (r.yiActive.deep = v) },
 	quiet: { unit: "秒", scale: 1, min: 10, max: 3600, int: true, get: (r) => r.alert.quiet, put: (r, v) => void (r.alert.quiet = v) },
 	maxWait: { unit: "分钟", scale: 60, min: 1, max: 120, get: (r) => r.alert.maxWait, put: (r, v) => void (r.alert.maxWait = v) },
 	follow: { unit: "小时", scale: 3600, min: 0, max: 24, get: (r) => r.alert.follow, put: (r, v) => void (r.alert.follow = v) },
@@ -87,6 +89,8 @@ const same = (a: RouteRules, b: RouteRules) =>
 	a.yiActive.window === b.yiActive.window &&
 	a.yiActive.delay === b.yiActive.delay &&
 	a.yiActive.check === b.yiActive.check &&
+	a.yiActive.p2p === b.yiActive.p2p &&
+	a.yiActive.deep === b.yiActive.deep &&
 	a.alert.quiet === b.alert.quiet &&
 	a.alert.maxWait === b.alert.maxWait &&
 	a.alert.follow === b.alert.follow &&
@@ -208,6 +212,11 @@ export function RouteRulesPage() {
 				{num("window", "怎样算正在聊天", "你在这段时间内，在同一个聊天里说过话。")}
 				{num("delay", "最多等多久", "填 0 表示不等，直接起草。")}
 				{num("check", "检查间隔", "等的时候，每隔这么久看一次你回了没有。")}
+			</Section>
+
+			<Section title="私聊" desc="私聊大多是你自己回，草稿常常还没用上就作废了，所以不管你在不在聊，都先等一会儿。">
+				{num("p2p", "起草前先等", "从消息到达算起，你在这段时间里回了就不起草。填 0 表示不等。")}
+				{num("deep", "要查资料的再等", "分诊判断要查日志、数据库才能回的（更贵），从消息到达算起等到这么久再起草。填 0 表示不另外等。")}
 			</Section>
 
 			<Section title="告警" desc="群里机器人 @你 的消息算作告警。同一个群的告警攒成一批，交给助手一起分析。">

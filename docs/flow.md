@@ -46,7 +46,7 @@
 | 5 攒批 | 这个来源配置了攒批（告警按群；同一人连发几条）                                                  | 等收口后合成一个 Task                           |
 | 6 分诊 | 先规则（MR → mr 档；cron、看板、webhook 按配置），再 luna 判档位                                | 新 Task(todo)，带 title、worker、tier、priority |
 
-Yi 正在这个聊天里聊（现在的 `waitIfYiActive`）：Task 照建，带一个「最早开始时间」，排队里显示「等你先回」，可以点「立即处理」。
+Yi 正在这个聊天里聊（现在的 `waitBeforeDraft`，私聊另外总要先等 `yiActive.p2p` 秒、deep 档等到 `yiActive.deep` 秒）：Task 照建，带一个「最早开始时间」，排队里显示「等你先回」，可以点「立即处理」。
 
 ## 4. Task 状态
 

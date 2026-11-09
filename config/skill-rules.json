@@ -208,7 +208,8 @@
 			"url decode",
 			"workflow get-node",
 			"relation list",
-			"mywork todo"
+			"mywork todo",
+			"auth status"
 		]
 	},
 	"lark-cli": {
