@@ -118,6 +118,14 @@ function draftText(source: Source, kind: Kind, body: string, note: string, repor
 }
 
 /** 把草稿私聊给 Yi（一张可以直接操作的卡片），草稿 id 就是这条私聊的消息 id；replaces 是被改写掉的上一版 */
+/**
+ * 不私聊、只上看板的草稿：表情回复、建议不回（没有评审报告的）；建议不回在工作台「今天完成」里能翻到（docs/flow.md §6）。
+ * Yi 主动要求改写的结果总要私聊回给他；MR 预审即使不回也要私聊：评审报告和 approve / 发评论的按钮在卡片上
+ */
+export function quietDraft(d: { replaces?: string; report: string; kind: string; noReply: boolean }): boolean {
+	return !d.replaces && !d.report && (d.kind === "reaction" || d.noReply);
+}
+
 export async function pushDraft(source: Source, draft: string, replaces?: string): Promise<string> {
 	const { body: rawBody, note: rawNote, report, comments } = splitNote(draft);
 	const mr = draftMrs([{ id: "", routeId: source.routeId ?? null }]).get("");
@@ -143,10 +151,7 @@ export async function pushDraft(source: Source, draft: string, replaces?: string
 		status: noReply ? "noreply" : "pending",
 		created: now(),
 	};
-	// 表情回复的草稿（没有评审报告的）不私聊打扰 Yi，只上看板（「待你处理」）；Yi 主动要求改写的结果总要私聊回给他。
-	// 建议不回复的照样私聊：Yi 要确认一下是不是真的不用回
-	// MR 预审即使回个表情也要私聊：评审报告和 approve / 发评论的按钮在卡片上
-	const quiet = !replaces && kind === "reaction" && !report;
+	const quiet = quietDraft({ replaces, report, kind, noReply });
 	let dmId: string;
 	let isCard = !quiet;
 	// 带时间后缀：同一条消息改写后又是表情时 id 不能撞上被替换的那条

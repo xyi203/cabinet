@@ -9,7 +9,7 @@ import { PATROL_PAUSE_AT } from "./config.ts";
 import { fiveHourUsed } from "./quota.ts";
 import { db, schema } from "./db/index.ts";
 import type { Schedule } from "./db/schema.ts";
-import { dispatch, getDevTask } from "./dev.ts";
+import { NO_CHANGE, dispatch, getDevTask } from "./dev.ts";
 import { DraftError } from "./drafts/store.ts";
 import { decide, receive } from "./pipeline.ts";
 import { log, now } from "./util.ts";
@@ -178,7 +178,9 @@ export async function fire(s: Schedule, at = now(), manual = false): Promise<str
 	const request = [
 		`[定时任务「${s.name}」] ${manual ? "Yi 手动触发" : `计划时间 ${when}`}（cron \`${s.cron}\`）。这不是有人在等你回复，结论直接写给 Yi。`,
 		s.prompt,
-		prev ? `上一次运行是 ${prev.id}：可以用 lookup ${prev.id} 看上次的结论，这次只说变化；没有变化就一句话说明。` : "",
+		prev
+			? `上一次运行是 ${prev.id}：可以用 lookup ${prev.id} 看上次的结论，这次只说变化；和上次比没有变化时，第一行只写「${NO_CHANGE}」（之后可以跟一句说明），这一轮就直接归档、不打扰 Yi。`
+			: "",
 	]
 		.filter(Boolean)
 		.join("\n\n");

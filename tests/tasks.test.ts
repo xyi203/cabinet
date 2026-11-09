@@ -133,3 +133,17 @@ test("看板：每件事带时间线和产出；草稿转任务后同一件事�
 	assert.equal(v.status, "done");
 	assert.equal(v.result, "已提 MR");
 });
+
+test("推送规则：建议不回和表情不私聊，MR 预审和改写总要私聊；定时没变化、巡检正常直接归档", async () => {
+	const { quietDraft } = await import("../server/drafts/store.ts");
+	const { quietRound } = await import("../server/dev.ts");
+	assert.equal(quietDraft({ report: "", kind: "text", noReply: true }), true, "建议不回");
+	assert.equal(quietDraft({ report: "", kind: "reaction", noReply: false }), true, "表情");
+	assert.equal(quietDraft({ report: "", kind: "text", noReply: false }), false, "要回的草稿照常私聊");
+	assert.equal(quietDraft({ report: "✅ 可以通过", kind: "text", noReply: true }), false, "MR 预审带评审报告");
+	assert.equal(quietDraft({ replaces: "d1", report: "", kind: "text", noReply: true }), false, "Yi 要求改写的结果");
+	assert.equal(quietRound({ patrol: true }, "本轮巡查正常\n内存平稳"), true);
+	assert.equal(quietRound({ patrol: false }, "  本轮无变化，还是那 3 个 MR"), true);
+	assert.equal(quietRound({ patrol: false }, "新增 1 个 MR 等你看"), false);
+	assert.equal(quietRound({ patrol: false }, "本轮巡查正常"), false, "不是巡检的不认巡检那句");
+});

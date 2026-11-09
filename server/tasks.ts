@@ -10,7 +10,7 @@ import { describe, learnOf, learnText, pendingApprovals } from "./approvals.ts";
 import { draftLabel } from "./drafts/format.ts";
 import { inflight } from "./drafts/store.ts";
 import { draftMrs } from "./drafts/mr.ts";
-import { PATROL_OK, devTasksList } from "./dev.ts";
+import { NO_CHANGE, PATROL_OK, devTasksList } from "./dev.ts";
 import { listStories } from "./stories.ts";
 import { TASK_TIER, loadAgents, withTier } from "./agent/router.ts";
 import { recentRecords } from "./records.ts";
@@ -135,6 +135,7 @@ function view(
 	if (row.status === "done" || row.status === "cancelled") {
 		if (draft?.status === "noreply") result = "建议不回";
 		else if (dev?.patrol && dev.summary.includes(PATROL_OK)) result = "本轮正常";
+		else if (dev?.summary.trimStart().startsWith(NO_CHANGE)) result = "无变化";
 		else if (lastResult) result = OUTCOME[lastResult.outcome] ?? lastResult.outcome;
 	}
 	// 失败了：按被回复的消息找到那条失败记录，重试走原来的 retryTask

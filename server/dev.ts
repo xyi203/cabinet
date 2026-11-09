@@ -113,6 +113,14 @@ export interface DispatchInput {
 
 /** 巡检这一轮没发现异常时回复的第一行：看到它就直接归档、不私聊 */
 export const PATROL_OK = "本轮巡查正常";
+/** 定时任务和上一次比没有变化时回复的第一行：看到它就直接完成、不私聊（docs/flow.md §6） */
+export const NO_CHANGE = "本轮无变化";
+
+/** 巡检没发现异常、定时任务和上次比没变化：这一轮直接归档，不进「待你处理」也不私聊（巡检一天几十轮） */
+export function quietRound(task: Pick<DevTask, "patrol">, text: string): boolean {
+	const head = text.trimStart();
+	return (task.patrol && head.startsWith(PATROL_OK)) || head.startsWith(NO_CHANGE);
+}
 
 /** 校验新建时选的模型和思考强度 */
 function checkModel(model?: string, thinking?: string) {
@@ -383,8 +391,7 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 					cost: prev.cost + usage.cost,
 				}
 			: usage;
-		// 巡检没发现异常：直接归档，不进「待你处理」也不私聊（一天几十轮）
-		const quiet = task.patrol && text.trimStart().startsWith(PATROL_OK);
+		const quiet = quietRound(task, text);
 		update(id, { status: quiet ? "done" : "review", summary: text, session: sessionId, usage: total });
 		// 对话页的聊天 Yi 就在看板上看着，不私聊卡片
 		if (!quiet && !task.chat && (dev || base?.notify || task.notify || now() - started > 60)) void notify(id, `第 ${run} 轮完成`, text);

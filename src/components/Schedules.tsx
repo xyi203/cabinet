@@ -97,7 +97,7 @@ const when = (d: Date) => `${d.getMonth() + 1}-${d.getDate()} 周${WEEK[d.getDay
 function cellOf(t: TaskView): [string, string] {
 	if (t.status === "in_progress" || t.status === "todo") return ["r", "运行中"];
 	if (t.need === "retry") return ["f", "失败"];
-	if (t.result === "本轮正常") return ["n", "无变化"];
+	if (t.result === "本轮正常" || t.result === "无变化") return ["n", "无变化"];
 	return ["c", t.status === "in_review" ? "有结论，等你看" : "有结论"];
 }
 
