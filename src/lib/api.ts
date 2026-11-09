@@ -398,6 +398,21 @@ export interface Schedule {
 	patrol?: boolean;
 }
 export const fetchSchedules = () => getJson<{ items: Schedule[] }>("/api/schedules").then((d) => d.items);
+/** 定时任务的一次运行（server/schedules.ts scheduleRuns） */
+export interface ScheduleRun {
+	at: number;
+	outcome: "conclusion" | "quiet" | "failed" | "running" | "skipped";
+	label: string;
+	brief: string;
+	detail: string;
+	taskId: string | null;
+	devId: string | null;
+	waiting: boolean;
+	cost: number | null;
+	seconds: number | null;
+}
+export const fetchScheduleRuns = (id: string) =>
+	getJson<{ items: ScheduleRun[] }>(`/api/schedules/${encodeURIComponent(id)}/runs`).then((d) => d.items);
 export const saveSchedule = (s: Partial<Schedule> & Pick<Schedule, "name" | "cron" | "agent" | "prompt">) =>
 	post<{ item: Schedule }>("/api/schedules", s).then((d) => d.item);
 export const runSchedule = (id: string) => post<{ task: string }>(`/api/schedules/${id}/run`).then((d) => d.task);

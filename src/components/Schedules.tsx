@@ -6,14 +6,19 @@ import {
 	type AgentStat,
 	type Schedule,
 	type Story,
+	type ScheduleRun,
 	type TaskView,
 	deleteSchedule,
+	fetchScheduleRuns,
 	fetchSchedules,
 	runSchedule,
 	saveSchedule,
 } from "../lib/api";
-import { AGENT_NAME, time, waitingOn, when } from "../lib/format";
+import { AGENT_NAME, hm, money, time, waitingOn, when } from "../lib/format";
 import { confirmDialog } from "./Confirm";
+import { Drawer } from "./Drawer";
+import { Markdown } from "./Markdown";
+import { dur } from "./ui";
 import { toast } from "./Toast";
 
 type Edit = Pick<Schedule, "name" | "agent" | "prompt"> & { id: string; at: string };
@@ -128,18 +133,28 @@ export function Schedules({
 	items,
 	now,
 	onOpenTask,
-	onOpenDev,
 	onOpenStory,
+	openId,
+	onOpenSched,
 }: {
 	agents: AgentStat[];
 	stories: Story[];
 	items: TaskView[];
 	/** 看板状态里的当前时间（秒）：判断到期、预览下次运行 */
 	now: number;
-	onOpenTask: (taskId: string) => void;
-	onOpenDev: (devId: string) => void;
+	/** 打开工作台里的那件事；fromSched：从哪个定时任务的详情点进来，能返回 */
+	onOpenTask: (taskId: string, fromSched?: string) => void;
 	onOpenStory: (storyId: string) => void;
+	/** 打开详情的定时任务（URL 里的 sched） */
+	openId?: string;
+	onOpenSched: (id: string | null) => void;
 }) {
+	// 从结果格子点进来时默认展开那一次
+	const [focusTask, setFocusTask] = useState<string | undefined>();
+	const openSched = (id: string, task?: string) => {
+		setFocusTask(task);
+		onOpenSched(id);
+	};
 	const qc = useQueryClient();
 	const { data: list } = useQuery({ queryKey: ["schedules"], queryFn: fetchSchedules, refetchInterval: 30_000 });
 	const [edit, setEdit] = useState<Edit | null>(null);
@@ -251,12 +266,26 @@ export function Schedules({
 		const p = s.patrol ? patrolOf(s.id) : undefined;
 		const done = ended(s);
 		return (
-			<div key={s.id} className="srow">
+			<div
+				key={s.id}
+				className="srow click"
+				tabIndex={0}
+				aria-label={`${s.name}：查看执行记录`}
+				onClick={() => openSched(s.id)}
+				onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && openSched(s.id)}
+			>
 				<div className="tb">
 					<div className="nm">
 						<span className="title">{s.name}</span>
 						{p && (
-							<button className="story" title={p.story.title} onClick={() => onOpenStory(p.story.id)}>
+							<button
+								className="story"
+								title={p.story.title}
+								onClick={(e) => {
+									e.stopPropagation();
+									onOpenStory(p.story.id);
+								}}
+							>
 								查看需求
 							</button>
 						)}
@@ -278,29 +307,33 @@ export function Schedules({
 							<span className="sq" aria-label={`最近 ${Math.min(8, runs.length)} 次结果`}>
 								{runs.slice(-8).map((t) => {
 									const [c, label] = cellOf(t);
-									return <i key={t.id} className={c} title={`${time(t.created)} ${label}`} onClick={() => onOpenTask(t.id)} />;
+									return (
+										<i
+											key={t.id}
+											className={c}
+											title={`${time(t.created)} ${label}`}
+											onClick={(e) => {
+												e.stopPropagation();
+												openSched(s.id, t.id);
+											}}
+										/>
+									);
 								})}
 							</span>
 						)}
 						{last ? (
-							<button className="link num" onClick={() => onOpenTask(last.id)}>
+							<span className="num">
 								上次 {when(last.created, now)} {cellOf(last)[1]}
-							</button>
-						) : s.lastTask ? (
-							<button className="link num" onClick={() => onOpenDev(s.lastTask!)}>
-								{s.lastRun ? `上次 ${when(s.lastRun, now)}` : "查看上次运行"}
-							</button>
+							</span>
+						) : s.lastRun ? (
+							<span className="num">上次 {when(s.lastRun, now)}</span>
 						) : (
 							<span>还没运行过</span>
 						)}
 					</div>
-					<details className="prompt">
-						<summary>提示词</summary>
-						<p>{s.prompt}</p>
-					</details>
 				</div>
-				<div className="acts">
-					{s.enabled && btn("运行一次", () => act(() => runSchedule(s.id).then(onOpenDev), "已开始运行"))}
+				<div className="acts" onClick={(e) => e.stopPropagation()}>
+					{s.enabled && btn("运行一次", () => act(() => runSchedule(s.id).then(() => openSched(s.id)), "已开始运行"))}
 					{btn(
 						s.enabled ? "暂停" : done ? "重新启用" : "恢复",
 						() => act(() => saveSchedule({ ...s, enabled: !s.enabled }), s.enabled ? "已暂停" : done ? "已重新启用" : "已恢复"),
@@ -414,7 +447,7 @@ export function Schedules({
 						<i className="r" />
 						运行中
 					</span>
-					<span>点格子查看那次运行</span>
+					<span>点一行查看全部执行记录</span>
 				</div>
 			)}
 			{list && !list.length && <p className="m-0 text-[14px] text-muted">还没有定时任务</p>}
@@ -438,6 +471,199 @@ export function Schedules({
 					</section>
 				),
 			)}
+			{openId &&
+				(() => {
+					const s = all.find((x) => x.id === openId);
+					if (!s) return null;
+					return (
+						<ScheduleDrawer
+							key={s.id}
+							s={s}
+							now={now}
+							items={items}
+							focusTask={focusTask}
+							busy={busy}
+							onClose={() => onOpenSched(null)}
+							onOpenTask={(id) => onOpenTask(id, s.id)}
+							onRun={() => act(() => runSchedule(s.id), "已开始运行，结果会出现在执行记录里")}
+							onToggle={() => act(() => saveSchedule({ ...s, enabled: !s.enabled }), s.enabled ? "已暂停" : "已恢复")}
+							onEdit={() => {
+								onOpenSched(null);
+								setEdit({ id: s.id, name: s.name, at: s.cron, agent: s.agent, prompt: s.prompt });
+							}}
+						/>
+					);
+				})()}
 		</>
+	);
+}
+
+const RUN_PILL: Record<ScheduleRun["outcome"], string> = {
+	conclusion: "p-read",
+	quiet: "p-q",
+	failed: "p-fail",
+	running: "p-run",
+	skipped: "p-off",
+};
+const RUN_FILTERS: Array<[string, ScheduleRun["outcome"] | null]> = [
+	["全部", null],
+	["有结论", "conclusion"],
+	["失败", "failed"],
+	["跳过", "skipped"],
+];
+
+/**
+ * 一个定时任务的详情：什么时候跑、做什么，以及全部执行记录（新的在前，按天分组）。
+ * 每条点开就地看完整结论或报错；还在工作台里的，能跳到那件事的详情（能返回这里）
+ */
+function ScheduleDrawer({
+	s,
+	now,
+	items,
+	focusTask,
+	busy,
+	onClose,
+	onOpenTask,
+	onRun,
+	onToggle,
+	onEdit,
+}: {
+	s: Schedule;
+	now: number;
+	items: TaskView[];
+	/** 从结果格子点进来的那一次：默认展开 */
+	focusTask?: string;
+	busy: boolean;
+	onClose: () => void;
+	onOpenTask: (taskId: string) => void;
+	onRun: () => void;
+	onToggle: () => void;
+	onEdit: () => void;
+}) {
+	const { data: runs, isLoading } = useQuery({
+		queryKey: ["schedule-runs", s.id, s.lastRun],
+		queryFn: () => fetchScheduleRuns(s.id),
+		refetchInterval: 30_000,
+		placeholderData: (prev) => prev,
+	});
+	const [filter, setFilter] = useState<ScheduleRun["outcome"] | null>(null);
+	const [expanded, setExpanded] = useState<number | null>(null);
+	const focusRun = focusTask ? runs?.find((r) => r.taskId === focusTask)?.at : undefined;
+	const openAt = expanded ?? focusRun ?? null;
+	const count = (o: ScheduleRun["outcome"]) => runs?.filter((r) => r.outcome === o).length ?? 0;
+	const shown = (runs ?? []).filter((r) => !filter || r.outcome === filter);
+	const inBoard = new Set(items.map((t) => t.id));
+	// 按天分组：今天 / 昨天 / 11月7日
+	const days: Array<[string, ScheduleRun[]]> = [];
+	for (const r of shown) {
+		const d = when(r.at, now).split(" ")[0];
+		if (days.at(-1)?.[0] === d) days.at(-1)![1].push(r);
+		else days.push([d, [r]]);
+	}
+	const total = runs?.length ?? 0;
+	const parts = (
+		[
+			["有结论", count("conclusion")],
+			["正常或无变化", count("quiet")],
+			["失败", count("failed")],
+			["跳过", count("skipped")],
+		] as Array<[string, number]>
+	).filter(([, n]) => n > 0);
+	return (
+		<Drawer
+			title={s.name}
+			onClose={onClose}
+			actions={
+				<>
+					{s.enabled && (
+						<button className="btn primary" disabled={busy} onClick={onRun}>
+							运行一次
+						</button>
+					)}
+					<button className="btn" disabled={busy} onClick={onToggle}>
+						{s.enabled ? "暂停" : "恢复"}
+					</button>
+					<button className="btn" disabled={busy} onClick={onEdit}>
+						编辑
+					</button>
+				</>
+			}
+		>
+			<div className="meta">
+				<Cron cron={s.cron} />
+				{s.agent !== "assistant" && <span>交给{AGENT_NAME[s.agent] ?? s.agent}</span>}
+				{s.enabled && s.nextRun ? <span className="num">下次 {when(s.nextRun, now)}</span> : <span>已暂停</span>}
+				{s.until != null && s.enabled && <span className="num">{when(s.until, now)} 自动停止</span>}
+			</div>
+			<details className="ctxwrap">
+				<summary>提示词</summary>
+				<div className="body prompt-body">{s.prompt}</div>
+			</details>
+			<div className="runs-h">
+				<h3>执行记录</h3>
+				{total > 0 && (
+					<span className="meta num">
+						{total >= 200 ? "最近 200 次" : `共 ${total} 次`}：{parts.map(([l, n]) => `${l} ${n} 次`).join("，")}
+					</span>
+				)}
+			</div>
+			{total > 0 && RUN_FILTERS.some(([, o]) => o && count(o) > 0) && (
+				<div className="chips">
+					{RUN_FILTERS.filter(([, o]) => !o || count(o) > 0).map(([l, o]) => (
+						<button key={l} className={`chip${filter === o ? " on" : ""}`} aria-pressed={filter === o} onClick={() => setFilter(o)}>
+							{l}
+							{o && <span className="num"> {count(o)}</span>}
+						</button>
+					))}
+				</div>
+			)}
+			{isLoading && !runs ? (
+				<p className="calm">加载中…</p>
+			) : !total ? (
+				<p className="calm">还没运行过。到点后每次运行都会记在这里。</p>
+			) : (
+				days.map(([d, rs]) => (
+					<section key={d} className="runday">
+						<div className="label">{d}</div>
+						<ul className="runlist">
+							{rs.map((r) => {
+								const open = openAt === r.at;
+								const expandable = Boolean(r.detail) || (r.taskId != null && inBoard.has(r.taskId));
+								return (
+									<li key={r.at} className={open ? "open" : undefined}>
+										<button
+											className="runhead"
+											aria-expanded={expandable ? open : undefined}
+											disabled={!expandable}
+											onClick={() => setExpanded(open ? -1 : r.at)}
+										>
+											<span className="num t">{hm(r.at)}</span>
+											<span className={`pill ${RUN_PILL[r.outcome]}`}>{r.waiting ? "待查看" : r.label}</span>
+											{/* 展开后下面就是完整内容，这里不再重复摘要 */}
+											<span className="b clamp">{open && r.detail ? "" : r.brief}</span>
+											<span className="num m">
+												{[r.seconds != null ? dur(r.seconds) : "", r.cost != null ? money(r.cost) : ""].filter(Boolean).join("，")}
+											</span>
+										</button>
+										{open && (
+											<div className="rundetail">
+												{r.outcome === "failed" ? <div className="err">{r.detail}</div> : r.detail && <Markdown text={r.detail} />}
+												{r.taskId && inBoard.has(r.taskId) && (
+													<div className="oa">
+														<button className="btn sm" onClick={() => onOpenTask(r.taskId!)}>
+															查看详情
+														</button>
+													</div>
+												)}
+											</div>
+										)}
+									</li>
+								);
+							})}
+						</ul>
+					</section>
+				))
+			)}
+		</Drawer>
 	);
 }

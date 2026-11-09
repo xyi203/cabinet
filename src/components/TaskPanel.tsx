@@ -120,14 +120,16 @@ export function TaskPanel({
 	onCron,
 	onMemory,
 	onBack,
+	backLabel = "返回需求",
 }: {
 	t: TaskView;
 	s: State;
 	onClose: () => void;
 	onStory: (id: string) => void;
-	onCron: () => void;
+	onCron: (scheduleId?: string) => void;
 	onMemory: () => void;
 	onBack?: () => void;
+	backLabel?: string;
 }) {
 	const drafts = t.drafts.map((id) => s.drafts.find((d) => d.id === id)).filter((d): d is Draft => d != null);
 	const devs = t.devTasks.map((id) => s.devTasks.find((d) => d.id === id)).filter((d) => d != null);
@@ -203,7 +205,7 @@ export function TaskPanel({
 	items.sort((a, b) => a.at - b.at);
 	const story = t.storyId ? s.stories.find((x) => x.id === t.storyId) : undefined;
 	return (
-		<Drawer title={titleOf(t)} onClose={onClose} onBack={onBack} backLabel="返回需求">
+		<Drawer title={titleOf(t)} onClose={onClose} onBack={onBack} backLabel={backLabel}>
 			<div className="taskhead">
 				<Pill t={t} />
 				<div className="props">
@@ -227,7 +229,7 @@ export function TaskPanel({
 					)}
 					{t.scheduleId && (
 						<span>
-							<button className="link" onClick={onCron}>
+							<button className="link" onClick={() => onCron(t.scheduleId ?? undefined)}>
 								查看定时任务
 							</button>
 						</span>

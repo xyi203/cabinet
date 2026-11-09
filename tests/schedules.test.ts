@@ -66,3 +66,66 @@ test("巡检定时任务：记下模型和到期时间，过期后到点不跑�
 	assert.equal(after.nextRun, null);
 	assert.equal(after.lastTask, null);
 });
+
+test("执行记录：顺着 cron trigger 找到每次运行，新的在前；跳过、无变化、有结论、失败分得开", async () => {
+	const { schema, db } = await import("../server/db/index.ts");
+	const { receive, decide } = await import("../server/pipeline.ts");
+	const { scheduleRuns } = await import("../server/schedules.ts");
+	const s = saveSchedule({ name: "早报", cron: "0 9 * * *", agent: "assistant", prompt: "看看昨天的告警" });
+	const dev = (id: string, status: string, summary: string, created: number, extra: Record<string, unknown> = {}) =>
+		db()
+			.insert(schema.devTasks)
+			.values({
+				id,
+				agent: "assistant",
+				title: "定时 · 早报",
+				repo: "",
+				base: "",
+				branch: "",
+				worktree: "",
+				status,
+				summary,
+				created,
+				updated: created + 42,
+				...extra,
+			})
+			.run();
+	const run = (t: number, route: Parameters<typeof decide>[1]) => {
+		const tid = receive({
+			channel: "cron",
+			externalId: `${s.id}:${t}`,
+			thread: `cron:${s.id}`,
+			actorName: s.name,
+			owner: true,
+			text: s.prompt,
+			at: t,
+		});
+		decide([tid], route);
+	};
+	dev("dev-sr-1", "done", "本轮无变化，告警都已恢复", 1000);
+	dev("dev-sr-2", "review", "## 昨天 3 条告警\n**cart** 5xx 上升", 2000, { usage: { input: 1, output: 1, cacheRead: 0, cost: 0.123 } });
+	dev("dev-sr-3", "failed", "", 3000, { error: "模型额度用完了\n详细堆栈" });
+	run(1000, { rule: "定时任务：早报", actionKind: "dev", actionId: "dev-sr-1" });
+	run(2000, { rule: "定时任务：早报", actionKind: "dev", actionId: "dev-sr-2" });
+	run(3000, { rule: "定时任务：早报", actionKind: "dev", actionId: "dev-sr-3" });
+	run(4000, { rule: "跳过：上一次（dev-sr-3）还在跑", actionKind: "none" });
+	const runs = scheduleRuns(s.id);
+	assert.deepEqual(
+		runs.map((r) => [r.at, r.outcome, r.brief]),
+		[
+			[4000, "skipped", "上一次（dev-sr-3）还在跑"],
+			[3000, "failed", "模型额度用完了"],
+			[2000, "conclusion", "昨天 3 条告警"],
+			[1000, "quiet", "告警都已恢复"],
+		],
+	);
+	assert.deepEqual(
+		runs.map((r) => r.label),
+		["跳过", "失败", "有结论", "无变化"],
+	);
+	assert.equal(runs[1].detail, "模型额度用完了\n详细堆栈");
+	assert.equal(runs[2].cost, 0.123);
+	assert.equal(runs[2].seconds, 42);
+	assert.equal(runs[0].taskId, null);
+	assert.equal(scheduleRuns("cron-0").length, 0);
+});

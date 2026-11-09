@@ -2,13 +2,13 @@
 // - cron 是 5 段（分 时 日 月 周），本机时区；支持 *、数字、a-b、a,b、*/n、a-b/n；日和周都限定时按任一满足算（同 Vixie cron）
 // - 上一次的任务还在跑就跳过这一次；停机期间错过的只补跑一次
 // - 提示里带上上一次任务的 ID，agent 可以用 lookup 查上次的结论，只说变化
-import { eq, like } from "drizzle-orm";
+import { desc, eq, inArray, like } from "drizzle-orm";
 import { loadAgents } from "./agent/router.ts";
 import { changed } from "./bus.ts";
 import { cronSkip } from "./router/board.ts";
 import { db, schema } from "./db/index.ts";
 import type { Schedule } from "./db/schema.ts";
-import { NO_CHANGE, dispatch, getDevTask } from "./dev.ts";
+import { NO_CHANGE, PATROL_OK, dispatch, getDevTask } from "./dev.ts";
 import { DraftError } from "./drafts/store.ts";
 import { decide, receive } from "./pipeline.ts";
 import { log, now } from "./util.ts";
@@ -202,6 +202,98 @@ export async function fire(s: Schedule, at = now(), manual = false): Promise<str
 	changed();
 	log("定时任务开跑", s.id, task.id);
 	return task.id;
+}
+
+/** 一次运行在执行记录里的结果：conclusion 有结论 / quiet 正常或无变化 / failed 失败 / running 进行中 / skipped 跳过 */
+export type RunOutcome = "conclusion" | "quiet" | "failed" | "running" | "skipped";
+
+export interface ScheduleRun {
+	/** 计划时间（手动运行时是点的时间） */
+	at: number;
+	outcome: RunOutcome;
+	/** 状态的叫法：有结论 / 无变化 / 正常 / 失败 / 进行中 / 跳过 */
+	label: string;
+	/** 一句话：结论第一行、失败原因或跳过原因 */
+	brief: string;
+	/** 完整结论（Markdown）或完整报错，展开时看；太长的截断 */
+	detail: string;
+	/** 工作台里的那件事、助手任务；跳过的没有 */
+	taskId: string | null;
+	devId: string | null;
+	/** 这件事还等你处理（看结论、重试） */
+	waiting: boolean;
+	cost: number | null;
+	/** 从开始到结束的时长（秒）；还在跑的为空 */
+	seconds: number | null;
+}
+
+/**
+ * 一个定时任务的执行记录，新的在前。每次到点（或手动运行）都记了一条 cron trigger（thread = cron:<id>），
+ * 顺着它的分派找到工作台里的那件事和助手任务；跳过的那次只有分派规则「跳过：原因」
+ */
+const DETAIL_MAX = 8000;
+/** 列表里的一句话：去掉 Markdown 记号，以及和状态标签重复的「本轮无变化」「本轮巡查正常」开头 */
+const plain = (line: string) =>
+	line
+		.replace(/^#+\s*/, "")
+		.replace(/\*\*|`/g, "")
+		.replace(new RegExp(`^(${NO_CHANGE}|${PATROL_OK})[。.，,:：；;\\s]*`), "")
+		.trim();
+
+export function scheduleRuns(id: string, limit = 200): ScheduleRun[] {
+	const trig = db()
+		.select({ at: schema.triggers.at, routeId: schema.triggers.routeId })
+		.from(schema.triggers)
+		.where(eq(schema.triggers.thread, `cron:${id}`))
+		.orderBy(desc(schema.triggers.at))
+		.limit(limit)
+		.all();
+	const routeIds = trig.map((t) => t.routeId).filter((x): x is number => x != null);
+	const routes = routeIds.length ? db().select().from(schema.routes).where(inArray(schema.routes.id, routeIds)).all() : [];
+	const byRoute = new Map(routes.map((r) => [r.id, r]));
+	const devIds = routes.filter((r) => r.actionKind === "dev" && r.actionId).map((r) => r.actionId!);
+	const devs = new Map(
+		(devIds.length ? db().select().from(schema.devTasks).where(inArray(schema.devTasks.id, devIds)).all() : []).map((d) => [d.id, d]),
+	);
+	const taskIds = routes.map((r) => r.taskId).filter((x): x is string => Boolean(x));
+	const tasks = new Map(
+		(taskIds.length ? db().select().from(schema.tasks).where(inArray(schema.tasks.id, taskIds)).all() : []).map((t) => [t.id, t]),
+	);
+	return trig.map((t) => {
+		const r = t.routeId != null ? byRoute.get(t.routeId) : undefined;
+		const dev = r?.actionKind === "dev" && r.actionId ? devs.get(r.actionId) : undefined;
+		const task = r?.taskId ? tasks.get(r.taskId) : undefined;
+		const base = { at: t.at, taskId: task?.id ?? null, devId: dev?.id ?? null, waiting: false, cost: null, seconds: null, detail: "" };
+		if (!r) return { ...base, outcome: "running" as const, label: "进行中", brief: "等待分派" };
+		if (!dev) return { ...base, outcome: "skipped" as const, label: "跳过", brief: r.rule.replace(/^跳过：/, "") || "这次没有运行" };
+		const summary = dev.summary.trim();
+		const first = summary.split("\n").find((l) => l.trim()) ?? "";
+		const running = dev.status === "running" || dev.status === "pushing";
+		const patrolOk = Boolean(dev.patrol) && summary.includes(PATROL_OK);
+		const outcome: RunOutcome = running
+			? "running"
+			: dev.status === "failed"
+				? "failed"
+				: patrolOk || summary.startsWith(NO_CHANGE)
+					? "quiet"
+					: "conclusion";
+		const LABEL = { running: "进行中", failed: "失败", quiet: patrolOk ? "正常" : "无变化", conclusion: "有结论", skipped: "跳过" };
+		const detail = outcome === "failed" ? (dev.error ?? "") : summary;
+		return {
+			...base,
+			outcome,
+			label: LABEL[outcome],
+			detail: detail.length > DETAIL_MAX ? `${detail.slice(0, DETAIL_MAX)}\n\n…（太长了，完整内容在任务详情里）` : detail,
+			brief:
+				outcome === "failed"
+					? (dev.error ?? "失败了").split("\n")[0]
+					: plain(first) || (patrolOk ? "一切正常" : outcome === "quiet" ? "和上次一样" : ""),
+			waiting: task?.status === "in_review" || task?.status === "blocked",
+			cost: dev.usage?.cost ?? null,
+			// 之后又追问过（不止一轮）时，开始到最后更新就不是这次运行的用时了，不给
+			seconds: running || dev.runs > 1 ? null : Math.max(0, dev.updated - dev.created),
+		};
+	});
 }
 
 export async function runNow(id: string) {

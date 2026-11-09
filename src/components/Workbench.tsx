@@ -15,7 +15,7 @@ export interface Nav {
 	onOpen: (id: string) => void;
 	onStory: (id: string) => void;
 	onMemory: () => void;
-	onCron: () => void;
+	onCron: (scheduleId?: string) => void;
 }
 
 /** 谁在做：默认的助手不写（几乎每行都是它），只标出开发助手、告警分析这类 */
@@ -143,7 +143,7 @@ function Group({
 }
 
 /** 今天还会运行的定时任务 */
-function Upcoming({ s, onCron }: { s: State; onCron: () => void }) {
+function Upcoming({ s, onCron }: { s: State; onCron: (id?: string) => void }) {
 	const { data } = useQuery({ queryKey: ["schedules"], queryFn: fetchSchedules, refetchInterval: 60_000 });
 	const n = new Date(s.now * 1000);
 	const end = new Date(n.getFullYear(), n.getMonth(), n.getDate(), 23, 59, 59).getTime() / 1000;
@@ -155,11 +155,11 @@ function Upcoming({ s, onCron }: { s: State; onCron: () => void }) {
 		<div className="upnext">
 			<span>{next.length ? "今天还会运行" : "今天没有要运行的定时任务了"}</span>
 			{next.map((x) => (
-				<span key={x.id}>
+				<button key={x.id} className="link up" onClick={() => onCron(x.id)}>
 					<b className="num">{hm(x.nextRun!)}</b> {x.name}
-				</span>
+				</button>
 			))}
-			<button className="link" onClick={onCron}>
+			<button className="link" onClick={() => onCron()}>
 				查看定时任务
 			</button>
 		</div>

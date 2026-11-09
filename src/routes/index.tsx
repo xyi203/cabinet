@@ -63,10 +63,11 @@ const HINTS: Record<View, string> = {
 
 export const Route = createFileRoute("/")({
 	component: Dashboard,
-	validateSearch: (search: Record<string, unknown>): { view?: View; story?: string; tab?: string } => ({
+	validateSearch: (search: Record<string, unknown>): { view?: View; story?: string; tab?: string; sched?: string } => ({
 		view: typeof search.view !== "string" ? undefined : search.view in TITLES ? (search.view as View) : ALIASES[search.view],
 		story: typeof search.story === "string" || typeof search.story === "number" ? String(search.story) : undefined,
 		tab: typeof search.tab === "string" ? search.tab : undefined,
+		sched: typeof search.sched === "string" ? search.sched : undefined,
 	}),
 });
 
@@ -95,14 +96,14 @@ function Dashboard() {
 	const search = Route.useSearch();
 	const view: View = search.view ?? "work";
 	const navigate = useNavigate();
-	// 打开的任务详情；backStory：从哪条需求点进来的，能返回
-	const [open, setOpen] = useState<{ id?: string; dev?: string; backStory?: string } | null>(null);
+	// 打开的任务详情；backStory / backCron：从哪条需求、哪个定时任务的执行记录点进来的，能返回
+	const [open, setOpen] = useState<{ id?: string; dev?: string; backStory?: string; backCron?: string } | null>(null);
 	const [storyReopen, setStoryReopen] = useState(0);
 	const [connected, setConnected] = useState(true);
 	const { data: state, error } = useQuery({ queryKey: ["state"], queryFn: fetchState, refetchInterval: connected ? 15_000 : 5_000 });
 	useLiveUpdates(useCallback((c: boolean) => setConnected(c), []));
 
-	const go = (v: View, extra: { story?: string; tab?: string } = {}) =>
+	const go = (v: View, extra: { story?: string; tab?: string; sched?: string } = {}) =>
 		void navigate({ to: "/", search: v === "work" ? {} : { view: v, ...extra } });
 	const tab = search.tab && (TAB_ALIASES[search.tab] ?? search.tab);
 	/** agent 任务 id → 它所在的那件事；不在工作台窗口里的（老任务、对话）直接开任务抽屉 */
@@ -121,9 +122,10 @@ function Dashboard() {
 			setOpen(null);
 			go("memory");
 		},
-		onCron: () => {
+		/** 去定时页；带 id 时直接打开那个定时任务的执行记录 */
+		onCron: (id?: string) => {
 			setOpen(null);
-			go("cron");
+			go("cron", id ? { sched: id } : {});
 		},
 	};
 	const back = open?.backStory
@@ -133,7 +135,14 @@ function Dashboard() {
 				setStoryReopen((n) => n + 1);
 				go("stories", { story: id });
 			}
-		: undefined;
+		: open?.backCron
+			? () => {
+					const id = open.backCron!;
+					setOpen(null);
+					go("cron", { sched: id });
+				}
+			: undefined;
+	const backLabel = open?.backCron ? "返回定时任务" : "返回需求";
 	const task = open?.id ? state?.items.find((x) => x.id === open.id) : undefined;
 	const dev = open?.dev ? state?.devTasks.find((x) => x.id === open.dev) : undefined;
 	const waiting = state?.items.filter(waitingOn).length ?? 0;
@@ -193,9 +202,13 @@ function Dashboard() {
 							stories={state.stories}
 							items={state.items}
 							now={state.now}
-							onOpenTask={nav.onOpen}
-							onOpenDev={(id) => openDev(id)}
+							onOpenTask={(id, fromSched) => {
+								setOpen({ id, backCron: fromSched });
+								if (fromSched) go("cron");
+							}}
 							onOpenStory={nav.onStory}
+							openId={search.sched}
+							onOpenSched={(id) => go("cron", id ? { sched: id } : {})}
 						/>
 					</>
 				)}
@@ -230,10 +243,11 @@ function Dashboard() {
 					onCron={nav.onCron}
 					onMemory={nav.onMemory}
 					onBack={back}
+					backLabel={backLabel}
 				/>
 			)}
 			{state && !task && dev && (
-				<DevDrawer key={dev.id} dev={dev as DevTask} onClose={() => setOpen(null)} onBack={back} backLabel="返回需求" />
+				<DevDrawer key={dev.id} dev={dev as DevTask} onClose={() => setOpen(null)} onBack={back} backLabel={backLabel} />
 			)}
 			<ToastHost />
 		</div>

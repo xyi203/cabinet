@@ -12,7 +12,7 @@ import { COMMON_EMOJI, DEV_ORIGIN, OAUTH_REDIRECT, PATHS, PORT } from "./config.
 import { applyDraftAction } from "./drafts/actions.ts";
 import { ApprovalError, decideApproval } from "./approvals.ts";
 import { lineage, recentLineage } from "./pipeline.ts";
-import { deleteSchedule, listSchedules, runNow, saveSchedule } from "./schedules.ts";
+import { deleteSchedule, listSchedules, runNow, saveSchedule, scheduleRuns } from "./schedules.ts";
 import { RANGES, type Range, stats } from "./stats.ts";
 import { dispatchState } from "./dispatch.ts";
 import { listPrompts, promptHistory, promptVersion, readPrompt, savePrompt } from "./prompts.ts";
@@ -157,6 +157,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		}
 		if (p === "/api/repos") return send(res, 200, { repos: listRepos() });
 		if (p === "/api/schedules") return send(res, 200, { items: listSchedules() });
+		const runsM = /^\/api\/schedules\/(cron-\d+)\/runs$/.exec(p);
+		if (runsM) return send(res, 200, { items: scheduleRuns(runsM[1]) });
 		if (p === "/api/routes") return send(res, 200, { rules: routeRules(), defaults: RULE_DEFAULTS });
 		if (p === "/api/dispatch") return send(res, 200, dispatchState());
 		// 第三期：提示词、技能、受众、日报（只读的部分）
