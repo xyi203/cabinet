@@ -76,3 +76,41 @@ export const where = (d: { chatMode: string; chatName: string; senderName: strin
 
 /** 发布工单（GD-*）在发布系统里的详情页 */
 export const ticketUrl = (key: string) => `https://publish.shoplazza.site/issue-view?issueKey=${encodeURIComponent(key)}`;
+
+/** 一件事等 Yi 做什么（TaskView.need）：标签文字和样式 */
+export const NEED: Record<string, [string, string]> = {
+	send: ["待发送", "p-zhu"],
+	approve: ["待审批", "p-zhu"],
+	decide: ["要你拍板", "p-zhu"],
+	read: ["看结论", "p-read"],
+	retry: ["失败", "p-fail"],
+};
+/** 来源（TaskView.source） */
+export const SOURCE: Record<string, string> = {
+	lark: "飞书",
+	meego: "飞书项目",
+	bot: "机器人",
+	board: "看板",
+	alert: "告警",
+	cron: "定时",
+	memory: "记忆",
+};
+/** 工作台筛选：来源分组 */
+export const SOURCE_FILTER: Array<[string, string[]]> = [
+	["全部", []],
+	["飞书", ["lark", "bot"]],
+	["飞书项目", ["meego"]],
+	["告警", ["alert"]],
+	["定时", ["cron"]],
+	["看板", ["board"]],
+	["记忆", ["memory"]],
+];
+export const waitingOn = (t: { status: string }) => t.status === "in_review" || t.status === "blocked";
+/** 这件事的状态标签：等 Yi 的按 need，其余按生命周期 */
+export function pillOf(t: { status: string; need: string | null; hold?: number; result?: string }): [string, string] {
+	if (waitingOn(t) && t.need) return NEED[t.need] ?? ["等你", "p-zhu"];
+	if (t.status === "in_progress") return ["进行中", "p-run"];
+	if (t.status === "todo") return t.hold ? ["等你先回", "p-hold"] : ["排队", "p-q"];
+	if (t.status === "cancelled") return [t.result ?? "已取消", "p-off"];
+	return ["完成", "p-done"];
+}

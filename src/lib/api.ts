@@ -19,6 +19,8 @@ export interface Draft {
 	meego: { url: string } | null;
 	agent: string | null;
 	route: string | null;
+	/** 起草这一版的 durable 会话：任务详情按它拉执行步骤 */
+	session?: string | null;
 	kind: "text" | "reaction" | "sticker";
 	draft: string;
 	note: string;
@@ -145,17 +147,61 @@ export interface Task {
 	dev?: string;
 }
 
-/** 待你处理：服务端按急缓排好（server/tasks.ts buildInbox） */
-export interface InboxItem {
-	kind: "draft" | "failure" | "dev" | "memory" | "watch" | "approval";
-	ref: string;
-	level: "now" | "soon" | "later";
-	why: string;
+export type TaskStatus = "todo" | "in_progress" | "in_review" | "blocked" | "done" | "cancelled";
+/** 等 Yi 做什么：send 待发送 / approve 待审批 / read 看结论 / decide 要拍板 / retry 失败 */
+export type Need = "send" | "approve" | "read" | "decide" | "retry";
+
+export type TaskEvent =
+	| { k: "msg"; at: number; who: string; owner: boolean; text: string; url?: string | null }
+	| { k: "route"; at: number; rule: string; agent: string | null; tier?: string; kind: string }
+	| { k: "result"; at: number; outcome: string; detail?: string | null; ref?: string | null };
+
+/** 一件事（server/tasks.ts TaskView）：排队里的消息 id 是 q:<消息>，分派前就失败的是 fail-/qa-<消息>，记忆冲突是 mem:<id> */
+export interface TaskView {
+	id: string;
 	title: string;
+	/** lark meego bot board alert cron memory */
+	source: string;
 	label: string;
-	at: number;
-	/** 审批：可以「执行并以后放行」时，记进规则的是什么 */
+	status: TaskStatus;
+	need: Need | null;
+	worker?: string | null;
+	tier?: string | null;
+	created: number;
+	updated: number;
+	closed?: number | null;
+	storyId?: string | null;
+	scheduleId?: string | null;
+	hold?: number;
+	runId?: string;
+	live?: string;
+	result?: string;
+	error?: string | null;
+	retryId?: string;
+	drafts: string[];
+	devTasks: string[];
+	approvals: string[];
+	memories?: number[];
+	events: TaskEvent[];
+}
+
+/** 待审批的写操作；command 是给人看的命令原文，learn 是「执行并以后放行」会记进规则的那条 */
+export interface ApprovalView {
+	id: string;
+	created: number;
+	tool: string;
+	reason: string;
+	origin: string;
+	command: string;
 	learn?: string;
+	devTaskId?: string | null;
+	draftReplyTo?: string | null;
+}
+
+export interface Issue {
+	key: string;
+	title: string;
+	detail: string;
 }
 
 export interface State {
@@ -167,7 +213,8 @@ export interface State {
 		sent: number;
 		discarded: number;
 		failed: number;
-		pending: number;
+		/** 等 Yi 的件数（in_review + blocked） */
+		waiting: number;
 		usage: Usage;
 	};
 	running: number;
@@ -179,8 +226,10 @@ export interface State {
 	stories: Story[];
 	agents: AgentStat[];
 	records: RecordRow[];
-	tasks: Task[];
-	inbox: InboxItem[];
+	items: TaskView[];
+	approvals: ApprovalView[];
+	/** Watchdog 发现、还没恢复的问题 */
+	issues: Issue[];
 	/** Claude 订阅额度（经 magpie 响应头查到的）；没查到过为 null */
 	quota?: Quota | null;
 	auth: { authorized: boolean; refreshExpiresAt?: number };

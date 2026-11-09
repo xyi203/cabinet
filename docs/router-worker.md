@@ -6,13 +6,13 @@
 
 功能都在，缺的是一根主线：「一件事」从进来到结束，系统里没有一个对象能代表它。
 
-| 现象 | 证据 |
-| --- | --- |
-| 没有「任务」实体 | 草稿 `drafts`、agent 任务 `dev_tasks`、问答 `records`、审批 `approvals` 各一张表、各一套状态；看板的「任务」是 `buildTasks` 现场拼的，草稿的 10 种状态靠 `DRAFT_TASK_STATUS` 映射成 6 种。`pipeline.md` §3 的合表一直没做 |
-| 路由散在 6 处 | `drafts/make.ts`、`qa.ts`、`alerts.ts`、`schedules.ts`、`dev.ts`、`stories.ts` 各自 `receive()` + `decide()`；过滤、订阅接续、攒批、额度跳过、Yi 已亲自回复各写在各自的流程里。再接一个 webhook 就得再写一套 |
-| 执行没有队列 | 起草直接 `runPi`，排队只存在内存（`inflight`、信号量）里，看板看不到「排着谁」；重启靠 `pending:draft:*`、`pending:alert:*`、`run:*` 各自接回 |
-| 看板 14 个入口、同一件事出现在多处 | 「等你处理」在概览 / 待办 / 任务三处；「进行中」在任务 / 分发两处；「失败」在失败 / 待办 / 分发三处。要处理的事、运维数据（谁在跑、花多少）、配置（提示词、技能、受众）平铺在同一个侧栏 |
-| 卡片看不出「等谁」 | 状态是「待确认 / 待看 / 审核中 / 阻塞」，但没有一处直接写「等你发送」「等你批」「等对方回」「等 CI」 |
+| 现象                               | 证据                                                                                                                                                                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 没有「任务」实体                   | 草稿 `drafts`、agent 任务 `dev_tasks`、问答 `records`、审批 `approvals` 各一张表、各一套状态；看板的「任务」是 `buildTasks` 现场拼的，草稿的 10 种状态靠 `DRAFT_TASK_STATUS` 映射成 6 种。`pipeline.md` §3 的合表一直没做 |
+| 路由散在 6 处                      | `drafts/make.ts`、`qa.ts`、`alerts.ts`、`schedules.ts`、`dev.ts`、`stories.ts` 各自 `receive()` + `decide()`；过滤、订阅接续、攒批、额度跳过、Yi 已亲自回复各写在各自的流程里。再接一个 webhook 就得再写一套              |
+| 执行没有队列                       | 起草直接 `runPi`，排队只存在内存（`inflight`、信号量）里，看板看不到「排着谁」；重启靠 `pending:draft:*`、`pending:alert:*`、`run:*` 各自接回                                                                             |
+| 看板 14 个入口、同一件事出现在多处 | 「等你处理」在概览 / 待办 / 任务三处；「进行中」在任务 / 分发两处；「失败」在失败 / 待办 / 分发三处。要处理的事、运维数据（谁在跑、花多少）、配置（提示词、技能、受众）平铺在同一个侧栏                                   |
+| 卡片看不出「等谁」                 | 状态是「待确认 / 待看 / 审核中 / 阻塞」，但没有一处直接写「等你发送」「等你批」「等对方回」「等 CI」                                                                                                                      |
 
 ## 2. 目标模型
 
@@ -25,13 +25,13 @@
  └───────────────────── 对方回复 / Yi 亲自回复 / CI 结果（新的 Event）◀─────────────┘
 ```
 
-| 对象 | 是什么 | 落在哪 |
-| --- | --- | --- |
-| Event | 渠道来的一条原始事件，去重后只读 | 现有 `triggers`，不变 |
-| Task | **一件事**。一条消息、一批告警、一次巡检、一个 MR 预审、一个看板派活，各是一个 Task；后续消息追加进同一个 | 新表 `tasks` |
-| Run | Worker 对 Task 的一次执行：起草、改写、追问、重试各是一次 | 现有 `runs` 扩字段（现在只在跑完后写统计） |
-| Output | Run 的产出：草稿、MR 评论台账、结论、审批请求 | 现有 `drafts` / `approvals` / `dev_tasks` 保留，加 `task_id` |
-| Story | 需求（飞书工单），Task 的父级，相当于 multica 的 Project | 现有 `stories`，Task 加 `story_id` |
+| 对象   | 是什么                                                                                                    | 落在哪                                                       |
+| ------ | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Event  | 渠道来的一条原始事件，去重后只读                                                                          | 现有 `triggers`，不变                                        |
+| Task   | **一件事**。一条消息、一批告警、一次巡检、一个 MR 预审、一个看板派活，各是一个 Task；后续消息追加进同一个 | 新表 `tasks`                                                 |
+| Run    | Worker 对 Task 的一次执行：起草、改写、追问、重试各是一次                                                 | 现有 `runs` 扩字段（现在只在跑完后写统计）                   |
+| Output | Run 的产出：草稿、MR 评论台账、结论、审批请求                                                             | 现有 `drafts` / `approvals` / `dev_tasks` 保留，加 `task_id` |
+| Story  | 需求（飞书工单），Task 的父级，相当于 multica 的 Project                                                  | 现有 `stories`，Task 加 `story_id`                           |
 
 ### 2.1 为什么是「加父表」而不是 `pipeline.md` §3 的「合表」
 
@@ -61,17 +61,17 @@ tasks {
 
 ### 2.3 状态流转
 
-| 从 | 到 | 谁触发 | 条件 |
-| --- | --- | --- | --- |
-| — | todo | Router | 新事 |
-| todo | in_progress | Worker | 认领成功（同一 Task 同时只有一个 Run） |
-| in_progress | in_review | Worker | 产出要 Yi 过目：草稿（need=send）、结论（read）、MR 评论（send） |
-| in_progress | blocked | Worker | 提了写操作审批（approve）、要 Yi 拍板（decide）、失败且不再自动重试（retry） |
-| in_progress | done | Worker | 不需要 Yi 做什么：ack 档回了表情、建议不回 |
-| in_review / blocked | in_progress | Yi | 改写、追问、批准审批、重试 |
-| in_review / blocked / done | todo | Router | 同一 thread 来了新消息（done 只在 `REOPEN_TTL` 内，默认 3 天，即现在的订阅 TTL） |
-| in_review | done | Yi / 外部 | 发出、标完成、Yi 已亲自回复 |
-| 任意未关闭 | cancelled | Yi | 不发、放弃 |
+| 从                         | 到          | 谁触发    | 条件                                                                             |
+| -------------------------- | ----------- | --------- | -------------------------------------------------------------------------------- |
+| —                          | todo        | Router    | 新事                                                                             |
+| todo                       | in_progress | Worker    | 认领成功（同一 Task 同时只有一个 Run）                                           |
+| in_progress                | in_review   | Worker    | 产出要 Yi 过目：草稿（need=send）、结论（read）、MR 评论（send）                 |
+| in_progress                | blocked     | Worker    | 提了写操作审批（approve）、要 Yi 拍板（decide）、失败且不再自动重试（retry）     |
+| in_progress                | done        | Worker    | 不需要 Yi 做什么：ack 档回了表情、建议不回                                       |
+| in_review / blocked        | in_progress | Yi        | 改写、追问、批准审批、重试                                                       |
+| in_review / blocked / done | todo        | Router    | 同一 thread 来了新消息（done 只在 `REOPEN_TTL` 内，默认 3 天，即现在的订阅 TTL） |
+| in_review                  | done        | Yi / 外部 | 发出、标完成、Yi 已亲自回复                                                      |
+| 任意未关闭                 | cancelled   | Yi        | 不发、放弃                                                                       |
 
 **私聊卡片只在进入 in_review / blocked 时推一次**，取代现在各 agent 自己的 `notify`。卡片和看板操作的是同一个 Task，一处处理另一处同步（现有机制不变）。
 
@@ -98,32 +98,34 @@ dispatch(event)
 
 ```jsonc
 {
-  "sources": {
-    "lark":      { "triage": true },
-    "meego":     { "triage": true },
-    "alert":     { "worker": "alert", "tier": "task", "batch": { "by": "chat", "quiet": 120, "max": 600 }, "follow": 3600 },
-    "cron":      { "worker": "assistant", "tier": "deep", "skipIf": ["prevRunning", "patrol && quota>=0.8"] },
-    "board":     { "worker": "dev", "tier": "task" },
-    "hook:sentry": { "worker": "assistant", "tier": "deep", "priority": "soon",
-                     "map": { "id": "$.id", "thread": "sentry:$.issue.id", "title": "$.title", "text": "$.culprit" } }
-  },
-  "rules": [
-    { "if": "hasMR", "tier": "mr" }
-  ],
-  "reopenTtl": 259200
+	"sources": {
+		"lark": { "triage": true },
+		"meego": { "triage": true },
+		"alert": { "worker": "alert", "tier": "task", "batch": { "by": "chat", "quiet": 120, "max": 600 }, "follow": 3600 },
+		"cron": { "worker": "assistant", "tier": "deep", "skipIf": ["prevRunning", "patrol && quota>=0.8"] },
+		"board": { "worker": "dev", "tier": "task" },
+		"hook:sentry": {
+			"worker": "assistant",
+			"tier": "deep",
+			"priority": "soon",
+			"map": { "id": "$.id", "thread": "sentry:$.issue.id", "title": "$.title", "text": "$.culprit" },
+		},
+	},
+	"rules": [{ "if": "hasMR", "tier": "mr" }],
+	"reopenTtl": 259200,
 }
 ```
 
 现在逻辑的去处：
 
-| 现在 | 改到 |
-| --- | --- |
-| `drafts/make.ts` 的过滤、订阅接续、分派、连发合并 | Router 2、4、5、6；make.ts 只剩「起草 Worker」的执行部分 |
-| `qa.ts` 的分流（问答 / 记住 / 草稿指令 / 追问任务） | Router 3、6；「记住」是 command，不建 Task |
-| `alerts.ts` 的识别和攒批 | 识别进 lark 渠道适配器，攒批是 Router 5 的一种配置 |
-| `schedules.ts` 到点开任务、额度跳过 | 定时器只产生 cron Event，跳过条件是 `skipIf` |
-| `dev.ts` 看板派活、草稿转任务 | board Event；草稿转任务 = 同一 Task 换 worker=dev，不新建 |
-| `stories.ts` 发文档、观察、巡检 | 各自产生 board / cron Event，Task 挂 `storyId` |
+| 现在                                                | 改到                                                      |
+| --------------------------------------------------- | --------------------------------------------------------- |
+| `drafts/make.ts` 的过滤、订阅接续、分派、连发合并   | Router 2、4、5、6；make.ts 只剩「起草 Worker」的执行部分  |
+| `qa.ts` 的分流（问答 / 记住 / 草稿指令 / 追问任务） | Router 3、6；「记住」是 command，不建 Task                |
+| `alerts.ts` 的识别和攒批                            | 识别进 lark 渠道适配器，攒批是 Router 5 的一种配置        |
+| `schedules.ts` 到点开任务、额度跳过                 | 定时器只产生 cron Event，跳过条件是 `skipIf`              |
+| `dev.ts` 看板派活、草稿转任务                       | board Event；草稿转任务 = 同一 Task 换 worker=dev，不新建 |
+| `stories.ts` 发文档、观察、巡检                     | 各自产生 board / cron Event，Task 挂 `storyId`            |
 
 ## 4. Worker
 
@@ -186,14 +188,14 @@ dispatch(event)
 
 ### 5.3 其余页面
 
-| 新页 | 内容 | 来自旧页 |
-| --- | --- | --- |
-| 需求 | 开发中 / 测试中 / 发布中 / 发布完成四列；卡片显示任务数、其中等我的数量、发布工单、巡检状态。点开是需求抽屉：阶段条（以这边为准，不改飞书节点）、按阶段给的下一步（开始实现 / 问一下 / 写观察文档 / 开始或停止巡检）、发布工单与绑定、挂着的任务列表（点任务打开任务详情，可返回需求） | 需求 |
-| 定时 | 见 §5.4 | 定时任务 |
-| 记忆 | 见 §5.5 | 记忆 |
-| 对话 | 左侧会话列表（看板里聊的和私聊机器人的问答都在这），右侧对话；助手回答带「查了几步」，每条回答可以「转成任务」进工作台、「记住这条」进记忆 | 对话 |
-| 运行 | 分页签：队列（并发、排队、可疑、各 Worker 的权限和今日用量）、路由记录（每条事件的判定：新建 / 追加 / 攒批 / 忽略 / 指令，交给谁、理由，点开对应任务）、失败（没处理的 + 自动恢复的）、统计、日报、系统健康（看门狗各项检查） | 分发、失败、统计、日报 |
-| 设置 | 分页签：渠道（各来源状态 + Webhook 配置）、路由规则（按 Router 六步排列，阈值可改）、Worker（助手档位表、dev / 告警、提示词、技能与命令规则）、受众（可信 / 一般 / 谨慎 + 处理说明） | 提示词、技能、受众 |
+| 新页 | 内容                                                                                                                                                                                                                                                                                   | 来自旧页               |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| 需求 | 开发中 / 测试中 / 发布中 / 发布完成四列；卡片显示任务数、其中等我的数量、发布工单、巡检状态。点开是需求抽屉：阶段条（以这边为准，不改飞书节点）、按阶段给的下一步（开始实现 / 问一下 / 写观察文档 / 开始或停止巡检）、发布工单与绑定、挂着的任务列表（点任务打开任务详情，可返回需求） | 需求                   |
+| 定时 | 见 §5.4                                                                                                                                                                                                                                                                                | 定时任务               |
+| 记忆 | 见 §5.5                                                                                                                                                                                                                                                                                | 记忆                   |
+| 对话 | 左侧会话列表（看板里聊的和私聊机器人的问答都在这），右侧对话；助手回答带「查了几步」，每条回答可以「转成任务」进工作台、「记住这条」进记忆                                                                                                                                             | 对话                   |
+| 运行 | 分页签：队列（并发、排队、可疑、各 Worker 的权限和今日用量）、路由记录（每条事件的判定：新建 / 追加 / 攒批 / 忽略 / 指令，交给谁、理由，点开对应任务）、失败（没处理的 + 自动恢复的）、统计、日报、系统健康（看门狗各项检查）                                                          | 分发、失败、统计、日报 |
+| 设置 | 分页签：渠道（各来源状态 + Webhook 配置）、路由规则（按 Router 六步排列，阈值可改）、Worker（助手档位表、dev / 告警、提示词、技能与命令规则）、受众（可信 / 一般 / 谨慎 + 处理说明）                                                                                                   | 提示词、技能、受众     |
 
 ### 5.4 定时
 
@@ -225,13 +227,13 @@ dispatch(event)
 
 每个阶段单独可合并、单独可用。
 
-| 阶段 | 做什么 | 完成后 | 规模 |
-| --- | --- | --- | --- |
-| P1 Task 表 | 新表 `tasks`；`drafts` / `dev_tasks` / `approvals` / `records` 加 `task_id`；现有流程在建草稿、建任务处顺带建 Task；迁移回填最近 7 天；`buildTasks` 改成查 `tasks` | 看板不变，数据有了主线 | 1 张表 + 约 8 个文件 |
-| P2 看板改版 | 工作台 + 任务详情时间线 + 定时页 + 记忆页 + 导航收成 7 个；旧页面挪进运行 / 设置的页签 | Yi 能感知到的改进先落地 | 前端为主，约 10 个组件 |
-| P3 Router 收口 | `server/router/` + `config/routes.json`；6 处 `receive/decide` 改成产生 Event 调 `dispatch` | 行为不变，路由集中、可配 | 约 10 个文件 |
-| P4 Worker 队列 | `runs` 扩字段；认领、并发、重试、接回改走 Task / Run；去掉 `pending:*` 的各自接回 | 排队可见，重启接回一套逻辑 | driver / make / dev 为主 |
-| P5 Webhook | `/hooks/:name` + 暴露方式 | 能接 Sentry、GitLab、CI 等 | 小 |
+| 阶段           | 做什么                                                                                                                                                             | 完成后                     | 规模                     |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------- | ------------------------ |
+| P1 Task 表     | 新表 `tasks`；`drafts` / `dev_tasks` / `approvals` / `records` 加 `task_id`；现有流程在建草稿、建任务处顺带建 Task；迁移回填最近 7 天；`buildTasks` 改成查 `tasks` | 看板不变，数据有了主线     | 1 张表 + 约 8 个文件     |
+| P2 看板改版    | 工作台 + 任务详情时间线 + 定时页 + 记忆页 + 导航收成 7 个；旧页面挪进运行 / 设置的页签                                                                             | Yi 能感知到的改进先落地    | 前端为主，约 10 个组件   |
+| P3 Router 收口 | `server/router/` + `config/routes.json`；6 处 `receive/decide` 改成产生 Event 调 `dispatch`                                                                        | 行为不变，路由集中、可配   | 约 10 个文件             |
+| P4 Worker 队列 | `runs` 扩字段；认领、并发、重试、接回改走 Task / Run；去掉 `pending:*` 的各自接回                                                                                  | 排队可见，重启接回一套逻辑 | driver / make / dev 为主 |
+| P5 Webhook     | `/hooks/:name` + 暴露方式                                                                                                                                          | 能接 Sentry、GitLab、CI 等 | 小                       |
 
 P2 只依赖 P1，可以和 P3 / P4 并行。
 

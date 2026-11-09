@@ -165,9 +165,9 @@ function view(
 				: undefined;
 	const label =
 		first?.channel === "cron"
-			? `定时 · ${first.actorName}`
+			? "" // 标题就是「定时 · <名字>」
 			: first?.channel === "board"
-				? "看板"
+				? "你派的"
 				: draft
 					? draftLabel(draft)
 					: first?.channel === "bot"

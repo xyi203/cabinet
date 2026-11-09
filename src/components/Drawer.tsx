@@ -1,5 +1,8 @@
-import { useEffect } from "react";
+import { createContext, useContext, useEffect } from "react";
 import { toast } from "./Toast";
+
+/** 嵌在任务详情的时间线里：草稿、agent 任务的抽屉内容原样复用，只是不再盖一层遮罩 */
+export const Embedded = createContext(false);
 
 export function Drawer({
 	title,
@@ -17,6 +20,14 @@ export function Drawer({
 	onBack?: () => void;
 	backLabel?: string;
 }) {
+	if (useContext(Embedded))
+		return (
+			<section className="embed">
+				<header>{title}</header>
+				<div className="content">{children}</div>
+				{actions && <div className="actions">{actions}</div>}
+			</section>
+		);
 	return (
 		<>
 			<div className="mask show" onClick={onClose} />

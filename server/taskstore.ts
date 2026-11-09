@@ -232,9 +232,21 @@ export function applyStatus(row: TaskRow, o: Outputs): TaskRow {
 	const { status, need } = deriveStatus(o);
 	if (status === row.status && need === row.need) return row;
 	const t = now();
-	const closed = isClosed(status) ? (row.closed ?? t) : null;
+	// 关闭时间取最后一次产出的时间：回填、或者隔了一阵才刷新时，不把关闭时间记成现在
+	const closed = isClosed(status) ? (row.closed ?? lastAt(o) ?? t) : null;
 	db().update(schema.tasks).set({ status, need, updated: t, closed }).where(eq(schema.tasks.id, row.id)).run();
 	return { ...row, status, need, updated: t, closed };
+}
+
+/** 这件事最后一次动静：结果、草稿、agent 任务的更新、分派里最晚的 */
+function lastAt(o: Outputs): number | undefined {
+	const ts = [
+		...o.results.map((r) => r.at),
+		...o.drafts.map((d) => d.created),
+		...o.devs.map((d) => d.updated),
+		...o.routes.map((r) => r.at),
+	];
+	return ts.length ? Math.max(...ts) : undefined;
 }
 
 // ---------- 回填 ----------
