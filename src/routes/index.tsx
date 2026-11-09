@@ -169,19 +169,24 @@ function Dashboard() {
 						<div className="phead">
 							<h1>定时</h1>
 							<div className="pulse">
-								<span>私聊机器人一句话创建，审批卡片上确认后生效；每次运行都是工作台里的一件事</span>
+								<span>到点派给助手的事；每次运行都是工作台里的一件事</span>
 							</div>
 						</div>
-						<Schedules agents={state.agents} stories={state.stories} onOpen={(id) => openDev(id)} onOpenStory={nav.onStory} />
+						<Schedules
+							agents={state.agents}
+							stories={state.stories}
+							items={state.items}
+							now={state.now}
+							onOpenTask={nav.onOpen}
+							onOpenDev={(id) => openDev(id)}
+							onOpenStory={nav.onStory}
+						/>
 					</>
 				)}
 				{view === "memory" && (
 					<>
 						<div className="phead">
 							<h1>记忆</h1>
-							<div className="pulse">
-								<span>助手按什么口径做事：约定在条件成立时照做，线索只作参考</span>
-							</div>
 						</div>
 						<MemoryBoard />
 					</>

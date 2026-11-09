@@ -1,6 +1,15 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { type ArmScore, type Classification, type Memory, addMemory, fetchMemory, memoryAction, resolveMemories, searchMemory } from "../lib/api";
+import {
+	type ArmScore,
+	type Classification,
+	type Memory,
+	addMemory,
+	fetchMemory,
+	memoryAction,
+	resolveMemories,
+	searchMemory,
+} from "../lib/api";
 import { time } from "../lib/format";
 import { type Msg, MsgLine } from "./Drawer";
 
@@ -11,35 +20,6 @@ const PROVENANCE: Record<Memory["provenance"], string> = {
 	model_inference: "模型推断",
 };
 const EVIDENCE: Record<string, string> = { yi: "你说", tool: "工具", board: "看板", message: "材料" };
-
-// 有争议的排最前：等你裁定之前它们不会被带进对话
-const GROUPS: Array<{ name: string; hint: string; match: (m: Memory) => boolean; open: boolean }> = [
-	{
-		name: "有争议",
-		hint: "互相冲突，暂停使用；选一条为准，或者改写、合并成最终版本再确认，其余转为已取代",
-		match: (m) => m.state === "contested",
-		open: true,
-	},
-	{
-		name: "长期约定",
-		hint: "条件成立时直接照做，每次都带",
-		match: (m) => m.state === "active" && m.application === "convention",
-		open: true,
-	},
-	{
-		name: "线索",
-		hint: "和当前消息相关、过了门槛才带；只作参考",
-		match: (m) => m.state === "active" && m.application === "reference",
-		open: true,
-	},
-	{ name: "候选", hint: "模型推断的，确认或改分类后才生效", match: (m) => m.state === "candidate", open: true },
-	{
-		name: "已遗忘 / 已取代",
-		hint: "不再使用；遗忘的同一句话不会被重新提取",
-		match: (m) => m.state === "forgotten" || m.state === "superseded",
-		open: false,
-	},
-];
 
 const fmt = (n?: number) => (n === undefined ? "未命中" : n.toFixed(3));
 
@@ -66,7 +46,7 @@ function ClassifyForm({ init, onSubmit, submitText }: { init: Classification; on
 					placeholder="什么时候适用，例如：回复 PM 关于排期的问题时"
 				/>
 			)}
-			<button className="btn" onClick={() => onSubmit(c)}>
+			<button className="btn sm" onClick={() => onSubmit(c)}>
 				{submitText}
 			</button>
 		</div>
@@ -94,17 +74,17 @@ function MemoryCard({ m, score, onError }: { m: Memory; score?: ArmScore; onErro
 	}
 	const live = m.state !== "forgotten" && m.state !== "superseded";
 	return (
-		<div className="card memory">
+		<div className="mrow">
 			{text === null ? (
 				<div className="body">{m.content}</div>
 			) : (
 				<>
 					<textarea value={text} onChange={(e) => setText(e.target.value)} />
 					<div className="row">
-						<button className="btn primary" disabled={busy || !text.trim()} onClick={() => act("edit", { content: text })}>
+						<button className="btn pri sm" disabled={busy || !text.trim()} onClick={() => act("edit", { content: text })}>
 							保存文字
 						</button>
-						<button className="btn" disabled={busy} onClick={() => setText(null)}>
+						<button className="btn sm" disabled={busy} onClick={() => setText(null)}>
 							取消
 						</button>
 						<span className="foot">改过的算你的原话、已确认；有争议的改完还要在下面裁定</span>
@@ -113,11 +93,13 @@ function MemoryCard({ m, score, onError }: { m: Memory; score?: ArmScore; onErro
 			)}
 			{m.application === "convention" && <div className="foot">适用：{m.appliesWhen}</div>}
 			<div className="meta">
+				<span className={`tag${m.application === "convention" ? " conv" : ""}`}>{m.application === "convention" ? "约定" : "线索"}</span>
 				<span className="tag">{KIND[m.kind]}</span>
+				{m.state === "candidate" && <span className="tag cand">待确认，不会被带上</span>}
 				<span>{PROVENANCE[m.provenance]}</span>
 				<span>{m.confirmed ? "已确认" : "未确认"}</span>
 				{m.scope !== "personal" && <span className="tag">限 {m.scopeName || m.scope}</span>}
-				<span>带过 {m.injected} 次</span>
+				{m.injected > 0 && <span>带上过 {m.injected} 次</span>}
 				<span>{time(m.updated)}</span>
 				<span>
 					#{m.id}·v{m.revision}
@@ -149,31 +131,31 @@ function MemoryCard({ m, score, onError }: { m: Memory; score?: ArmScore; onErro
 			)}
 			<div className="row">
 				{live && !m.confirmed && (
-					<button className="btn" disabled={busy} onClick={() => act("confirm")}>
+					<button className="btn sm" disabled={busy} onClick={() => act("confirm")}>
 						确认
 					</button>
 				)}
 				{m.state === "contested" && m.confirmed && (
-					<button className="btn" disabled={busy} onClick={() => act("confirm")}>
+					<button className="btn sm" disabled={busy} onClick={() => act("confirm")}>
 						以这条为准
 					</button>
 				)}
 				{live && text === null && (
-					<button className="btn" disabled={busy} onClick={() => setText(m.content)}>
+					<button className="btn sm" disabled={busy} onClick={() => setText(m.content)}>
 						改文字
 					</button>
 				)}
 				{live && (
-					<button className="btn" disabled={busy} onClick={() => setEditing(!editing)}>
+					<button className="btn sm" disabled={busy} onClick={() => setEditing(!editing)}>
 						{editing ? "取消" : "改分类"}
 					</button>
 				)}
 				{live ? (
-					<button className="btn danger" disabled={busy} onClick={() => act("forget")}>
+					<button className="btn ghost sm" disabled={busy} onClick={() => act("forget")}>
 						遗忘
 					</button>
 				) : (
-					<button className="btn" disabled={busy} onClick={() => act("restore")}>
+					<button className="btn sm" disabled={busy} onClick={() => act("restore")}>
 						恢复
 					</button>
 				)}
@@ -207,13 +189,13 @@ function ConflictGroup({ items, onError }: { items: Memory[]; onError: (msg: Msg
 			{items.map((m) => (
 				<MemoryCard key={m.id} m={m} onError={onError} />
 			))}
-			<div className="card memory">
+			<div className="mrow final">
 				<div className="label">最终版本（可直接改写或合并）</div>
 				<div className="row">
 					{items.map((m) => (
 						<button
 							key={m.id}
-							className={`btn${keep === m.id && text === m.content ? " primary" : ""}`}
+							className={`btn sm${keep === m.id && text === m.content ? " pri" : ""}`}
 							disabled={busy}
 							onClick={() => {
 								setKeep(m.id);
@@ -223,13 +205,13 @@ function ConflictGroup({ items, onError }: { items: Memory[]; onError: (msg: Msg
 							用 #{m.id}
 						</button>
 					))}
-					<button className="btn" disabled={busy} onClick={() => setText(items.map((m) => m.content).join("；"))}>
+					<button className="btn sm" disabled={busy} onClick={() => setText(items.map((m) => m.content).join("；"))}>
 						合并几条
 					</button>
 				</div>
 				<textarea value={text} onChange={(e) => setText(e.target.value)} />
 				<div className="row">
-					<button className="btn primary" disabled={busy || !text.trim()} onClick={resolve}>
+					<button className="btn pri sm" disabled={busy || !text.trim()} onClick={resolve}>
 						确认为最终版本
 					</button>
 					<span className="foot">
@@ -288,8 +270,10 @@ function NewMemory() {
 		}
 	}
 	return (
-		<div className="panel newtask">
+		<div className="newbox">
+			<label htmlFor="mem-new">手记一条（就是你的原话，记成已确认）</label>
 			<textarea
+				id="mem-new"
 				value={content}
 				onChange={(e) => setContent(e.target.value)}
 				placeholder="记一条，例如：回 PM 的排期问题不要直接承诺日期，先说评估一下（不超过 300 字）"
@@ -300,10 +284,51 @@ function NewMemory() {
 	);
 }
 
+const TABS: Array<[string, (m: Memory) => boolean]> = [
+	["生效", (m) => m.state === "active"],
+	["待确认", (m) => m.state === "candidate"],
+	["已遗忘 / 已取代", (m) => m.state === "forgotten" || m.state === "superseded"],
+];
+
+function Section({
+	name,
+	hint,
+	items,
+	empty,
+	onError,
+}: {
+	name: string;
+	hint: string;
+	items: Memory[];
+	empty: string;
+	onError: (m: Msg) => void;
+}) {
+	return (
+		<section className="wgroup">
+			<div className="gh">
+				<h2>{name}</h2>
+				<span className="c">{items.length}</span>
+				<span className="hint">{hint}</span>
+			</div>
+			{items.length ? (
+				<div className="list">
+					{items.map((m) => (
+						<MemoryCard key={m.id} m={m} onError={onError} />
+					))}
+				</div>
+			) : (
+				<div className="empty">{empty}</div>
+			)}
+		</section>
+	);
+}
+
+/** 记忆（docs/router-worker.md §5.5）：冲突放最上面等裁定；手记和试召回并排；列表按 生效 / 待确认 / 已遗忘 分页签 */
 export function MemoryBoard() {
 	const { data, error } = useQuery({ queryKey: ["memory"], queryFn: fetchMemory });
 	const [q, setQ] = useState("");
 	const [query, setQuery] = useState("");
+	const [tab, setTab] = useState(TABS[0][0]);
 	const [msg, setMsg] = useState<Msg>(null);
 	const found = useQuery({ queryKey: ["memory-search", query], queryFn: () => searchMemory(query), enabled: Boolean(query) });
 	if (error) return <div className="empty">读取失败</div>;
@@ -311,77 +336,145 @@ export function MemoryBoard() {
 	const v = data.vectors;
 	const byId = new Map(data.items.map((m) => [m.id, m]));
 	const scores = new Map(found.data?.scores.map((s) => [s.id, s]));
+	const count = (f: (m: Memory) => boolean) => data.items.filter(f).length;
+	const groups = conflictGroups(
+		data.items.filter((m) => m.state === "contested"),
+		data.items,
+	);
+	const shown = data.items.filter(TABS.find(([n]) => n === tab)![1]);
 	return (
 		<div className="memory-board">
-			<NewMemory />
-			<div className="panel newtask">
-				<div className="row">
+			<div className="pulse mempulse">
+				<span>
+					生效 <b>{count((m) => m.state === "active")}</b>
+				</span>
+				<span>
+					约定 <b>{count((m) => m.state === "active" && m.application === "convention")}</b>
+				</span>
+				<span>
+					线索 <b>{count((m) => m.state === "active" && m.application === "reference")}</b>
+				</span>
+				<span>
+					待确认 <b>{count((m) => m.state === "candidate")}</b>
+				</span>
+				{groups.length > 0 && (
+					<span className="hot">
+						有冲突 <b>{groups.length}</b>
+					</span>
+				)}
+			</div>
+			{groups.length > 0 && (
+				<div className="conflict">
+					<div className="gh wait">
+						<h2>有冲突，等你裁定</h2>
+						<span className="hint">冲突的先停用、不会被带上；选一条为准，或者改写、合并成最终版本</span>
+					</div>
+					{groups.map((group) =>
+						group.length > 1 ? (
+							<ConflictGroup key={group.map((m) => `${m.id}v${m.revision}`).join("-")} items={group} onError={setMsg} />
+						) : (
+							<div key={group[0].id} className="list">
+								<MemoryCard m={group[0]} onError={setMsg} />
+							</div>
+						),
+					)}
+				</div>
+			)}
+			<div className="memtools">
+				<NewMemory />
+				<div className="newbox">
+					<label htmlFor="mem-recall">试召回：拿一条消息看会带上哪些（回车）</label>
 					<input
-						className="grow"
+						id="mem-recall"
+						className="in wide"
 						value={q}
 						onChange={(e) => setQ(e.target.value)}
 						onKeyDown={(e) => {
 							if (e.key === "Enter") setQuery(q.trim());
 						}}
-						placeholder="按一条消息试召回（回车），看每条的两臂分数"
+						placeholder="例如：王磊：结算页又 500 了，能帮忙看下吗"
 					/>
-					{query && (
-						<button
-							className="btn"
-							onClick={() => {
-								setQ("");
-								setQuery("");
-							}}
-						>
-							清除
+					<div className="oa">
+						<button className="btn sm" disabled={!q.trim()} onClick={() => setQuery(q.trim())}>
+							试一下
 						</button>
-					)}
+						{query && (
+							<button
+								className="btn ghost sm"
+								onClick={() => {
+									setQ("");
+									setQuery("");
+								}}
+							>
+								清除
+							</button>
+						)}
+					</div>
+					<div className="meta">
+						向量 {v.model}：{v.total} 条{v.pending ? `，${v.pending} 条待补` : "，已补齐"}
+						{v.retryIn ? `（向量服务不可用，${v.retryIn} 秒后重试，期间只用关键词）` : ""}
+					</div>
+					{found.data?.degraded && <div className="meta">向量检索不可用：{found.data.degraded}，只用了关键词</div>}
 				</div>
-				<div className="foot">
-					向量 {v.model}：{v.total} 条{v.pending ? `，${v.pending} 条待补` : "，已补齐"}
-					{v.retryIn ? `（向量服务不可用，${v.retryIn} 秒后重试，期间只用关键词）` : ""}
-				</div>
-				{found.data?.degraded && <div className="foot">向量检索不可用：{found.data.degraded}，只用了关键词</div>}
 			</div>
 			<MsgLine msg={msg} />
 			{query ? (
-				<div>
+				<section className="wgroup">
+					<div className="gh">
+						<h2>试召回结果</h2>
+						<span className="hint">约定每次都带；线索看关键词和余弦，过门槛才带</span>
+					</div>
 					{!found.data ? (
 						<div className="empty">检索中…</div>
 					) : !found.data.scores.length ? (
 						<div className="empty">没有命中</div>
 					) : (
-						found.data.scores.map(
-							(s) => byId.get(s.id) && <MemoryCard key={s.id} m={byId.get(s.id)!} score={scores.get(s.id)} onError={setMsg} />,
-						)
+						<div className="list">
+							{found.data.scores.map(
+								(s) => byId.get(s.id) && <MemoryCard key={s.id} m={byId.get(s.id)!} score={scores.get(s.id)} onError={setMsg} />,
+							)}
+						</div>
 					)}
-				</div>
+				</section>
 			) : (
-				GROUPS.map((g) => {
-					const items = data.items.filter(g.match);
-					if (!items.length) return null;
-					return (
-						<details key={g.name} className="memory-group" open={g.open}>
-							<summary>
-								<b>{g.name}</b>{" "}
-								<span className="foot">
-									{items.length} 条 · {g.hint}
-								</span>
-							</summary>
-							{g.name === "有争议"
-								? conflictGroups(items, data.items).map((group) =>
-										group.length > 1 ? (
-											<ConflictGroup key={group.map((m) => `${m.id}v${m.revision}`).join("-")} items={group} onError={setMsg} />
-										) : (
-											<MemoryCard key={group[0].id} m={group[0]} onError={setMsg} />
-										),
-									)
-								: items.map((m) => <MemoryCard key={m.id} m={m} onError={setMsg} />)}
-						</details>
-					);
-				})
+				<>
+					<div className="tools">
+						<div className="seg" role="tablist">
+							{TABS.map(([n, f]) => (
+								<button key={n} role="tab" aria-selected={tab === n} className={tab === n ? "on" : ""} onClick={() => setTab(n)}>
+									{n} {count(f)}
+								</button>
+							))}
+						</div>
+					</div>
+					{tab === "生效" ? (
+						<>
+							<Section
+								name="约定"
+								hint="条件成立时直接照做，每次都带"
+								items={shown.filter((m) => m.application === "convention")}
+								empty="还没有约定。在飞书里说「记住 xxx」，或者在上面手记一条"
+								onError={setMsg}
+							/>
+							<Section
+								name="线索"
+								hint="和当前消息相关、过了门槛才带；只作参考"
+								items={shown.filter((m) => m.application !== "convention")}
+								empty="没有"
+								onError={setMsg}
+							/>
+						</>
+					) : (
+						<Section
+							name={tab}
+							hint={tab === "待确认" ? "模型推断的，确认或改分类后才生效" : "不再使用；遗忘的同一句话不会被重新提取"}
+							items={shown}
+							empty="没有"
+							onError={setMsg}
+						/>
+					)}
+				</>
 			)}
-			{!query && !data.items.length && <div className="empty">还没有记忆。在飞书里说「记住 xxx」，或者在上面直接记一条。</div>}
 		</div>
 	);
 }

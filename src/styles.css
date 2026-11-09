@@ -2024,3 +2024,242 @@ pre.cmd {
 		justify-content: flex-start;
 	}
 }
+
+/* 定时页 */
+.srow {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 8px 16px;
+	padding: 12px 16px;
+	border-top: 1px solid var(--line);
+	align-items: start;
+}
+.srow:first-child {
+	border-top: 0;
+}
+.nm {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 10px;
+}
+.nm .title {
+	white-space: normal;
+}
+.hist {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+.sq {
+	display: inline-flex;
+	gap: 3px;
+}
+.sq i,
+.legend i {
+	width: 10px;
+	height: 10px;
+	border-radius: 2px;
+	display: inline-block;
+}
+.sq i {
+	cursor: pointer;
+}
+.sq i.c,
+.legend i.c {
+	background: var(--accent);
+}
+.sq i.n,
+.legend i.n {
+	background: var(--muted);
+	opacity: 0.4;
+}
+.sq i.f,
+.legend i.f {
+	background: var(--zhu);
+}
+.sq i.r,
+.legend i.r {
+	border: 1.5px solid var(--accent);
+}
+.legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 14px;
+	font-size: 12px;
+	color: var(--muted);
+	margin: 0 2px 12px;
+}
+.legend span {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+}
+.prompt summary {
+	font-size: 12.5px;
+	color: var(--muted);
+	cursor: pointer;
+}
+.prompt p {
+	margin: 6px 0 0;
+	font-size: 13px;
+	color: var(--text-2);
+	background: var(--soft);
+	border-radius: 6px;
+	padding: 8px 10px;
+	white-space: pre-wrap;
+}
+.newbox {
+	background: var(--panel);
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	padding: 14px 16px;
+	display: grid;
+	gap: 10px;
+	margin-bottom: 20px;
+}
+.newbox label {
+	font-size: 12.5px;
+	color: var(--text-2);
+}
+.newbox textarea,
+.mrow textarea {
+	width: 100%;
+	min-height: 64px;
+	border: 1px solid var(--line);
+	border-radius: 7px;
+	background: var(--panel);
+	color: var(--text);
+	padding: 8px 10px;
+	font: inherit;
+	resize: vertical;
+}
+.newbox select,
+.mrow select,
+.mrow input {
+	border: 1px solid var(--line);
+	border-radius: 7px;
+	background: var(--panel);
+	color: var(--text);
+	padding: 4px 8px;
+	font: inherit;
+	font-size: 13px;
+}
+.newbox .row,
+.mrow .row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+}
+.newbox .row .grow,
+.mrow .row .grow {
+	flex: 1;
+	min-width: 180px;
+}
+.preview {
+	display: grid;
+	grid-template-columns: 76px minmax(0, 1fr);
+	gap: 6px 12px;
+	font-size: 13px;
+	border-top: 1px solid var(--line);
+	padding-top: 10px;
+	align-items: center;
+}
+.preview > span:nth-child(odd) {
+	color: var(--muted);
+}
+
+/* 记忆页 */
+.mempulse {
+	margin: -8px 2px 16px;
+}
+.memtools {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 12px;
+	margin-bottom: 18px;
+}
+.memtools .newbox {
+	margin: 0;
+	align-content: start;
+}
+.mrow {
+	display: grid;
+	gap: 6px;
+	padding: 12px 16px;
+	border-top: 1px solid var(--line);
+}
+.mrow:first-child {
+	border-top: 0;
+}
+.mrow > .body {
+	font-size: 14px;
+}
+.mrow .tag {
+	font-size: 11.5px;
+	line-height: 18px;
+	padding: 0 6px;
+	border-radius: 4px;
+	background: var(--soft);
+	color: var(--text-2);
+}
+.mrow .tag.conv {
+	background: var(--accent-soft);
+	color: var(--accent);
+}
+.mrow .tag.cand,
+.mrow .tag.warn {
+	background: var(--warn-soft);
+	color: var(--warn);
+}
+.mrow .foot {
+	font-size: 12.5px;
+	color: var(--text-2);
+}
+.mrow.final {
+	border: 1px dashed var(--line);
+	border-radius: 10px;
+	background: var(--panel);
+}
+.conflict {
+	background: var(--panel);
+	border: 1px solid var(--zhu);
+	border-radius: 10px;
+	padding: 12px 14px;
+	display: grid;
+	gap: 10px;
+	margin-bottom: 20px;
+}
+.conflict .gh {
+	margin: 0;
+}
+.conflict .conflict-group {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	gap: 10px;
+}
+.conflict .conflict-group > .mrow {
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--soft);
+}
+.conflict .conflict-group > .mrow.final {
+	grid-column: 1 / -1;
+	background: var(--panel);
+}
+
+/* 需求卡片 */
+.tcard .zhu {
+	color: var(--zhu);
+	font-weight: 600;
+}
+@media (max-width: 760px) {
+	.srow,
+	.memtools {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}

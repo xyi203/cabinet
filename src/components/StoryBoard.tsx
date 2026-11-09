@@ -12,7 +12,7 @@ import {
 	post,
 	runSchedule,
 } from "../lib/api";
-import { AGENT_NAME, ago, ticketUrl } from "../lib/format";
+import { AGENT_NAME, ago, ticketUrl, waitingOn } from "../lib/format";
 import { Drawer, type Msg, MsgLine } from "./Drawer";
 
 /** 需求任务的四个阶段，加一个「不跟了」收起来 */
@@ -54,6 +54,9 @@ function StoryCard({ s, state, onOpen }: { s: Story; state: State; onOpen: (s: S
 	const tasks = tasksOf(state, s.id);
 	const running = tasks.filter((t) => t.status === "running").length;
 	const tickets = ticketsOf(s);
+	// 挂在这条需求下、等你处理的事（工作台里同一批）
+	const waiting = state.items.filter((t) => t.storyId === s.id && waitingOn(t)).length;
+	const patrolling = tickets.some((t) => t.patrol && !t.patrol.stopped);
 	return (
 		<div className="tcard" onClick={() => onOpen(s)}>
 			<div className="head">
@@ -76,10 +79,16 @@ function StoryCard({ s, state, onOpen }: { s: Story; state: State; onOpen: (s: S
 			<div className="foot2">
 				<span>
 					{tasks.length ? `${tasks.length} 个任务${running ? `（${running} 个进行中）` : ""}` : "还没有任务"}
-					{tickets.length ? ` · 发布工单 ${tickets.length}` : ""}
+					{waiting > 0 && <b className="zhu"> · {waiting} 个等我</b>}
 				</span>
 				<span>{ago(state.now, s.updated)}</span>
 			</div>
+			{(tickets.length > 0 || patrolling) && (
+				<div className="foot2">
+					<span className="mono">{tickets.map((t) => t.key).join(" ")}</span>
+					{patrolling && <span className="livedot">巡检中</span>}
+				</div>
+			)}
 		</div>
 	);
 }
