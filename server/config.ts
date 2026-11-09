@@ -52,6 +52,12 @@ export const YI_ACTIVE_CHECK = Number(env("YI_ACTIVE_CHECK", "5"));
 export const PATROL_MODEL = env("PATROL_MODEL", "claude/claude-sonnet-5-5");
 export const PATROL_CRON = env("PATROL_CRON", "*/30 * * * *");
 export const PATROL_DAYS = Number(env("PATROL_DAYS", "3"));
+// 全量后巡检：工单走到「prod 部署」后，在这些分钟各巡检一轮，跑完自动停（逗号分隔）
+export const PATROL_FULL_MINUTES = env("PATROL_FULL_MINUTES", "5,15,30,60")
+	.split(",")
+	.map(Number)
+	.filter((x) => x > 0)
+	.toSorted((a, b) => a - b);
 // 日报的文字总结用的模型（一天一次，几千 tokens）
 export const JOURNAL_MODEL = env("JOURNAL_MODEL", "claude/claude-sonnet-5-5");
 // Claude 订阅额度：每隔这么多分钟经 magpie 用这个模型发一个 1 token 的请求，读它转发的 anthropic-ratelimit-unified-* 响应头。0 = 不查

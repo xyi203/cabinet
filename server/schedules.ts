@@ -96,6 +96,13 @@ export interface ScheduleInput {
 	/** 过了这个时间自动停用 */
 	until?: number | null;
 	patrol?: boolean;
+	/** 按时间点跑（unix 秒）：给了就不解析 cron，cron 当说明；不给时 cron 没改就沿用原来的时间点 */
+	times?: number[] | null;
+}
+
+/** 下一次运行：按时间点的取下一个，按 cron 的算出来；没有了返回 undefined */
+export function upcoming(s: Pick<Schedule, "cron" | "times">, after: number): number | undefined {
+	return s.times?.length ? s.times.find((x) => x > after) : nextRun(s.cron, after);
 }
 
 /** 新建或修改；校验 cron、agent（只能是只读 agent）和内容 */
@@ -104,20 +111,29 @@ export function saveSchedule(input: ScheduleInput): Schedule {
 	const prompt = input.prompt.trim();
 	if (!name) throw new DraftError("给定时任务起个名字");
 	if (!prompt) throw new DraftError("写上要 agent 做什么");
-	let cron: Cron;
-	try {
-		cron = parseCron(input.cron);
-	} catch (e) {
-		throw new DraftError((e as Error).message);
-	}
+	const old = input.id ? getSchedule(input.id) : undefined;
+	if (input.id && !old) throw new DraftError("定时任务不存在");
+	// 按时间点的任务在看板上编辑时 cron 一栏是说明文字，没改就沿用原来的时间点
+	const times =
+		input.times !== undefined
+			? input.times?.length
+				? input.times.toSorted((a, b) => a - b)
+				: null
+			: old?.times?.length && old.cron === input.cron.trim()
+				? old.times
+				: null;
+	if (!times)
+		try {
+			parseCron(input.cron);
+		} catch (e) {
+			throw new DraftError((e as Error).message);
+		}
 	const agent = loadAgents().agents[input.agent];
 	if (!agent) throw new DraftError(`没有 agent ${input.agent}`);
 	if (input.agent === "dev") throw new DraftError("开发任务要选仓库和分支，不能定时跑；换一个只读 agent");
 	const t = now();
 	const enabled = input.enabled ?? true;
-	const next = enabled ? (nextRun(cron, t) ?? null) : null;
-	const old = input.id ? getSchedule(input.id) : undefined;
-	if (input.id && !old) throw new DraftError("定时任务不存在");
+	const next = enabled ? (upcoming({ cron: input.cron, times }, t) ?? null) : null;
 	const row: Schedule = {
 		id: old?.id ?? `cron-${Date.now()}`,
 		name,
@@ -131,6 +147,7 @@ export function saveSchedule(input: ScheduleInput): Schedule {
 		model: input.model ?? old?.model ?? null,
 		thinking: input.thinking ?? old?.thinking ?? null,
 		until: input.until !== undefined ? input.until : (old?.until ?? null),
+		times,
 		patrol: input.patrol ?? old?.patrol ?? false,
 		created: old?.created ?? t,
 		updated: t,
@@ -170,7 +187,7 @@ export async function fire(s: Schedule, at = now(), manual = false): Promise<str
 	}
 	const when = new Date(at * 1000).toLocaleString("sv-SE", { hour12: false }).slice(0, 16);
 	const request = [
-		`[定时任务「${s.name}」] ${manual ? "Yi 手动触发" : `计划时间 ${when}`}（cron \`${s.cron}\`）。这不是有人在等你回复，结论直接写给 Yi。`,
+		`[定时任务「${s.name}」] ${manual ? "Yi 手动触发" : `计划时间 ${when}`}（${s.times?.length ? s.cron : `cron \`${s.cron}\``}）。这不是有人在等你回复，结论直接写给 Yi。`,
 		s.prompt,
 		prev
 			? `上一次运行是 ${prev.id}：可以用 lookup ${prev.id} 看上次的结论，这次只说变化；和上次比没有变化时，第一行只写「${NO_CHANGE}」（之后可以跟一句说明），这一轮就直接归档、不打扰 Yi。`
@@ -316,7 +333,7 @@ export async function due(t = now()) {
 		}
 		let next: number | null = null;
 		try {
-			next = nextRun(s.cron, t) ?? null;
+			next = upcoming(s, t) ?? null;
 		} catch (e) {
 			log("定时任务的 cron 坏了，停用", s.id, e);
 		}

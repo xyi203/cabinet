@@ -25,7 +25,9 @@ import {
 	refreshTickets,
 	setStage,
 	startDoc,
+	startFullPatrol,
 	startPatrol,
+	stopFullPatrol,
 	stopPatrol,
 	storyTask,
 	syncStories,
@@ -275,6 +277,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 	const schedM = /^\/api\/schedules(?:\/(cron-\d+)\/(run|delete))?$/.exec(p);
 	if (schedM) {
 		try {
+			// 看板上新设的结束时间不能已经过了（不改结束时间时不传）
+			if (!schedM[1] && body.until != null && Number(body.until) <= now()) throw new DraftError("结束时间要晚于现在");
 			if (!schedM[1])
 				return send(res, 200, {
 					ok: true,
@@ -285,6 +289,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 						agent: String(body.agent ?? ""),
 						prompt: String(body.prompt ?? ""),
 						enabled: body.enabled === undefined ? undefined : Boolean(body.enabled),
+						// 结束时间：不传不动，传 null 清掉
+						until: body.until === undefined ? undefined : body.until == null ? null : Number(body.until),
 					}),
 				});
 			if (schedM[2] === "run") return send(res, 200, { ok: true, task: await runNow(schedM[1]) });
@@ -338,7 +344,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		return send(res, 200, { ok: true });
 	}
 	// 需求任务：从飞书同步、手动加飞书工单、推阶段、绑 / 解绑 / 刷新发布工单、派开发 / 查询 / 提发布工单
-	const storyM = /^\/api\/stories(?:\/(\d+)\/(stage|task|bind|unbind|doc|patrol|unpatrol))?(\/sync|\/tickets|\/add)?$/.exec(p);
+	const storyM =
+		/^\/api\/stories(?:\/(\d+)\/(stage|task|bind|unbind|doc|patrol|unpatrol|fullpatrol|unfullpatrol))?(\/sync|\/tickets|\/add)?$/.exec(p);
 	if (storyM) {
 		try {
 			const [, sid, action, all] = storyM;
@@ -355,6 +362,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			}
 			if (action === "doc") return send(res, 200, { ok: true, task: await startDoc(sid, String(body.key ?? "")) });
 			if (action === "patrol") return send(res, 200, { ok: true, ...(await startPatrol(sid, String(body.key ?? ""))) });
+			if (action === "fullpatrol") return send(res, 200, { ok: true, schedule: startFullPatrol(sid, String(body.key ?? "")) });
+			if (action === "unfullpatrol") {
+				stopFullPatrol(sid, String(body.key ?? ""));
+				return send(res, 200, { ok: true });
+			}
 			if (action === "unpatrol") {
 				stopPatrol(sid, String(body.key ?? ""));
 				return send(res, 200, { ok: true });

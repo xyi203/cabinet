@@ -120,6 +120,13 @@
       "when": 1794197650438,
       "tag": "0016_jazzy_meteorite",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1794220425608,
+      "tag": "0017_easy_professor_monster",
+      "breakpoints": true
     }
   ]
 }

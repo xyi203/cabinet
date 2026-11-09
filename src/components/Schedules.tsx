@@ -21,7 +21,22 @@ import { Markdown } from "./Markdown";
 import { dur } from "./ui";
 import { toast } from "./Toast";
 
-type Edit = Pick<Schedule, "name" | "agent" | "prompt"> & { id: string; at: string };
+/** until：结束时间（datetime-local 的值，空 = 不自动停）；fixed：按时间点跑的任务原来的说明，时间一栏没改就沿用原来的时间点 */
+type Edit = Pick<Schedule, "name" | "agent" | "prompt"> & { id: string; at: string; until: string; until0: string; fixed?: string };
+
+/** 秒 ↔ datetime-local 输入框的值（本地时间） */
+const toLocal = (t: number) => new Date(t * 1000).toLocaleString("sv-SE", { hour12: false }).slice(0, 16).replace(" ", "T");
+const fromLocal = (v: string) => (v ? new Date(v).getTime() / 1000 : null);
+const editOf = (s: Schedule): Edit => ({
+	id: s.id,
+	name: s.name,
+	at: s.cron,
+	agent: s.agent,
+	prompt: s.prompt,
+	until: s.until != null ? toLocal(s.until) : "",
+	until0: s.until != null ? toLocal(s.until) : "",
+	fixed: s.times?.length ? s.cron : undefined,
+});
 
 const WEEK = "日一二三四五六";
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -123,6 +138,8 @@ function cellOf(t: TaskView): [string, string] {
 
 /** 时间：认得出的说人话，cron 原文放悬停提示；认不出的只能给原文 */
 function Cron({ cron }: { cron: string }) {
+	// 按时间点跑的任务 cron 一栏是说明文字（「全量后 5 / 15 / 30 / 60 分钟」）
+	if (!/^[\d*/,\- ]+$/.test(cron.trim())) return <span>{cron}</span>;
 	const h = humanCron(cron);
 	return h === cron ? <code>{cron}</code> : <span title={`cron：${cron}`}>{h}</span>;
 }
@@ -182,11 +199,11 @@ export function Schedules({
 	// 巡检定时任务挂在哪条需求的哪张工单上（需求的 tickets[].patrol.scheduleId）
 	const patrolOf = (id: string) => {
 		for (const st of stories) {
-			const t = st.tickets.find((x) => x.patrol?.scheduleId === id && !x.removed);
-			if (t) return { story: st, ticket: t };
+			const t = st.tickets.find((x) => (x.patrol?.scheduleId === id || x.fullPatrol?.scheduleId === id) && !x.removed);
+			if (t) return { story: st, ticket: t, stopped: t.patrol?.scheduleId === id ? t.patrol.stopped : t.fullPatrol?.stopped };
 		}
 	};
-	const ended = (s: Schedule) => !s.enabled && ((s.until != null && s.until <= now) || Boolean(patrolOf(s.id)?.ticket.patrol?.stopped));
+	const ended = (s: Schedule) => !s.enabled && ((s.until != null && s.until <= now) || Boolean(patrolOf(s.id)?.stopped));
 	const all = list ?? [];
 	const groups: Array<[string, Schedule[]]> = [
 		["已启用", all.filter((s) => s.enabled)],
@@ -202,7 +219,9 @@ export function Schedules({
 	);
 
 	function editRow(e: Edit) {
-		const cron = cronOf(e.at);
+		const cron = e.fixed && e.at.trim() === e.fixed ? e.fixed : cronOf(e.at);
+		// 没动结束时间就不传：输入框只到分钟，原样传回去会把秒抹掉，已过期的也会被当成新设的结束时间
+		const until = e.until === e.until0 ? undefined : fromLocal(e.until);
 		return (
 			<div key={e.id} className="srow">
 				<div className="sedit">
@@ -225,6 +244,23 @@ export function Schedules({
 							<span className="bad">没认出时间</span>
 						)}
 					</div>
+					<label htmlFor="sedit-until">结束</label>
+					<div className="at">
+						<input
+							id="sedit-until"
+							type="datetime-local"
+							value={e.until}
+							onChange={(x) => setEdit({ ...e, until: x.target.value })}
+							title="到这个时间自动停用，留空一直跑"
+						/>
+						{e.until ? (
+							<button type="button" className="linkbtn" onClick={() => setEdit({ ...e, until: "" })}>
+								不自动停
+							</button>
+						) : (
+							<span>不自动停</span>
+						)}
+					</div>
 					{choices.length > 1 && (
 						<>
 							<label htmlFor="sedit-agent">交给</label>
@@ -244,7 +280,10 @@ export function Schedules({
 							className="btn pri sm"
 							disabled={busy || !cron || !e.name.trim() || !e.prompt.trim()}
 							onClick={async () => {
-								if (cron && (await act(() => saveSchedule({ id: e.id, name: e.name, cron, agent: e.agent, prompt: e.prompt }), "已保存")))
+								if (
+									cron &&
+									(await act(() => saveSchedule({ id: e.id, name: e.name, cron, agent: e.agent, prompt: e.prompt, until }), "已保存"))
+								)
 									setEdit(null);
 							}}
 						>
@@ -300,7 +339,7 @@ export function Schedules({
 							) : s.until <= now ? (
 								<span className="num">{when(s.until, now)} 到期</span>
 							) : null)}
-						{p?.ticket.patrol?.stopped && <span>{p.ticket.patrol.stopped}</span>}
+						{p?.stopped && <span>{p.stopped}</span>}
 					</div>
 					<div className="hist">
 						{runs.length > 0 && (
@@ -339,7 +378,7 @@ export function Schedules({
 						() => act(() => saveSchedule({ ...s, enabled: !s.enabled }), s.enabled ? "已暂停" : done ? "已重新启用" : "已恢复"),
 						"ghost",
 					)}
-					{btn("编辑", () => setEdit({ id: s.id, name: s.name, at: s.cron, agent: s.agent, prompt: s.prompt }), "ghost")}
+					{btn("编辑", () => setEdit(editOf(s)), "ghost")}
 					{btn(
 						"删除",
 						async () => {
@@ -489,7 +528,7 @@ export function Schedules({
 							onToggle={() => act(() => saveSchedule({ ...s, enabled: !s.enabled }), s.enabled ? "已暂停" : "已恢复")}
 							onEdit={() => {
 								onOpenSched(null);
-								setEdit({ id: s.id, name: s.name, at: s.cron, agent: s.agent, prompt: s.prompt });
+								setEdit(editOf(s));
 							}}
 						/>
 					);

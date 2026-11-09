@@ -100,6 +100,10 @@ export interface StoryTicket {
 	doc?: { taskId: string };
 	/** 巡检：stopped 有值就是停了 */
 	patrol?: { observeTaskId: string; scheduleId: string; started: number; stopped?: string };
+	/** 已走到 prod 部署（全量） */
+	full?: boolean;
+	/** 全量后巡检：按时间点跑几轮，跑完自动停 */
+	fullPatrol?: { scheduleId: string; started: number; stopped?: string };
 }
 
 /** 需求任务：一张飞书工单（需求 / 缺陷）的进度 */
@@ -396,6 +400,8 @@ export interface Schedule {
 	until?: number | null;
 	/** 发布工单巡检建的定时任务 */
 	patrol?: boolean;
+	/** 按时间点跑（unix 秒），这时 cron 只是说明文字 */
+	times?: number[] | null;
 }
 export const fetchSchedules = () => getJson<{ items: Schedule[] }>("/api/schedules").then((d) => d.items);
 /** 定时任务的一次运行（server/schedules.ts scheduleRuns） */

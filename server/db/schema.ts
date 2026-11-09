@@ -287,6 +287,10 @@ export interface StoryTicket {
 	doc?: { taskId: string };
 	/** 巡检：首次观察任务 + 每 30 分钟一轮的定时任务；stopped 写了停止原因就是停了 */
 	patrol?: { observeTaskId: string; scheduleId: string; started: number; stopped?: string };
+	/** 已走到「prod 部署」（全量）这一步 */
+	full?: boolean;
+	/** 全量后巡检：全量后按 PATROL_FULL_MINUTES 各跑一轮的定时任务，跑完自动停 */
+	fullPatrol?: { scheduleId: string; started: number; stopped?: string };
 }
 
 /** 定时任务（借鉴 multica 的 Autopilots）：到点交给一个只读 agent 跑一次，结论私聊给 Yi */
@@ -307,6 +311,8 @@ export const schedules = sqliteTable("schedules", {
 	thinking: text("thinking"),
 	/** 过了这个时间（unix 秒）自动停用 */
 	until: real("until"),
+	/** 按时间点跑（unix 秒，升序），给了就不看 cron，cron 只当显示用的说明；跑完最后一个自动停用。全量后巡检用 */
+	times: text("times", { mode: "json" }).$type<number[]>(),
 	/** 发布工单巡检：派出的任务按巡检处理（见 dev_tasks.patrol） */
 	patrol: integer("patrol", { mode: "boolean" }).notNull().default(false),
 	created: real("created").notNull(),

@@ -355,6 +355,9 @@ function StoryDrawer({
 	const makeDoc = (key: string) => act(() => post(`/api/stories/${s.id}/doc`, { key }), `正在生成 ${key} 的观察文档，写入飞书前会请你批准`);
 	const patrol = (key: string) =>
 		act(() => post(`/api/stories/${s.id}/patrol`, { key }), "已开始巡检：先做一次首次观察，之后定时检查，没问题不打扰你");
+	const fullPatrol = (key: string) =>
+		act(() => post(`/api/stories/${s.id}/fullpatrol`, { key }), "已开始全量后巡检，按时间点各跑一轮，跑完自动停");
+	const unfullPatrol = (key: string) => act(() => post(`/api/stories/${s.id}/unfullpatrol`, { key }), `已停止 ${key} 的全量后巡检`);
 	const retryObserve = (id: string) =>
 		act(
 			() =>
@@ -375,7 +378,7 @@ function StoryDrawer({
 			const r = await post<{ task: DevTask }>(`/api/stories/${s.id}/task`, {
 				kind,
 				text,
-				repo: repo || undefined,
+				repo: kind === "dev" ? repo || undefined : undefined,
 				branch: kind === "dev" ? branch : undefined,
 			});
 			setKind(null);
@@ -390,25 +393,24 @@ function StoryDrawer({
 				<div className="chat-input">
 					{kind && (
 						<>
-							{kind !== "release" && (
+							{/* 助手任务不限定仓库，只有开发任务要选在哪个仓库建 worktree */}
+							{kind === "dev" && (
 								<div className="row">
 									{/* 开发任务不预选仓库：按最近修改排的第一个只是碰巧，派错了就在不相干的仓库里建 worktree */}
 									<select value={repo} onChange={(e) => setRepo(e.target.value)} aria-label="仓库" title="仓库">
-										<option value="">{kind === "dev" ? "选仓库" : "不限仓库"}</option>
+										<option value="">选仓库</option>
 										{repos?.map((r) => (
 											<option key={r} value={r}>
 												{r}
 											</option>
 										))}
 									</select>
-									{kind === "dev" && (
-										<input
-											value={branch}
-											onChange={(e) => setBranch(e.target.value.trim())}
-											placeholder="分支名，留空自动起名"
-											aria-label="分支名"
-										/>
-									)}
+									<input
+										value={branch}
+										onChange={(e) => setBranch(e.target.value.trim())}
+										placeholder="分支名，留空自动起名"
+										aria-label="分支名"
+									/>
 								</div>
 							)}
 							<textarea value={text} placeholder={KIND_HINT[kind]} onChange={(e) => setText(e.target.value)} autoFocus />
@@ -526,6 +528,8 @@ function StoryDrawer({
 							const patrolling = Boolean(t.patrol && !t.patrol.stopped);
 							const schedule = schedules.find((x) => x.id === t.patrol?.scheduleId);
 							const observe = taskOf(t.patrol?.observeTaskId);
+							const fullOn = Boolean(t.fullPatrol && !t.fullPatrol.stopped);
+							const fullSched = schedules.find((x) => x.id === t.fullPatrol?.scheduleId);
 							// 失败的，或者出错后被归档、没有结论的：都要重试，不然巡检没有基线
 							const observeBroken = Boolean(
 								observe && (observe.status === "failed" || (observe.status === "done" && observe.error && !observe.summary.trim())),
@@ -610,6 +614,33 @@ function StoryDrawer({
 												</>
 											)}
 										</div>
+										{/* 巡检过的也给入口：全量识别之前就结束了的工单（或想提前开）可以手动开 */}
+										{(t.full || t.fullPatrol || t.patrol) && (
+											<div>
+												<span className="lab">全量后</span>
+												{fullOn ? (
+													<>
+														<span>{fullSched?.cron ?? "按时间点巡检"}</span>
+														{fullSched?.enabled && fullSched.nextRun && <span className="num">下次 {when(fullSched.nextRun, now)}</span>}
+														<button className="linkbtn" disabled={busy} onClick={() => unfullPatrol(t.key)}>
+															停止
+														</button>
+													</>
+												) : (
+													<>
+														{t.fullPatrol?.stopped && <span>已停止：{t.fullPatrol.stopped}</span>}
+														<button
+															className="linkbtn"
+															disabled={busy}
+															onClick={() => fullPatrol(t.key)}
+															title="从现在起按时间点各巡检一轮（默认 5 / 15 / 30 / 60 分钟），跑完自动停"
+														>
+															{t.fullPatrol ? "再巡检一遍" : "开始全量后巡检"}
+														</button>
+													</>
+												)}
+											</div>
+										)}
 										{patrolling && observe?.status === "running" && (
 											<div>
 												<span className="lab" />

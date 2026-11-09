@@ -52,24 +52,44 @@ const info = (o: { stage: number; status: string; ids: string }) =>
 		issue: {
 			issueInfo: { issueKey: "GD-1", summary: "functions api 优化", statusName: o.status, stage: o.stage },
 			issueParams: [{ paramKey: "feishuStoryIds", paramValue: o.ids }],
-			steps: [{ stage: 0 }, { stage: 1 }, { stage: 3 }, { stage: 5 }],
+			steps: [
+				{ stage: 0, stepName: "开始" },
+				{ stage: 1, stepName: "stg 部署" },
+				{ stage: 3, stepName: "prod AB部署" },
+				{ stage: 4, stepName: "prod 部署" },
+				{ stage: 5, stepName: "结束" },
+			],
 		},
 	});
 
 test("工单详情取标题、状态、飞书工单 ID，走到最后一步或终止算结束", () => {
 	const t = parseTicketInfo("GD-1", info({ stage: 3, status: "M1审核", ids: "7159107851,7154379825" }));
-	assert.deepEqual(t, { key: "GD-1", title: "functions api 优化", status: "M1审核", ended: false, storyIds: ["7159107851", "7154379825"] });
+	assert.deepEqual(t, {
+		key: "GD-1",
+		title: "functions api 优化",
+		status: "M1审核",
+		ended: false,
+		full: false,
+		storyIds: ["7159107851", "7154379825"],
+	});
 	assert.equal(parseTicketInfo("GD-1", info({ stage: 5, status: "已完成", ids: "" })).ended, true);
 	assert.equal(parseTicketInfo("GD-1", info({ stage: 1, status: "已终止", ids: "" })).ended, true);
+	// 走到 prod 部署就算全量；AB 阶段、终止的不算
+	assert.equal(parseTicketInfo("GD-1", info({ stage: 3, status: "prodAB实验中", ids: "" })).full, false);
+	assert.equal(parseTicketInfo("GD-1", info({ stage: 4, status: "prod部署中", ids: "" })).full, true);
+	assert.equal(parseTicketInfo("GD-1", info({ stage: 5, status: "prod发布成功", ids: "" })).full, true);
+	assert.equal(parseTicketInfo("GD-1", info({ stage: 4, status: "已终止", ids: "" })).full, false);
 	assert.throws(() => parseTicketInfo("GD-2", "{}"));
 });
 
 test("合并发布工单：自动按飞书工单 ID 挂，解绑过的不再自动挂，手动绑会重新挂上", () => {
 	const infos = new Map([
-		["GD-1", { key: "GD-1", title: "a", status: "M1审核", ended: false, storyIds: ["s1"] }],
-		["GD-2", { key: "GD-2", title: "b", status: "完成", ended: true, storyIds: ["s2"] }],
+		["GD-1", { key: "GD-1", title: "a", status: "M1审核", ended: false, full: false, storyIds: ["s1"] }],
+		["GD-2", { key: "GD-2", title: "b", status: "完成", ended: true, full: true, storyIds: ["s2"] }],
 	]);
-	assert.deepEqual(mergeTickets("s1", [], infos), [{ key: "GD-1", title: "a", status: "M1审核", ended: false, source: "auto" }]);
+	assert.deepEqual(mergeTickets("s1", [], infos), [
+		{ key: "GD-1", title: "a", status: "M1审核", ended: false, full: false, source: "auto" },
+	]);
 	// 别的需求的单不挂
 	assert.deepEqual(mergeTickets("s3", [], infos), []);
 	// 解绑过的：只更新状态，不去掉 removed
@@ -87,7 +107,7 @@ test("合并发布工单：自动按飞书工单 ID 挂，解绑过的不再自�
 	);
 	// 提单后挂的：详情还查不到也先挂工单号
 	assert.deepEqual(mergeTickets("s1", [], new Map(), { keys: ["GD-9"], source: "created" }), [
-		{ key: "GD-9", title: "", status: "", ended: undefined, source: "created" },
+		{ key: "GD-9", title: "", status: "", ended: undefined, full: undefined, source: "created" },
 	]);
 });
 
@@ -99,4 +119,8 @@ test("巡检提示：每轮先读首次观察的范围和基线，正常时第�
 	assert.ok(p.includes(`「${PATROL_OK}」`));
 	assert.match(observePrompt(story, "GD-45119", "dev-0"), /【巡检范围与基线】[\s\S]*/);
 	assert.match(observePrompt(story, "GD-45119", "dev-0"), /lookup dev-0/);
+	// 全量后巡检：说明已全量、按时间点跑；没有首次观察时自己读工单
+	const full = patrolPrompt(story, "GD-45119", undefined, 1794200000);
+	assert.match(full, /全量后巡检：全量后 5 \/ 15 \/ 30 \/ 60 分钟/);
+	assert.match(full, /issue_get_info GD-45119/);
 });

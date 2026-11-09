@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 const { openDb, useDb } = await import("../server/db/index.ts");
 useDb(openDb(":memory:"));
-const { CronError, nextRun, parseCron, saveSchedule, listSchedules, deleteSchedule, due } = await import("../server/schedules.ts");
+const { CronError, nextRun, parseCron, saveSchedule, listSchedules, deleteSchedule, due, upcoming } =
+	await import("../server/schedules.ts");
 const { DraftError } = await import("../server/drafts/store.ts");
 
 const at = (s: string) => new Date(s).getTime() / 1000;
@@ -128,4 +129,55 @@ test("执行记录：顺着 cron trigger 找到每次运行，新的在前；跳
 	assert.equal(runs[2].seconds, 42);
 	assert.equal(runs[0].taskId, null);
 	assert.equal(scheduleRuns("cron-0").length, 0);
+});
+
+test("按时间点跑：不解析 cron，依次取下一个，最后一个之后没有下次（due 据此停用）；编辑时说明没改沿用时间点", () => {
+	const t0 = Date.now() / 1000;
+	const times = [t0 + 900, t0 + 300, t0 + 1800];
+	const s = saveSchedule({ name: "全量后巡检 GD-1", cron: "全量后 5 / 15 / 30 分钟", times, agent: "assistant", prompt: "巡检" });
+	assert.deepEqual(s.times, [t0 + 300, t0 + 900, t0 + 1800]);
+	assert.equal(s.nextRun, t0 + 300);
+	assert.equal(upcoming(s, t0 + 300), t0 + 900);
+	assert.equal(upcoming(s, t0 + 1800), undefined);
+	// 看板上只改提示词：cron 一栏原样传回，时间点保留；改成真 cron 就换成按 cron
+	assert.deepEqual(saveSchedule({ id: s.id, name: s.name, cron: s.cron, agent: "assistant", prompt: "巡检 2" }).times, s.times);
+	assert.throws(() => saveSchedule({ id: s.id, name: s.name, cron: "全量后", agent: "assistant", prompt: "x", times: null }), DraftError);
+	deleteSchedule(s.id);
+});
+
+test("全量后巡检：停掉 AB 巡检，按 5 / 15 / 30 / 60 分钟建时间点任务；解绑一并停掉", async () => {
+	const { db, schema } = await import("../server/db/index.ts");
+	const { startFullPatrol, getStory, unbindTicket } = await import("../server/stories.ts");
+	const ab = saveSchedule({ name: "巡检 GD-7 · x", cron: "*/30 * * * *", agent: "assistant", prompt: "巡检", patrol: true });
+	const t = Date.now() / 1000;
+	db()
+		.insert(schema.stories)
+		.values({
+			id: "9000001",
+			projectKey: "p",
+			typeKey: "story",
+			title: "x",
+			url: "",
+			stage: "release",
+			tickets: [
+				{ key: "GD-7", title: "", status: "prod发布成功", full: true, patrol: { observeTaskId: "dev-1", scheduleId: ab.id, started: t } },
+			],
+			created: t,
+			updated: t,
+		})
+		.run();
+	const s = startFullPatrol("9000001", "GD-7");
+	assert.equal(s.times?.length, 4);
+	assert.equal(Math.round((s.times![0] - t) / 60), 5);
+	assert.equal(Math.round((s.times![3] - t) / 60), 60);
+	assert.equal(s.patrol, true);
+	assert.match(s.prompt, /lookup dev-1/);
+	const tk = getStory("9000001")!.tickets[0];
+	assert.equal(tk.patrol?.stopped, "已全量，转为全量后巡检");
+	assert.equal(tk.fullPatrol?.scheduleId, s.id);
+	assert.ok(!listSchedules().some((x) => x.id === ab.id));
+	assert.throws(() => startFullPatrol("9000001", "GD-7"), /已经在做/);
+	unbindTicket("9000001", "GD-7");
+	assert.equal(getStory("9000001")!.tickets[0].fullPatrol?.stopped, "已解绑");
+	assert.ok(!listSchedules().some((x) => x.id === s.id));
 });
