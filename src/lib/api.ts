@@ -258,13 +258,23 @@ let token: Promise<string> | undefined;
 const getToken = () => (token ??= getJson<{ token: string }>("/api/session").then((d) => d.token));
 
 export async function post<T = any>(url: string, body: unknown = {}): Promise<T> {
-	const res = await fetch(url, {
-		method: "POST",
-		headers: { "Content-Type": "application/json", "X-Cabinet-Token": await getToken() },
-		body: JSON.stringify(body),
-	});
+	const send = async () =>
+		fetch(url, {
+			method: "POST",
+			headers: { "Content-Type": "application/json", "X-Cabinet-Token": await getToken() },
+			body: JSON.stringify(body),
+		});
+	let res = await send();
+	// 后端每次启动换一个 token：页面还拿着旧的时第一次写操作会被拒（403，请求没有执行），换新 token 重试一次
+	if (res.status === 403) {
+		token = undefined;
+		res = await send();
+	}
 	const data = await res.json().catch(() => ({}));
-	if (res.status === 403) token = undefined; // 后端重启后 token 会变
+	if (res.status === 403) {
+		token = undefined;
+		throw new Error("看板和后台的连接过期了，刷新页面再试");
+	}
 	if (!res.ok) throw new Error(data.error ?? `失败（${res.status}）`);
 	return data;
 }
