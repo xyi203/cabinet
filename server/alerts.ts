@@ -1,23 +1,14 @@
 // 告警批处理：群里机器人 @Yi 的消息不起草回复，按群攒一批，交给 alert agent 一起看，结论私聊给 Yi（docs/pipeline.md §4）。
-// - 一批从第一条起算：ALERT_QUIET 秒没有新告警、或者满 ALERT_MAX_WAIT 秒就收口
+// - 一批从第一条起算：静默收口秒数内没有新告警、或者满最长攒批秒数就收口（config/routes.json 的 alert，server/rules.ts）
 // - 一批就是一个只读 agent 任务（dev.ts 的 dispatch）：看板上能看到，每轮私聊 Yi，引用通知可以追问，「完成」归档
-// - 同一个群 ALERT_FOLLOW 秒内又来一批、上一批的任务还没归档：并进上一批的会话（运行中插话，空闲开新一轮）
+// - 同一个群续批窗口内又来一批、上一批的任务还没归档：并进上一批的会话（运行中插话，空闲开新一轮）
 // - 攒着的批存在 kv 的 pending:alert:*，重启后接着攒；收口时才把消息记成已处理
-import {
-	ALERT_AGENT,
-	ALERT_CHATS,
-	ALERT_FOLLOW,
-	ALERT_MAX_WAIT,
-	ALERT_QUIET,
-	ALERT_SENDERS,
-	BOT_OPEN_ID,
-	OWNER_NAME,
-	OWNER_OPEN_ID,
-} from "./config.ts";
+import { ALERT_AGENT, BOT_OPEN_ID, OWNER_NAME, OWNER_OPEN_ID } from "./config.ts";
 import { deleteKv, getKv, listKv, setKv } from "./db/index.ts";
 import { dispatch, getDevTask, messageDev } from "./dev.ts";
 import type { ChatRef } from "./drafts/store.ts";
 import { formatMessages } from "./lark/bot.ts";
+import { routeRules } from "./rules.ts";
 import type { Message } from "./lark/types.ts";
 import { decide, receive } from "./pipeline.ts";
 import { log, now } from "./util.ts";
@@ -32,8 +23,9 @@ const STATUS_UPDATE = /^<card title="\[(Ack|Res)\]/;
 /** 机器人发的、@了 Yi 的群消息就是告警（卡片里的 @ 渲染成 @名字，mentions 里也有）；PagerDuty 卡片里 @ 的是「指派」 */
 export function isAlert(chat: Pick<ChatRef, "chat_mode"> & Partial<Pick<ChatRef, "chat_id">>, m: Message): boolean {
 	if (chat.chat_mode === "p2p" || m.sender.sender_type === "user" || m.sender.id === BOT_OPEN_ID) return false;
-	if (ALERT_CHATS.size && !ALERT_CHATS.has(chat.chat_id ?? "")) return false;
-	if (ALERT_SENDERS.size && !ALERT_SENDERS.has(m.sender.id)) return false;
+	const { chats, senders } = routeRules().alert;
+	if (chats.length && !chats.includes(chat.chat_id ?? "")) return false;
+	if (senders.length && !senders.includes(m.sender.id)) return false;
 	if (STATUS_UPDATE.test(m.content)) return false;
 	return m.mentions.some((x) => x.id === OWNER_OPEN_ID) || m.content.includes(`@${OWNER_NAME}`);
 }
@@ -41,7 +33,7 @@ export function isAlert(chat: Pick<ChatRef, "chat_mode"> & Partial<Pick<ChatRef,
 interface Batch {
 	chat: ChatRef;
 	msgs: Message[];
-	/** 第一条进批的时间（秒），满 ALERT_MAX_WAIT 收口 */
+	/** 第一条进批的时间（秒），满最长攒批秒数收口 */
 	first: number;
 }
 
@@ -71,7 +63,8 @@ export function addAlert(chat: ChatRef, m: Message, done?: OnDone): number {
 
 function schedule(chatId: string): number {
 	const b = batches.get(chatId)!;
-	const at = Math.min(now() + ALERT_QUIET, b.first + ALERT_MAX_WAIT);
+	const { quiet, maxWait } = routeRules().alert;
+	const at = Math.min(now() + quiet, b.first + maxWait);
 	clearTimeout(timers.get(chatId));
 	const t = setTimeout(() => void flush(chatId), Math.max(0, at - now()) * 1000);
 	t.unref();
@@ -91,7 +84,7 @@ function openTask(chatId: string) {
 	const id = getKv<string | null>(taskKey(chatId), null);
 	const t = id ? getDevTask(id) : undefined;
 	if (!t || t.status === "done" || t.status === "discarded") return undefined;
-	return now() - t.updated <= ALERT_FOLLOW ? t : undefined;
+	return now() - t.updated <= routeRules().alert.follow ? t : undefined;
 }
 
 /** 收口：这一批记成 trigger，一次分派给 alert agent */

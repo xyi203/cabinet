@@ -2,7 +2,7 @@
 // 分派（pipeline.ts decide）时决定这次分派属于哪件事：同一话题 / 工作项 / MR 的接着用，别的新建；
 // 状态不在各流程里分散写，而是按挂着的产出（草稿、agent 任务、审批、结果）推出来再存回 tasks 表。
 import { and, desc, eq, gte, inArray, isNull, like, or } from "drizzle-orm";
-import { SUBSCRIBE_TTL } from "./config.ts";
+import { routeRules } from "./rules.ts";
 import { db, getKv, schema, setKv } from "./db/index.ts";
 import type { Approval, DevTask, Draft, ResultRow, RouteRow, TriggerRow } from "./db/schema.ts";
 import { log, now } from "./util.ts";
@@ -14,7 +14,7 @@ export type Need = "send" | "approve" | "read" | "decide" | "retry";
 const CLOSED = new Set(["done", "cancelled"]);
 export const isClosed = (status: string) => CLOSED.has(status);
 
-/** 话题、工作项、MR、机器人话题这类「一件事」的事件流：关闭后 SUBSCRIBE_TTL 内再来消息就重开；私聊和群的主线只接没关闭的 */
+/** 话题、工作项、MR、机器人话题这类「一件事」的事件流：关闭后重开时间（routeRules().reopen）内再来消息就重开；私聊和群的主线只接没关闭的 */
 const topical = (thread: string) => thread.includes("#") || /^(meego|gitlab):/.test(thread);
 
 const newId = () => `tsk-${Math.round(now() * 1000).toString(36)}${Math.random().toString(36).slice(2, 5)}`;
@@ -73,11 +73,12 @@ const firstLine = (s: string) =>
 
 /** 同一事件流（或提到同一个 MR）上最近的那件事，还能接着用就返回它 */
 function findOpen(thread: string, refs: string[], at: number): string | undefined {
+	const ttl = routeRules().reopen;
 	const conds = [eq(schema.tasks.thread, thread), ...refs.map((r) => like(schema.tasks.refs, `%"${r}"%`))];
 	const rows = db()
 		.select()
 		.from(schema.tasks)
-		.where(and(or(...conds), gte(schema.tasks.updated, at - SUBSCRIBE_TTL)))
+		.where(and(or(...conds), gte(schema.tasks.updated, at - ttl)))
 		.orderBy(desc(schema.tasks.updated))
 		.limit(5)
 		.all();
@@ -85,7 +86,7 @@ function findOpen(thread: string, refs: string[], at: number): string | undefine
 		const status = refreshTask(t.id)?.status ?? t.status;
 		if (!isClosed(status)) return t.id;
 		const byRef = refs.some((r) => t.refs.includes(r));
-		if ((topical(thread) || byRef) && (t.closed ?? 0) >= at - SUBSCRIBE_TTL) return t.id;
+		if ((topical(thread) || byRef) && (t.closed ?? 0) >= at - ttl) return t.id;
 	}
 }
 

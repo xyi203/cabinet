@@ -519,3 +519,13 @@ export const fetchJournal = (date: string) => getJson<Journal>(`/api/journal?dat
 
 /** 立即拉取新消息；带消息 id 时，这条如果在「你在聊，等一会儿再起草」就不等了 */
 export const pollNow = (id?: string) => post<{ skipped: boolean }>("/api/poll", id ? { id } : {});
+
+/** 路由规则（server/rules.ts）：config/routes.json，没写的项是默认值 */
+export interface RouteRules {
+	reopen: number;
+	yiActive: { window: number; delay: number; check: number };
+	alert: { quiet: number; maxWait: number; follow: number; senders: string[]; chats: string[] };
+	cron: { patrolPauseAt: number };
+}
+export const fetchRoutes = () => getJson<{ rules: RouteRules; defaults: RouteRules }>("/api/routes");
+export const saveRoutes = (r: RouteRules) => post<{ rules: RouteRules }>("/api/routes/save", r).then((d) => d.rules);

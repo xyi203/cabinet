@@ -1,6 +1,7 @@
 // Watchdog：主流程之外的控制回路。定时按确定的规则查一遍，有新问题私聊 Yi 一张卡片（同一个问题只提醒一次，恢复后清掉），
 // 当前的问题同时放进看板「待你处理」。只查不修：修复（重试、重新授权、重启）由 Yi 决定。
-import { ALERT_MAX_WAIT, DRAFT_ENABLED, OWNER_OPEN_ID, PORT, POLL_INTERVAL, WATCHDOG_INTERVAL } from "./config.ts";
+import { DRAFT_ENABLED, OWNER_OPEN_ID, PORT, POLL_INTERVAL, WATCHDOG_INTERVAL } from "./config.ts";
+import { routeRules } from "./rules.ts";
 import { deleteKv, getKv, listKv, setKv } from "./db/index.ts";
 import { running } from "./agent/driver.ts";
 import { batchesSnapshot } from "./alerts.ts";
@@ -77,7 +78,7 @@ export function checkHealth(s: Snapshot): Issue[] {
 				detail: `「${t.title.slice(0, 40)}」显示运行中，但没有在跑的运行。在卡片或看板上给它发一句话就会重新开始。`,
 			});
 	for (const b of s.alertBatches)
-		if (s.now - b.first > ALERT_MAX_WAIT + 5 * MIN)
+		if (s.now - b.first > routeRules().alert.maxWait + 5 * MIN)
 			issues.push({
 				key: `alert-stuck:${b.chatId}`,
 				title: "告警批没有收口",

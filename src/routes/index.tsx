@@ -8,6 +8,7 @@ import { DispatchPage } from "../components/Dispatch";
 import { JournalPage } from "../components/Journal";
 import { MemoryBoard } from "../components/MemoryBoard";
 import { PromptsPage } from "../components/Prompts";
+import { RouteRulesPage } from "../components/RouteRules";
 import { Schedules } from "../components/Schedules";
 import { SkillsPage } from "../components/Skills";
 import { StatsPage } from "../components/Stats";
@@ -82,7 +83,7 @@ function Tabs<T extends string>({ tabs, value, onChange }: { tabs: readonly T[];
 }
 
 const OPS_TABS = ["队列", "失败", "统计", "日报", "系统健康"] as const;
-const SET_TABS = ["渠道", "提示词", "技能", "受众"] as const;
+const SET_TABS = ["渠道", "路由规则", "提示词", "技能", "受众"] as const;
 
 function Dashboard() {
 	const search = Route.useSearch();
@@ -370,12 +371,10 @@ function Settings({ s, tab, setTab }: { s: State; tab?: string; setTab: (t: stri
 							</div>
 						))}
 					</div>
-					<p className="meta note">
-						Webhook（Sentry、GitLab、CI 推送）在 P5 接入：需要先定对外暴露方式。路由规则现在在代码里，P3 挪进 config/routes.json
-						后在这里改。
-					</p>
+					<p className="meta note">Webhook（Sentry、GitLab、CI 推送）在 P5 接入：需要先定对外暴露方式。</p>
 				</>
 			)}
+			{cur === "路由规则" && <RouteRulesPage />}
 			{cur === "提示词" && <PromptsPage />}
 			{cur === "技能" && <SkillsPage />}
 			{cur === "受众" && <AudiencePage />}

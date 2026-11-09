@@ -1,6 +1,7 @@
 // 起草：分派 agent、跑一轮、把草稿私聊给 Yi；进程中断后按同一 requestId 接回
 import { changed } from "../bus.ts";
-import { PATHS, SESSION_MAX_TOKENS, YI_ACTIVE_CHECK, YI_ACTIVE_DELAY, YI_ACTIVE_WINDOW } from "../config.ts";
+import { PATHS, SESSION_MAX_TOKENS } from "../config.ts";
+import { routeRules } from "../rules.ts";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import type { MeegoCard } from "../db/schema.ts";
@@ -140,7 +141,8 @@ export function abortIfYiReplied(chat: ChatRef, m: Message) {
 /** Yi 正在这个聊天里聊：先等一会儿再起草，多半他自己就回了。等的期间隔几秒看一次，他回了消息、表情或对方又接着发了就不再等
  * （之后起草前照常再判一次，按跳过处理） */
 async function waitIfYiActive(chat: ChatRef, msgs: Message[]) {
-	if (YI_ACTIVE_DELAY <= 0 || chat.chat_mode === "meego") return;
+	const { window, delay, check } = routeRules().yiActive;
+	if (delay <= 0 || chat.chat_mode === "meego") return;
 	let recent: Message[];
 	try {
 		recent = await listMessages({ chatId: chat.chat_id }, { order: "desc", pageSize: 30 });
@@ -148,9 +150,9 @@ async function waitIfYiActive(chat: ChatRef, msgs: Message[]) {
 		log("检查 Yi 是否在聊失败", chat.chat_id, e);
 		return;
 	}
-	if (!ownerActive(recent, msgs, YI_ACTIVE_WINDOW * 1000)) return;
-	log(`Yi 正在聊，最多等 ${YI_ACTIVE_DELAY}s 再起草`, chat.chat_id);
-	const until = now() + YI_ACTIVE_DELAY;
+	if (!ownerActive(recent, msgs, window * 1000)) return;
+	log(`Yi 正在聊，最多等 ${delay}s 再起草`, chat.chat_id);
+	const until = now() + delay;
 	for (const m of msgs) {
 		const i = inflight.get(m.message_id);
 		if (i) i.waitUntil = until;
@@ -165,7 +167,7 @@ async function waitIfYiActive(chat: ChatRef, msgs: Message[]) {
 	try {
 		while (!skipped && now() < until) {
 			await new Promise<void>((r) => {
-				const timer = setTimeout(r, Math.min(YI_ACTIVE_CHECK, until - now()) * 1000);
+				const timer = setTimeout(r, Math.min(check, until - now()) * 1000);
 				wakeUp = () => {
 					clearTimeout(timer);
 					r();

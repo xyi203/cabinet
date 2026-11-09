@@ -2263,3 +2263,47 @@ pre.cmd {
 		grid-template-columns: minmax(0, 1fr);
 	}
 }
+
+/* 设置 → 路由规则 */
+.cfg {
+	display: grid;
+	grid-template-columns: 150px minmax(0, 1fr);
+	gap: 8px 16px;
+	padding: 12px 16px;
+	border-top: 1px solid var(--line);
+	align-items: center;
+	font-size: 13px;
+}
+.cfg:first-child {
+	border-top: 0;
+}
+.cfg .lab {
+	font-weight: 500;
+}
+.cfg .lab small {
+	display: block;
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 400;
+}
+.cfg .val {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 8px;
+	align-items: center;
+	min-width: 0;
+}
+.numin {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--text-2);
+}
+.numin input.in {
+	width: 76px;
+}
+@media (max-width: 760px) {
+	.cfg {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}

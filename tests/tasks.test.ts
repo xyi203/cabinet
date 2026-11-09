@@ -147,3 +147,10 @@ test("推送规则：建议不回和表情不私聊，MR 预审和改写总要�
 	assert.equal(quietRound({ patrol: false }, "新增 1 个 MR 等你看"), false);
 	assert.equal(quietRound({ patrol: false }, "本轮巡查正常"), false, "不是巡检的不认巡检那句");
 });
+
+test("路由规则：没有 config/routes.json 时用默认值；保存时校验范围", async () => {
+	const { RULE_DEFAULTS, routeRules, saveRouteRules } = await import("../server/rules.ts");
+	assert.deepEqual(routeRules(), RULE_DEFAULTS);
+	assert.throws(() => saveRouteRules({ alert: { quiet: 900, maxWait: 600 } }), /最长攒批不能比静默收口短/);
+	assert.throws(() => saveRouteRules({ cron: { patrolPauseAt: 2 } }), /巡检额度上限/);
+});

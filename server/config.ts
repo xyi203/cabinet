@@ -131,6 +131,8 @@ export const PATHS = {
 	/** 消息里的截图：起草时下载到这里，把路径给 agent 用 read 查看 */
 	images: path.join(DATA_DIR, "images"),
 	agents: path.join(CONFIG_DIR, "agents.json"),
+	/** 路由规则（server/rules.ts），看板能改 */
+	routes: path.join(CONFIG_DIR, "routes.json"),
 	system: path.join(CONFIG_DIR, "system.md"),
 	draftRules: path.join(CONFIG_DIR, "draft.md"),
 	emojiTypes: path.join(CONFIG_DIR, "emoji_types.txt"),

@@ -7,9 +7,9 @@ import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { changed } from "./bus.ts";
 import { db, schema } from "./db/index.ts";
 import type { ResultRow, RouteRow, Subscription, TriggerRow } from "./db/schema.ts";
-import { SUBSCRIBE_TTL } from "./config.ts";
 import { MR_RE } from "./agent/router.ts";
 import { assignTask } from "./taskstore.ts";
+import { routeRules } from "./rules.ts";
 import { now } from "./util.ts";
 
 export type Channel = "lark" | "meego" | "bot" | "board" | "alert" | "cron";
@@ -207,10 +207,10 @@ export function subscribable(thread: string, refs: string[]): string[] {
 	return [...new Set(keys)];
 }
 
-/** 这些键里最先命中、最近还在用的订阅；过了 SUBSCRIBE_TTL 没用到的不算 */
+/** 这些键里最先命中、最近还在用的订阅；过了重开时间（routeRules().reopen）没用到的不算 */
 export function subscriber(keys: string[]): Subscription | undefined {
 	if (!keys.length) return;
-	const since = now() - SUBSCRIBE_TTL;
+	const since = now() - routeRules().reopen;
 	const rows = db()
 		.select()
 		.from(schema.subscriptions)

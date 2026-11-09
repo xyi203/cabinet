@@ -5,7 +5,7 @@
 import { eq, like } from "drizzle-orm";
 import { loadAgents } from "./agent/router.ts";
 import { changed } from "./bus.ts";
-import { PATROL_PAUSE_AT } from "./config.ts";
+import { routeRules } from "./rules.ts";
 import { fiveHourUsed } from "./quota.ts";
 import { db, schema } from "./db/index.ts";
 import type { Schedule } from "./db/schema.ts";
@@ -163,7 +163,7 @@ export async function fire(s: Schedule, at = now(), manual = false): Promise<str
 	});
 	// 巡检一天几十轮：Claude 5 小时额度快用完时跳过，把额度留给起草；手动触发不拦
 	const used = fiveHourUsed();
-	if (s.patrol && !manual && used != null && used >= PATROL_PAUSE_AT) {
+	if (s.patrol && !manual && used != null && used >= routeRules().cron.patrolPauseAt) {
 		decide([tid], { rule: `跳过：Claude 5 小时额度已用 ${Math.round(used * 100)}%`, actionKind: "none" });
 		log("巡检跳过：额度紧张", s.id, used);
 		return;

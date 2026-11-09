@@ -41,6 +41,7 @@ import { abortRun, conversationTranscript, running } from "./agent/driver.ts";
 import { modelOptions } from "./agent/models.ts";
 import { closeTask, devDiff, discardDev, dispatch, getDevTask, listRepos, messageDev, pushDev, stopDev } from "./dev.ts";
 import { dismissTask, retryTask } from "./retry.ts";
+import { RULE_DEFAULTS, RuleError, routeRules, saveRouteRules } from "./rules.ts";
 import { dashboardState, sessionLog } from "./tasks.ts";
 import { search } from "./memory/recall.ts";
 import {
@@ -156,6 +157,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		}
 		if (p === "/api/repos") return send(res, 200, { repos: listRepos() });
 		if (p === "/api/schedules") return send(res, 200, { items: listSchedules() });
+		if (p === "/api/routes") return send(res, 200, { rules: routeRules(), defaults: RULE_DEFAULTS });
 		if (p === "/api/dispatch") return send(res, 200, dispatchState());
 		// 第三期：提示词、技能、受众、日报（只读的部分）
 		const qp = (k: string) => url.searchParams.get(k) ?? "";
@@ -290,6 +292,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			if (e instanceof DraftError) return send(res, 409, { error: e.message });
 			log("定时任务操作失败", p, e);
 			return send(res, 500, { error: String((e as Error).message).slice(0, 300) });
+		}
+	}
+	// 路由规则（server/rules.ts）：校验后写回 config/routes.json，下一条消息就按新的走
+	if (p === "/api/routes/save") {
+		try {
+			return send(res, 200, { ok: true, rules: saveRouteRules(body) });
+		} catch (e) {
+			return send(res, e instanceof RuleError ? 409 : 500, { error: String((e as Error).message).slice(0, 300) });
 		}
 	}
 	// 第三期的写操作：保存提示词、隐藏 skill、受众增改删、生成日报总结
