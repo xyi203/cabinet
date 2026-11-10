@@ -8,6 +8,7 @@ import { DevDrawer } from "./DevDrawer";
 import { Markdown } from "./Markdown";
 import { Drawer, Embedded } from "./Drawer";
 import { DraftDrawer } from "./Drawers";
+import { MsgText } from "./MsgText";
 import { Pill, StoryTag, workerName } from "./Workbench";
 
 const OUTCOME: Record<string, string> = {
@@ -71,7 +72,9 @@ function eventNode(e: TaskEvent): ReactNode {
 				<div className="who">
 					<b>{e.owner ? "你" : e.who || "对方"}</b>
 				</div>
-				<div className={`bubble${e.owner ? " yi" : ""}`}>{e.text}</div>
+				<div className={`bubble${e.owner ? " yi" : ""}`}>
+					<MsgText text={e.text} mid={e.mid} />
+				</div>
 			</>
 		);
 	if (e.k === "route")

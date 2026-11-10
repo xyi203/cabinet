@@ -36,7 +36,7 @@ import {
 import { applyMrAction, type MrAction } from "./drafts/mr.ts";
 import { type Kind, listStickers, resolveSticker } from "./drafts/format.ts";
 import { DraftError, getDraft, LIVE } from "./drafts/store.ts";
-import { LarkError, authorizeUrl, exchangeCode, userAuthStatus } from "./lark/bot.ts";
+import { LarkError, authorizeUrl, exchangeCode, saveImage, userAuthStatus } from "./lark/bot.ts";
 import { lastPoll, pollNow } from "./poller.ts";
 import { dismissDraft, draftNow } from "./drafts/make.ts";
 import { abortRun, conversationTranscript, running } from "./agent/driver.ts";
@@ -201,6 +201,16 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			} catch (e) {
 				return send(res, 409, { error: (e as Error).message });
 			}
+		}
+		// 飞书消息里的图片：看板预览用。起草时下过的直接给，没下过（或过期被清理了）就按消息 id 现下一份
+		const msgImg = /^\/api\/msgimg\/(om_[\w-]+)\/(img_[\w-]+)$/.exec(p);
+		if (msgImg) {
+			const [, mid, key] = msgImg;
+			const file = await saveImage(mid, key, PATHS.images).catch((e) => log("看板下载图片失败", mid, key, e));
+			if (!file) return send(res, 404, { error: "图片取不到了" });
+			const ext = path.extname(file).slice(1).toLowerCase();
+			res.setHeader("Cache-Control", "private, max-age=86400");
+			return send(res, 200, readFileSync(file), `image/${ext === "jpg" ? "jpeg" : ext}`);
 		}
 		if (p.startsWith("/api/images/")) {
 			// 只给 PATHS.images 下的文件：消息截图，过期会被定期清理

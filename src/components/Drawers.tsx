@@ -5,6 +5,7 @@ import { GLYPH, STATUS, describeDraft, money, time, where } from "../lib/format"
 import { DispatchForm } from "./DevDrawer";
 import { Drawer, Embedded, type Msg, MsgLine } from "./Drawer";
 import { Markdown } from "./Markdown";
+import { MsgText } from "./MsgText";
 import { StepLog } from "./StepLog";
 import { confirmDialog } from "./Confirm";
 import { dur } from "./ui";
@@ -111,7 +112,9 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 			{!embedded && (
 				<>
 					<div className="label">{d.senderName} 说</div>
-					<blockquote>{d.text}</blockquote>
+					<blockquote>
+						<MsgText text={d.text} mid={d.replyTo} />
+					</blockquote>
 				</>
 			)}
 			{dispatching && <DispatchForm draft={d} onDone={onClose} />}

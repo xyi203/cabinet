@@ -150,6 +150,8 @@ function view(
 			owner: x.owner,
 			text: x.text,
 			url: x.url,
+			// 飞书消息 id：看板按它取消息里的图片
+			mid: x.id.slice(x.id.indexOf(":") + 1),
 		})),
 		...routes.map((r) => ({ k: "route" as const, at: r.at, rule: r.rule, agent: r.agent, tier: r.info?.tier, kind: r.actionKind })),
 		...o.results.map((r) => ({ k: "result" as const, at: r.at, outcome: r.outcome, detail: r.detail, ref: r.ref })),

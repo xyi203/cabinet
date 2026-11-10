@@ -156,7 +156,7 @@ export type TaskStatus = "todo" | "in_progress" | "in_review" | "blocked" | "don
 export type Need = "send" | "approve" | "read" | "decide" | "retry";
 
 export type TaskEvent =
-	| { k: "msg"; at: number; who: string; owner: boolean; text: string; url?: string | null }
+	| { k: "msg"; at: number; who: string; owner: boolean; text: string; url?: string | null; mid?: string }
 	| { k: "route"; at: number; rule: string; agent: string | null; tier?: string; kind: string }
 	| { k: "result"; at: number; outcome: string; detail?: string | null; ref?: string | null };
 
