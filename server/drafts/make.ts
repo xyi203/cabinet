@@ -5,7 +5,7 @@ import { routeRules } from "../rules.ts";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import type { MeegoCard } from "../db/schema.ts";
-import { expandForward, FORWARD_PLACEHOLDER, imageKeys, imagesNote, listMessages, saveImage } from "../lark/bot.ts";
+import { expandForward, FORWARD_PLACEHOLDER, imageKeys, imagesNote, saveImage } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import {
 	ASSISTANT,
@@ -27,6 +27,7 @@ import {
 	openRoute,
 	receive,
 	refsOf,
+	rootRefs,
 	settle,
 	subscribable,
 	subscribe,
@@ -43,7 +44,7 @@ import { where as whereOf } from "./card.ts";
 import { notifyFailure } from "./failure.ts";
 import { draftLabel, isAckOnly, stickerHint } from "./format.ts";
 import { ackMr } from "./mr.ts";
-import { ownerActive, ownerReplyCovers, staleReason } from "./replied.ts";
+import { ownerActive, ownerReplyCovers, recentAround, staleReason } from "./replied.ts";
 import { type ChatRef, claim, inflight, LIVE, pushDraft, type Source } from "./store.ts";
 
 /**
@@ -155,7 +156,7 @@ async function waitBeforeDraft(chat: ChatRef, msgs: Message[]) {
 	let until = chat.chat_mode === "p2p" && p2p > 0 ? sinceLast(msgs, p2p) : 0;
 	if (delay > 0) {
 		try {
-			const recent = await listMessages({ chatId: chat.chat_id }, { order: "desc", pageSize: 30 });
+			const recent = await recentAround(chat, msgs);
 			if (ownerActive(recent, msgs, window * 1000)) until = Math.max(until, now() + delay);
 		} catch (e) {
 			log("检查 Yi 是否在聊失败", chat.chat_id, e);
@@ -247,6 +248,7 @@ function triggerOf(chat: ChatRef, m: Message): TriggerInput {
 		channel: chat.chat_mode === "meego" ? "meego" : "lark",
 		externalId: m.message_id,
 		thread: meego ? `meego:${meego.workItemId}` : `lark:${chat.chat_id}${m.thread_id ? `#${m.thread_id}` : ""}`,
+		refs: m.root_id && m.root_id !== m.message_id ? rootRefs(m.root_id) : undefined,
 		actorId: m.sender.id,
 		actorName: m.sender.name || m.sender.id,
 		text: m.content,
@@ -373,7 +375,9 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			}
 			// 订阅接续：同一个话题 / 工作项、或提到的 MR 已经挂在某个会话上，档位照常分诊，会话接着用
 			const thread = triggerOf(chat, last).thread;
-			const keys = subscribable(thread, refsOf(source.text));
+			// 话题回复带上话题根提到的 MR：接着 CR 的会话和 mr 档
+			const refs = [...new Set([...refsOf(source.text), ...rootRefs(last.root_id)])];
+			const keys = subscribable(thread, refs);
 			const agents = loadAgents().agents;
 			const sub = subscriber(keys);
 			let name: string;
@@ -437,9 +441,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				? `\n\n要预审的 MR：项目 \`${info.mrProject}\`，iid \`${info.mrIid}\`，glab 的 -R 参数用 \`${glabRepo(info.mrProject!)}\`。\nMR 概要（glab mr view）：\n${await mrBrief(info)}`
 				: "";
 			// 链式召回的起点：这条消息和它所在事件流的 ID，需要以前的来龙去脉时用 lookup 查
-			const ids = `（这条消息的 ID：${triggerIds.at(-1)}；所在事件流：thread:${thread}${refsOf(source.text)
-				.map((r) => `；提到 ${r}`)
-				.join("")}）`;
+			const ids = `（这条消息的 ID：${triggerIds.at(-1)}；所在事件流：thread:${thread}${refs.map((r) => `；提到 ${r}`).join("")}）`;
 			// Yi 在受众页给这个人 / 这个群设的口径
 			const aud = audienceBlock(source.senderId, chat.chat_mode === "group" ? chat.chat_id : undefined);
 			const prompt = `[代回复草稿] ${where}，来自 ${source.senderName}\n\n${aud ? `${aud}\n\n` : ""}${ctx}${extra}\n\n${hint}\n\n${ids}\n\n请按草稿规则起草 Yi 的回复。`;

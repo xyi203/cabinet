@@ -33,7 +33,7 @@ export async function staleReason(chat: ChatRef, msgs: Message[]): Promise<strin
 	if (chat.chat_mode === "meego") return (await meegoYiReplied(last.meego as MeegoCard)) ? "Yi 已亲自回复" : null;
 	let recent: Message[];
 	try {
-		recent = await listMessages({ chatId: chat.chat_id }, { order: "desc", pageSize: 30 });
+		recent = await recentAround(chat, msgs);
 	} catch (e) {
 		log("检查是否已回复失败", chat.chat_id, e);
 		return null;
@@ -80,6 +80,17 @@ export function ownerActive(recent: Message[], msgs: Message[], windowMs: number
 	return recent.some((m) => m.sender.id === OWNER_OPEN_ID && m.create_time >= first - windowMs);
 }
 
+/**
+ * 判断回没回、是不是在聊要看的那段消息：话题里的消息会话列表里没有，按话题拉；
+ * 话题外的按会话拉（话题根本身也在会话列表里）
+ */
+export async function recentAround(chat: Pick<ChatRef, "chat_id">, msgs: Message[]): Promise<Message[]> {
+	const thread = msgs.at(-1)!.root_id ? msgs.at(-1)!.thread_id : undefined;
+	return thread
+		? listMessages({ threadId: thread }, { order: "desc", pageSize: 30 })
+		: listMessages({ chatId: chat.chat_id }, { order: "desc", pageSize: 30 });
+}
+
 export function ownerRepliedIn(chatMode: string, recent: Message[], msgs: Message[]): boolean {
 	const pos = new Map(recent.map((m) => [m.message_id, m.message_position]));
 	const base = Math.max(0, ...msgs.map((m) => pos.get(m.message_id) ?? 0));
@@ -88,7 +99,8 @@ export function ownerRepliedIn(chatMode: string, recent: Message[], msgs: Messag
 		(m) =>
 			m.sender.id === OWNER_OPEN_ID &&
 			ownerReplyCovers(chatMode, m, msgs) &&
-			(m.message_position > base || Boolean(m.thread_id && m.thread_id === last.thread_id)),
+			// 话题里的消息位置是负数，没法比先后：同一话题里按时间，晚于这几条的才算回了（之前回过的不算）
+			(m.thread_id && m.thread_id === last.thread_id ? m.create_time > last.create_time : m.message_position > base),
 	);
 }
 

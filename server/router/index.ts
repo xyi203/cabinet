@@ -14,6 +14,7 @@ import type { BotEvent, Message } from "../lark/types.ts";
 import { decide } from "../pipeline.ts";
 import { accept, answer, botTrigger, devReply, draftCommand, firstSeen, remember, stripMentions } from "../qa.ts";
 import { devTaskOfDm } from "../dev.ts";
+import { watchTopic } from "../topics.ts";
 import { log, now } from "../util.ts";
 
 export { cronSkip, routeBoard } from "./board.ts";
@@ -51,6 +52,8 @@ export function routeChat(chat: ChatRef, msgs: Message[]) {
 			continue;
 		}
 		if (asksYi(chat.chat_mode, m)) {
+			// 群里找 Yi 的：之后话题里的回复会话列表里看不到，开始盯它的话题（topics.ts）
+			watchTopic(chat, m);
 			queue(chat, m, chat.chat_mode === "p2p" ? m.sender.name : `${chat.name} · ${m.sender.name}`, m.content);
 			fresh.push(m);
 		} else {

@@ -27,11 +27,25 @@ export interface TriggerInput {
 	text: string;
 	url?: string | null;
 	at?: number;
+	/** 正文之外带上的事件流：话题回复继承它第一条消息提到的 MR */
+	refs?: string[];
 }
 
 export const triggerId = (channel: Channel, externalId: string) => `${channel}:${externalId}`;
 
 /** 正文里提到的其他事件流：现在只认 GitLab MR */
+/** 话题回复：它第一条消息（话题根）的 trigger 提到的事件流，比如 @Yi 时贴的 MR；回复里常常只说「改好了」 */
+export function rootRefs(rootId: string | undefined, channel: Channel = "lark"): string[] {
+	if (!rootId) return [];
+	return (
+		db()
+			.select({ refs: schema.triggers.refs })
+			.from(schema.triggers)
+			.where(eq(schema.triggers.id, triggerId(channel, rootId)))
+			.get()?.refs ?? []
+	);
+}
+
 export function refsOf(text: string): string[] {
 	const refs = new Set<string>();
 	const re = new RegExp(MR_RE.source, "g");
@@ -53,7 +67,7 @@ export function receive(t: TriggerInput): string {
 			owner: Boolean(t.owner),
 			text: t.text.slice(0, 2000),
 			url: t.url ?? null,
-			refs: refsOf(t.text),
+			refs: [...new Set([...refsOf(t.text), ...(t.refs ?? [])])],
 			at: t.at ?? now(),
 			status: "received",
 		})

@@ -21,6 +21,7 @@ import { backfillTasks } from "./taskstore.ts";
 import { startQuota, stopQuota } from "./quota.ts";
 import { startWatchdog, stopWatchdog } from "./watchdog.ts";
 import { startMrWatch, stopMrWatch } from "./mrwatch.ts";
+import { backfillTopics } from "./topics.ts";
 
 const missing = missingConfig();
 if (missing.length) {
@@ -31,6 +32,8 @@ for (const d of [PATHS.sessions, PATHS.stickers, PATHS.images]) mkdirSync(d, { r
 db();
 // 任务表上线前的分派补挂到任务上（只跑一次）
 backfillTasks();
+// 上线前起草过的群消息也开始盯话题（只跑一次）
+backfillTopics();
 importLegacyMemory();
 // 审批处理要在 durable 恢复运行之前挂上：接回的运行也可能调写操作
 startApprovals();

@@ -3,6 +3,7 @@
 // 状态不在各流程里分散写，而是按挂着的产出（草稿、agent 任务、审批、结果）推出来再存回 tasks 表。
 import { and, desc, eq, gte, inArray, isNull, like, or } from "drizzle-orm";
 import { routeRules } from "./rules.ts";
+import { topicRoot } from "./topics.ts";
 import { db, getKv, schema, setKv } from "./db/index.ts";
 import type { Approval, DevTask, Draft, ResultRow, RouteRow, TriggerRow } from "./db/schema.ts";
 import { log, now } from "./util.ts";
@@ -99,6 +100,13 @@ function findOpen(thread: string, refs: string[], actors: Set<string>, at: numbe
 		return !isClosed(cur.status) || (cur.closed ?? 0) >= at - within;
 	};
 	if (refs.length) return rows.find((t) => sameRef(t) && reusable(t, ttl))?.id;
+	// 话题回复：先找话题第一条消息那件事。它被处理时还没有话题，记的是群主线的 thread，按 thread 找不到
+	const root = topical(thread) && thread.startsWith("lark:") ? topicRoot(thread) : undefined;
+	const rootTask = root ? taskOfTrigger(`lark:${root}`) : undefined;
+	if (rootTask) {
+		const t = db().select().from(schema.tasks).where(eq(schema.tasks.id, rootTask)).get();
+		if (t && reusable(t, ttl)) return t.id;
+	}
 	for (const t of rows) {
 		if (t.thread !== thread) continue;
 		if (topical(thread)) {
@@ -110,6 +118,18 @@ function findOpen(thread: string, refs: string[], actors: Set<string>, at: numbe
 		const cur = refreshTask(t.id) ?? t;
 		if (!isClosed(cur.status) || (continueGap > 0 && (cur.closed ?? 0) >= at - continueGap)) return t.id;
 	}
+}
+
+/** 一条 trigger 挂在哪件事上 */
+function taskOfTrigger(triggerId: string): string | undefined {
+	return (
+		db()
+			.select({ taskId: schema.routes.taskId })
+			.from(schema.triggers)
+			.innerJoin(schema.routes, eq(schema.triggers.routeId, schema.routes.id))
+			.where(eq(schema.triggers.id, triggerId))
+			.get()?.taskId ?? undefined
+	);
 }
 
 /** 这件事里对方（不含 Yi）是哪几个人 */

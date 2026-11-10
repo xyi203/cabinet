@@ -7,6 +7,7 @@ import { resolveSticker } from "../drafts/format.ts";
 import { expireReactedDrafts } from "../drafts/replied.ts";
 import { DraftError } from "../drafts/store.ts";
 import { routeChat } from "../router/index.ts";
+import { pollTopics } from "../topics.ts";
 import { listChats, listMessages, reactAsUser, sendImageAsUser, sendTextAsUser } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import { log, now } from "../util.ts";
@@ -39,6 +40,8 @@ async function poll(since: number, full: boolean) {
 		// 怎么处理交给 router：告警攒批、起草、Yi 亲自回复作废草稿
 		routeChat(chat, msgs);
 	}
+	// 话题里的回复不在会话列表里：按话题另外拉
+	await pollTopics(started, routeChat).catch((e) => log("轮询话题失败", e));
 	// 表情回复要逐条查，不跟着快速轮次跑
 	if (full || started - reactionsCheckedAt >= POLL_INTERVAL) {
 		reactionsCheckedAt = started;
