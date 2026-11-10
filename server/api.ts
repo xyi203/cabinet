@@ -459,7 +459,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		}
 	}
 	// MR 预审草稿：GitLab 上 approve、评审意见发成 MR 评论
-	const mrM = /^\/api\/drafts\/((?:quiet_)?om_[\w-]+)\/mr\/(approve|note)$/.exec(p);
+	const mrM = /^\/api\/drafts\/((?:quiet_)?om_[\w-]+)\/mr\/(approve|note|rereview)$/.exec(p);
 	if (mrM) {
 		try {
 			await applyMrAction(mrM[1], mrM[2] as MrAction);

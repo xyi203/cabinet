@@ -120,6 +120,8 @@ test("状态按产出推：待确认草稿等发送，建议不回直接完成�
 	const d = (status: string) => ({ id: status, routeId: 1, status, created: 1 }) as any;
 	assert.deepEqual(deriveStatus({ ...base, drafts: [d("pending")] }), { status: "in_review", need: "send" });
 	assert.deepEqual(deriveStatus({ ...base, drafts: [d("noreply")] }), { status: "done", need: null });
+	// MR 预审回复总是「无需回复」，评审报告和评论还等你发到 MR
+	assert.deepEqual(deriveStatus({ ...base, drafts: [{ ...d("noreply"), report: "✅ 可以通过" }] }), { status: "in_review", need: "send" });
 	assert.deepEqual(deriveStatus({ ...base }), { status: "in_progress", need: null }, "分派了、还没产出：在起草");
 	assert.deepEqual(deriveStatus({ ...base, results: [{ routeId: 1, outcome: "failed", at: 2 }] }), { status: "blocked", need: "retry" });
 	const dev = { ...base, routes: [route(2, "dev")] };

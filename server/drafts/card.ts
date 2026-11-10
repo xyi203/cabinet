@@ -122,15 +122,22 @@ function ledgerPanel(ledger: MrLedger): object {
 		return out;
 	};
 	const items = ledger.inline.map((c, i) => md(`**${i + 1}. \`${c.new_path}:${c.new_line ?? c.old_line}\`**\n${take(c.body)}`));
-	return panel(`**要发到 MR 的评论**：代码行上 ${ledger.inline.length} 条，总结 1 条`, [
+	const threads = (ledger.threads ?? []).map((t) =>
+		md(
+			`**${t.action === "resolve" ? "resolve 线程" : "回复线程"}** \`${t.discussion_id.slice(0, 8)}\`${t.body ? `\n${take(t.body)}` : ""}`,
+		),
+	);
+	const tCount = threads.length ? `，旧线程 ${threads.length} 个动作` : "";
+	return panel(`**要发到 MR 的评论**：代码行上 ${ledger.inline.length} 条${tCount}，总结 1 条`, [
 		...items,
+		...threads,
 		md(`**总结评论**\n${take(ledger.summary)}`),
 	]);
 }
 
 /** MR 预审的后续动作：GitLab 上 approve、评审意见发到 MR；草稿发没发都能点，做过的显示成已完成 */
 function mrActions(d: Draft, mr: DraftMr): object[] {
-	const btn = (a: "approve" | "note", label: string, doneLabel: string) =>
+	const btn = (a: "approve" | "note" | "rereview", label: string, doneLabel: string) =>
 		mr.done.includes(a)
 			? [text(doneLabel, "grey", "notation")]
 			: [
@@ -145,6 +152,8 @@ function mrActions(d: Draft, mr: DraftMr): object[] {
 	const cols: Array<[object]> = [[btn("approve", "批准 MR", "已批准 MR")[0]]];
 	if (mr.ledger) cols.push([btn("note", "发送评论", "评论已发到 MR")[0]]);
 	else if (d.report.trim()) cols.push([btn("note", "发送评审意见", "评审意见已发到 MR")[0]]);
+	// 评论发出去之后：对方改完了想马上再看一轮，不等轮询
+	if (mr.done.includes("note")) cols.push([btn("rereview", "复审", "")[0]]);
 	const out: object[] = [md(`**MR**：[${mr.project}!${mr.iid}](${mr.url})`)];
 	if (mr.ledger && !mr.done.includes("note")) out.push(ledgerPanel(mr.ledger));
 	return [...out, columns(...cols)];

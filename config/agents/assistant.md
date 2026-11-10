@@ -35,11 +35,12 @@
 	"head_sha": "<diff_refs.head_sha>",
 	"level": "standard",
 	"inline": [{ "old_path": "<改动前路径>", "new_path": "<改动后路径>", "new_line": 123, "body": "<行内评论正文>" }],
+	"threads": [{ "discussion_id": "<discussion id>", "action": "resolve", "body": "<可选：resolve 前回一句说明>" }],
 	"summary": "<总结评论正文>"
 }
 ```
 
-针对已删除行时用 `old_line` 代替 `new_line`；零发现时 `inline` 为空数组，总结评论照写。需要提醒 Yi 的另起一行 `【备注】`，放在【MR评论】之前。
+针对已删除行时用 `old_line` 代替 `new_line`；零发现时 `inline` 为空数组，总结评论照写。`threads` 只在复审时有：按 mr-re-review.md 对本工具开的旧线程做的动作，`action` 是 `resolve`（已修复或作者回复成立）或 `reply`（回复不成立，`body` 必填，回一次附证据）；首轮预审省略这个字段。需要提醒 Yi 的另起一行 `【备注】`，放在【MR评论】之前。
 
 ## 文档
 

@@ -4,7 +4,7 @@
 import { eq, inArray } from "drizzle-orm";
 import { changed } from "../bus.ts";
 import { GLAB_BIN } from "../config.ts";
-import { db, getKv, schema, setKv } from "../db/index.ts";
+import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import type { Draft } from "../db/schema.ts";
 import { GITLAB_HOST, glabRepo } from "../agent/router.ts";
 import { react } from "../lark/bot.ts";
@@ -37,6 +37,14 @@ export interface MrInline {
 	body: string;
 }
 
+/** 复审时对旧线程的动作（review skill mr-re-review.md）：已修复或作者回复成立的 resolve，回复不成立的回一次 */
+export interface MrThreadAction {
+	discussion_id: string;
+	action: "resolve" | "reply";
+	/** reply 的正文；resolve 也可以带一句说明，先回复再 resolve */
+	body?: string;
+}
+
 /** 预审的评论台账（review skill gitlab-mr.md 第 7 步）：发到 GitLab 的只有这些，Yi 在卡片上看到的也是这些 */
 export interface MrLedger {
 	base_sha: string;
@@ -44,10 +52,13 @@ export interface MrLedger {
 	head_sha: string;
 	level?: string;
 	inline: MrInline[];
+	/** 复审才有 */
+	threads?: MrThreadAction[];
 	summary: string;
 }
 
-const INLINE_MARK = "<!-- gitlab-mr-review -->";
+export const INLINE_MARK = "<!-- gitlab-mr-review -->";
+const REPLY_MARK = "<!-- gitlab-mr-review reply -->";
 
 /** 【MR评论】段（可能包在 ```json 里）-> 台账；格式不对返回原因 */
 export function parseLedger(raw: string): MrLedger | string {
@@ -76,25 +87,35 @@ export function parseLedger(raw: string): MrLedger | string {
 		if (!item.new_path || !item.body || (!item.new_line && !item.old_line)) return `第 ${i + 1} 条行内评论缺少路径、行号或正文`;
 		inline.push(item);
 	}
+	const threads: MrThreadAction[] = [];
+	for (const [i, t] of (Array.isArray(v.threads) ? v.threads : []).entries()) {
+		const id = String(t?.discussion_id ?? "").trim();
+		const action = t?.action === "resolve" || t?.action === "reply" ? t.action : undefined;
+		const body = String(t?.body ?? "").trim();
+		if (!id || !action) return `第 ${i + 1} 条线程动作缺少 discussion_id 或 action（resolve / reply）`;
+		if (action === "reply" && !body) return `第 ${i + 1} 条线程回复没有正文`;
+		threads.push({ discussion_id: id, action, ...(body ? { body } : {}) });
+	}
 	return {
 		base_sha: v.base_sha,
 		start_sha: v.start_sha,
 		head_sha: v.head_sha,
 		level: v.level ? String(v.level) : undefined,
 		inline,
+		...(threads.length ? { threads } : {}),
 		summary: v.summary.trim(),
 	};
 }
 
 const ledgerKey = (id: string) => `draftmr:ledger:${id}`;
-/** 已经发出去的行内评论（下标），中途失败重试时不重复发 */
+/** 已经发出去的行内评论（下标），中途失败重试时不重复发；线程动作记成 t<下标> */
 const postedKey = (id: string) => `draftmr:posted:${id}`;
 
 export function saveLedger(id: string, ledger: MrLedger) {
 	setKv(ledgerKey(id), ledger);
 }
 
-export type MrAction = "approve" | "note";
+export type MrAction = "approve" | "note" | "rereview";
 
 export interface DraftMr {
 	project: string;
@@ -140,6 +161,15 @@ export async function applyMrAction(id: string, action: MrAction): Promise<void>
 	if (!d) throw new DraftError("草稿不存在");
 	const mr = draftMrs([d]).get(id);
 	if (!mr) throw new DraftError("这条草稿不是 MR 预审，没有对应的 MR");
+	if (action === "rereview") {
+		// 复审要跑好几分钟：先回，做完另发一张卡片
+		const { reReview } = await import("./actions.ts");
+		void reReview(id, "Yi 要求复审").catch((e) => {
+			log("复审失败", id, e);
+			syncCard(id, `复审没有成功：${(e as Error).message.slice(0, 200)}`);
+		});
+		return;
+	}
 	if (mr.done.includes(action)) throw new DraftError(action === "approve" ? "这个 MR 已经批准过了" : "已经发到 MR 上了");
 	const repo = glabRepo(mr.project);
 	if (action === "note" && !mr.ledger && !d.report.trim()) throw new DraftError("这条草稿没有评审报告");
@@ -149,10 +179,18 @@ export async function applyMrAction(id: string, action: MrAction): Promise<void>
 		else await exec(GLAB_BIN, ["mr", "note", "create", mr.iid, "-R", repo, "-m", d.report.trim()], { timeout: 60 });
 	} catch (e) {
 		log("MR 操作失败", action, mr.project, mr.iid, e);
+		if (e instanceof HeadMoved) {
+			// 评论位置对不上新提交了：直接按新提交复审，不让 Yi 再点一次
+			const { reReview } = await import("./actions.ts");
+			void reReview(id, e.message).catch((err) => log("复审失败", id, err));
+			throw new DraftError(`${e.message}，评论的位置可能对不上了。已开始按新提交复审，好了另发一张卡片`);
+		}
 		if (e instanceof DraftError) throw e;
 		throw new DraftError(`${action === "approve" ? "批准 MR" : "发评论"}没有成功：${String((e as Error).message).slice(0, 300)}`);
 	}
 	setKv(doneKey(id), [...mr.done, action]);
+	// 评论发出去了：开始盯这个 MR，对方推了新提交或在线程里回复就复审（mrwatch.ts）
+	if (action === "note") await watchMr(mr, id, mr.ledger?.head_sha).catch((e) => log("开始盯 MR 失败", mr.url, e));
 	settle({
 		actionKind: "draft",
 		actionId: id,
@@ -169,7 +207,7 @@ export async function applyMrAction(id: string, action: MrAction): Promise<void>
 	changed();
 }
 
-const glabApi = (method: string, url: string, body?: object) =>
+export const glabApi = (method: string, url: string, body?: object) =>
 	exec(
 		GLAB_BIN,
 		["api", "--hostname", GITLAB_HOST, "--method", method, url, ...(body ? ["-H", "Content-Type: application/json", "--input", "-"] : [])],
@@ -184,10 +222,8 @@ async function postLedger(id: string, mr: DraftMr, ledger: MrLedger) {
 	const base = `projects/${encodeURIComponent(mr.project)}/merge_requests/${mr.iid}`;
 	const head = JSON.parse(await glabApi("GET", base))?.diff_refs?.head_sha;
 	if (head !== ledger.head_sha)
-		throw new DraftError(
-			`MR 有了新提交（预审时是 ${ledger.head_sha.slice(0, 8)}，现在是 ${String(head).slice(0, 8)}），评论的位置可能对不上了，请重新预审后再发`,
-		);
-	const posted = new Set(getKv<number[]>(postedKey(id), []));
+		throw new HeadMoved(`MR 有了新提交（审的是 ${ledger.head_sha.slice(0, 8)}，现在是 ${String(head).slice(0, 8)}）`);
+	const posted = new Set(getKv<Array<number | string>>(postedKey(id), []));
 	const unplaced: string[] = [];
 	for (const [i, c] of ledger.inline.entries()) {
 		if (posted.has(i)) continue;
@@ -214,6 +250,16 @@ async function postLedger(id: string, mr: DraftMr, ledger: MrLedger) {
 			);
 		}
 	}
+	// 复审的线程动作：回复带标记（下次复审认得出是自己回过的），resolve 用 PUT
+	for (const [i, t] of (ledger.threads ?? []).entries()) {
+		const k = `t${i}`;
+		if (posted.has(k)) continue;
+		const thread = `${base}/discussions/${encodeURIComponent(t.discussion_id)}`;
+		if (t.body) await glabApi("POST", `${thread}/notes`, { body: t.body.includes(REPLY_MARK) ? t.body : `${t.body}\n\n${REPLY_MARK}` });
+		if (t.action === "resolve") await glabApi("PUT", `${thread}?resolved=true`);
+		posted.add(k);
+		setKv(postedKey(id), [...posted]);
+	}
 	let summary = ledger.summary;
 	if (unplaced.length) summary = `${summary}\n\n**以下发现未能定位到 diff 行**\n\n${unplaced.join("\n\n")}`;
 	const marker = `<!-- gitlab-mr-review head_sha=${ledger.head_sha} level=${ledger.level ?? "standard"} -->`;
@@ -221,3 +267,44 @@ async function postLedger(id: string, mr: DraftMr, ledger: MrLedger) {
 	await glabApi("POST", `${base}/discussions`, { body: summary });
 	if (unplaced.length) log(`${unplaced.length} 条行内评论改写进了总结评论`, mr.project, mr.iid);
 }
+
+/** 发评论前 MR 又有了新提交 */
+class HeadMoved extends Error {}
+
+// ---------- 盯 MR：评论发出后，对方推新提交或在线程里回复就复审（mrwatch.ts 轮询） ----------
+
+export interface MrWatch {
+	project: string;
+	iid: string;
+	url: string;
+	/** 最近一版 MR 预审草稿：复审接着它的会话 */
+	draftId: string;
+	/** 已经审过的 head */
+	head: string;
+	/** 看到过的最大 note id：比它新的才算新回复；undefined 时第一次轮询只记下来 */
+	seenNote?: number;
+	/** 新 head 先等它稳定一会儿再复审（对方常连推几次） */
+	pendingHead?: string;
+	pendingSince?: number;
+	since: number;
+}
+
+export const watchKey = (project: string, iid: string) => `mrwatch:${project}!${iid}`;
+
+export async function watchMr(mr: Pick<DraftMr, "project" | "iid" | "url">, draftId: string, head?: string) {
+	const base = `projects/${encodeURIComponent(mr.project)}/merge_requests/${mr.iid}`;
+	const h = head ?? JSON.parse(await glabApi("GET", base))?.diff_refs?.head_sha;
+	if (!h) return;
+	setKv(watchKey(mr.project, mr.iid), {
+		project: mr.project,
+		iid: mr.iid,
+		url: mr.url,
+		draftId,
+		head: h,
+		since: Date.now() / 1000,
+	} satisfies MrWatch);
+}
+
+export const listWatches = () => listKv<MrWatch>("mrwatch:").map((x) => x.value);
+export const saveWatch = (w: MrWatch) => setKv(watchKey(w.project, w.iid), w);
+export const unwatch = (w: Pick<MrWatch, "project" | "iid">) => deleteKv(watchKey(w.project, w.iid));

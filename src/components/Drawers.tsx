@@ -205,7 +205,7 @@ function MrPanel({ d }: { d: Draft }) {
 	const [busy, setBusy] = useState(false);
 	const [msg, setMsg] = useState<Msg>(null);
 	const mr = d.mr;
-	async function act(action: "approve" | "note") {
+	async function act(action: "approve" | "note" | "rereview") {
 		// 评论一次会发出好几条，发出去别人马上能看到：先确认一次。批准可以在 GitLab 上撤销，不再确认
 		if (
 			action === "note" &&
@@ -215,7 +215,9 @@ function MrPanel({ d }: { d: Draft }) {
 		setBusy(true);
 		try {
 			await post(`/api/drafts/${d.id}/mr/${action}`);
-			setMsg({ text: action === "approve" ? "已在 GitLab 批准" : "评审意见已发到 MR" });
+			setMsg({
+				text: action === "approve" ? "已在 GitLab 批准" : action === "note" ? "评审意见已发到 MR" : "开始复审，好了会出新一版",
+			});
 			qc.invalidateQueries({ queryKey: ["state"] });
 		} catch (e) {
 			setMsg({ text: (e as Error).message, bad: true });
@@ -256,6 +258,11 @@ function MrPanel({ d }: { d: Draft }) {
 									把评审意见发到 MR
 								</button>
 							))}
+						{mr.done.includes("note") && (
+							<button className="btn" disabled={busy} title="对方改完了，不等自动检查，现在就复审一轮" onClick={() => act("rereview")}>
+								复审
+							</button>
+						)}
 					</div>
 					<MsgLine msg={msg} />
 				</>

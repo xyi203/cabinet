@@ -181,6 +181,8 @@ export function deriveStatus(o: Outputs): { status: TaskStatus; need: Need | nul
 	if (latest.actionKind === "draft") {
 		const d = o.drafts.filter((x) => x.routeId === latest.id).toSorted((a, b) => b.created - a.created)[0];
 		if (d) {
+			// MR 预审的回复总是「无需回复」，但评审报告和评论还等 Yi 过目、发到 MR：不能直接算完成
+			if (d.status === "noreply" && d.report) return { status: "in_review", need: "send" };
 			const [status, need] = DRAFT[d.status] ?? ["in_review", "send"];
 			return { status, need: need ?? null };
 		}

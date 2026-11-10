@@ -305,3 +305,19 @@ test("MR 评论台账：校验 SHA、总结、行号", async () => {
 	);
 	assert.match(parseLedger('{"base_sha":"b","start_sha":"s","head_sha":"h"}') as string, /summary/);
 });
+
+test("复审台账：线程动作 resolve / reply，回复必须有正文", async () => {
+	const { parseLedger } = await import("../server/drafts/mr.ts");
+	const base = '"base_sha":"b","start_sha":"s","head_sha":"h","inline":[],"summary":"y"';
+	const ok = parseLedger(
+		`{${base},"threads":[{"discussion_id":"d1","action":"resolve"},{"discussion_id":"d2","action":"reply","body":"还在"}]}`,
+	);
+	assert.ok(typeof ok === "object");
+	assert.deepEqual(ok.threads, [
+		{ discussion_id: "d1", action: "resolve" },
+		{ discussion_id: "d2", action: "reply", body: "还在" },
+	]);
+	assert.equal((parseLedger(`{${base}}`) as { threads?: unknown }).threads, undefined, "首轮没有 threads");
+	assert.match(parseLedger(`{${base},"threads":[{"discussion_id":"d2","action":"reply"}]}`) as string, /正文/);
+	assert.match(parseLedger(`{${base},"threads":[{"discussion_id":"d2","action":"close"}]}`) as string, /action/);
+});

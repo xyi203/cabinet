@@ -54,6 +54,9 @@ export const YI_ACTIVE_CHECK = Number(env("YI_ACTIVE_CHECK", "5"));
 // 11-09 私聊 37 份草稿 27 份被你亲自回复作废（$3.4，占起草花费 93%）：你一半在 75 秒内回，deep 档多在 2~8 分钟
 export const P2P_WAIT = Number(env("P2P_WAIT", "90"));
 export const DEEP_WAIT = Number(env("DEEP_WAIT", "300"));
+// 盯 MR（mrwatch.ts）：评论发出后每隔这么多秒看一次 MR；新提交要稳定这么多秒才复审（对方常连推几次）。0 = 不盯
+export const MR_WATCH_INTERVAL = Number(env("MR_WATCH_INTERVAL", "300"));
+export const MR_WATCH_SETTLE = Number(env("MR_WATCH_SETTLE", "600"));
 // 发布工单巡检：首次观察用 agent 默认模型（Opus），之后每轮用便宜些的模型、每轮新会话；最多巡检这么多天
 export const PATROL_MODEL = env("PATROL_MODEL", "claude/claude-sonnet-5-5");
 // 发布观察文档：照模板整理工单和变更，用不着 Opus；首次观察要建基线，仍用 agent 默认模型

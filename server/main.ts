@@ -20,6 +20,7 @@ import { startStories } from "./stories.ts";
 import { backfillTasks } from "./taskstore.ts";
 import { startQuota, stopQuota } from "./quota.ts";
 import { startWatchdog, stopWatchdog } from "./watchdog.ts";
+import { startMrWatch, stopMrWatch } from "./mrwatch.ts";
 
 const missing = missingConfig();
 if (missing.length) {
@@ -53,6 +54,7 @@ startWatchdog();
 startSchedules();
 startStories();
 startQuota();
+startMrWatch();
 if (DRAFT_ENABLED) void pollForever();
 
 function shutdown() {
@@ -63,6 +65,7 @@ function shutdown() {
 	stopWatchdog();
 	stopSchedules();
 	stopQuota();
+	stopMrWatch();
 	stopEvents();
 	server.close();
 	// 正在跑的运行已经落库，下次启动接着跑

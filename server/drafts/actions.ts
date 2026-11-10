@@ -31,6 +31,108 @@ async function sendDraft(d: Draft) {
 	await channelOfDraft(d).send!(d);
 }
 
+/** 草稿行里的来源部分：改写、复审出新一版时原样带过去 */
+function sourceOf(d: Draft) {
+	const { id: _id, kind: _k, draft: _d, note: _n, report: _r, status: _s, created: _c, ...source } = d;
+	return source;
+}
+
+/**
+ * 在草稿原来的会话里再跑一轮（改写、MR 复审）：附上原文和当前草稿，不依赖会话里还留着上一版（会话可能被压缩）。
+ * 改写要能查事实：按 deep 档跑，MR 预审按 mr 档（同一个模型接着审）；改版前的草稿记的是旧 agent 名，一律交给 assistant
+ */
+async function rerun(d: Draft, requestId: string, ask: string, memoryQuery: string): Promise<{ text: string; context: string }> {
+	const name = LEGACY_TIER[d.agent ?? ""] ? ASSISTANT : (d.agent ?? ASSISTANT);
+	const mr = draftMrs([d]).get(d.id);
+	const agent = withTier(loadAgents().agents[name] ?? {}, mr ? "mr" : TASK_TIER);
+	// 早于上下文功能的草稿没有存前文，现补
+	let context = d.context;
+	if (!context && d.chatMode !== "meego") {
+		const orig = await getMessage(d.replyTo).catch(() => undefined);
+		if (orig) context = (await gatherContext({ chat_id: d.chatId, chat_mode: d.chatMode }, [orig])).related;
+	}
+	const { text } = await locks.run(`draft-${d.chatId}`, () =>
+		sem.run(() =>
+			runPi({
+				cwd: mr ? resolveCwd(agent, { rule: "", mrProject: mr.project, mrIid: mr.iid }) : DEFAULT_CWD,
+				sessionId: d.session,
+				requestId,
+				tier: "rewrite",
+				prompt: `${context ? `相关前文：\n${context}\n\n` : ""}需要回复的消息：\n${d.text}\n\n当前草稿：\n${describeReply(d.kind, d.draft)}\n\n${ask}`,
+				extraSystem: [PATHS.draftRules],
+				label: draftLabel(d),
+				agent,
+				agentName: name,
+				origin: { label: `改写给 ${d.senderName} 的草稿`, draftReplyTo: d.replyTo },
+				chatId: d.chatId,
+				lookup: true,
+				memory: {
+					query: memoryQuery,
+					scope: { personId: d.chatMode === "meego" ? undefined : d.senderId, chatId: d.chatId },
+				},
+			}),
+		),
+	);
+	return { text, context };
+}
+
+/** 正在复审的草稿：同一个 MR 不并发跑两轮 */
+const rereviewing = new Set<string>();
+
+/**
+ * MR 复审：评论发出后对方推了新提交、在线程里回复了，或 Yi 点了「复审」。在同一个会话里按 review skill 的
+ * mr-re-review.md 审增量、维护旧线程，出新一版草稿（新卡片），同一件事回到「等你发送」。上一版还没处理就替换掉它
+ */
+export async function reReview(id: string, reason: string): Promise<void> {
+	const d = getDraft(id);
+	if (!d) throw new DraftError("草稿不存在");
+	const mr = draftMrs([d]).get(id);
+	if (!mr) throw new DraftError("这条草稿不是 MR 预审");
+	if (rereviewing.has(id) || d.status === "sending" || d.status === "revising") throw new DraftError("这个 MR 正在处理，稍等一下");
+	const live = LIVE.includes(d.status);
+	if (live && !claim(id, LIVE, "revising")) throw new DraftError("这条草稿正在处理，稍等一下");
+	rereviewing.add(id);
+	changed();
+	log("开始复审", mr.url, reason);
+	try {
+		const head = mr.ledger?.head_sha;
+		const started = now();
+		const { text, context } = await rerun(
+			d,
+			`rereview:${id}:${Date.now()}`,
+			[
+				`上一轮评审报告：\n${d.report || "（无）"}`,
+				`上一轮的评论台账${mr.done.includes("note") ? "（已经发到 MR 上了）" : "（还没发）"}：\n${mr.ledger ? JSON.stringify(mr.ledger, null, 2) : "（无）"}`,
+				`这次是复审，原因：${reason}。`,
+				`按 review skill 的 references/mr-re-review.md 做：上次审到的 head 是 ${head ?? "MR 总结评论标记里的 head_sha"}，只审它之后的增量（force-push 就全量审并说明）；` +
+					"读 MR 的 discussions，本工具开的线程（首条 note 带 `<!-- gitlab-mr-review -->`）逐个判断，已修复、或作者回复成立的 resolve，回复不成立的回复一次，都写进台账的 threads。" +
+					(mr.done.includes("note")
+						? "台账只放这一轮要新发的内容，上一轮已经发出去的评论不要再写。"
+						: "上一轮台账还没发，这一轮的台账要包含仍然成立的旧发现，替代上一轮。"),
+				"按 MR 预审的输出格式完整输出（回复、【评审报告】、【MR评论】三段都要有），评审报告开头写清这一轮看了什么、旧线程处理结果。",
+			].join("\n\n"),
+			`${d.text}\n复审 ${mr.project}!${mr.iid}`,
+		);
+		await pushDraft({ ...sourceOf(d), context }, text, live ? id : undefined);
+		record({
+			kind: "draft",
+			status: "revised",
+			dm: id,
+			chatId: d.chatId,
+			source: d.replyTo,
+			question: `复审：${reason}`,
+			seconds: now() - started,
+			session: d.session,
+		});
+	} catch (e) {
+		if (live) claim(id, ["revising"], d.status);
+		throw e;
+	} finally {
+		rereviewing.delete(id);
+		changed();
+	}
+}
+
 export type Action = "send" | "discard" | "revise" | "complete";
 
 /** 「发 / 不发 / 改 / 完成」的唯一实现，飞书私聊和看板共用。
@@ -69,48 +171,17 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 			});
 			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: "sent" });
 		} else if (action === "revise") {
-			// 改写要能查事实：按 deep 档跑，MR 预审按 mr 档（同一个模型接着改评论）；改版前的草稿记的是旧 agent 名，一律交给 assistant
-			const name = LEGACY_TIER[d.agent ?? ""] ? ASSISTANT : (d.agent ?? ASSISTANT);
 			const mr = draftMrs([d]).get(id);
-			const agent = withTier(loadAgents().agents[name] ?? {}, mr ? "mr" : TASK_TIER);
-			// 早于上下文功能的草稿没有存前文，改写时现补
-			let context = d.context;
-			if (!context && d.chatMode !== "meego") {
-				const orig = await getMessage(d.replyTo).catch(() => undefined);
-				if (orig) context = (await gatherContext({ chat_id: d.chatId, chat_mode: d.chatMode }, [orig])).related;
-			}
 			const started = now();
-			const { text } = await locks.run(`draft-${d.chatId}`, () =>
-				sem.run(() =>
-					runPi({
-						cwd: mr ? resolveCwd(agent, { rule: "", mrProject: mr.project, mrIid: mr.iid }) : DEFAULT_CWD,
-						sessionId: d.session,
-						requestId: `revise:${id}`,
-						tier: "rewrite",
-						// 附上原文和当前草稿，不依赖会话里还留着上一版（会话可能被压缩）
-						prompt: `${context ? `相关前文：\n${context}\n\n` : ""}需要回复的消息：\n${d.text}\n\n当前草稿：\n${describeReply(d.kind, d.draft)}\n\n${
-							mr ? mrRevision(d.report, mr.ledger) : stickerHint()
-						}\n\nYi 的修改意见：${arg}\n\n（当前草稿的 ID：draft:${id}）\n\n${
-							mr
-								? "请按意见重写，按 MR 预审的输出格式完整输出（回复、【评审报告】、【MR评论】三段都要有）。"
-								: "请按意见重写，只输出新的草稿。"
-						}`,
-						extraSystem: [PATHS.draftRules],
-						label: draftLabel(d),
-						agent,
-						agentName: name,
-						origin: { label: `改写给 ${d.senderName} 的草稿`, draftReplyTo: d.replyTo },
-						chatId: d.chatId,
-						lookup: true,
-						memory: {
-							query: `${d.text}\n${arg}`,
-							scope: { personId: d.chatMode === "meego" ? undefined : d.senderId, chatId: d.chatId },
-						},
-					}),
-				),
+			const { text, context } = await rerun(
+				d,
+				`revise:${id}`,
+				`${mr ? mrRevision(d.report, mr.ledger) : stickerHint()}\n\nYi 的修改意见：${arg}\n\n（当前草稿的 ID：draft:${id}）\n\n${
+					mr ? "请按意见重写，按 MR 预审的输出格式完整输出（回复、【评审报告】、【MR评论】三段都要有）。" : "请按意见重写，只输出新的草稿。"
+				}`,
+				`${d.text}\n${arg}`,
 			);
-			const { id: _id, kind: _k, draft: _d, note: _n, report: _r, status: _s, created: _c, ...source } = d;
-			await pushDraft({ ...source, context }, text, id);
+			await pushDraft({ ...sourceOf(d), context }, text, id);
 			// 修改意见是 Yi 的原话，草稿走完时提取记忆要用；耗时用来圈出这次运行的工具调用
 			record({
 				kind: "draft",
@@ -141,6 +212,7 @@ const DONE_TOAST: Record<string, string> = {
 	send: "已发送",
 	mr_approve: "已批准 MR",
 	mr_note: "已发到 MR",
+	mr_rereview: "开始复审，好了另发一张卡片",
 	emoji: "已回表情",
 	sticker: "已发表情包",
 	discard: "这条不回复了",
@@ -173,8 +245,8 @@ export async function onDraftCardAction(data: unknown) {
 	if (!d) return toast("error", "找不到这条草稿");
 	let job: Promise<string>;
 	try {
-		if (ev.name === "mr_approve" || ev.name === "mr_note") {
-			const what = ev.name === "mr_approve" ? "approve" : "note";
+		if (ev.name === "mr_approve" || ev.name === "mr_note" || ev.name === "mr_rereview") {
+			const what = ev.name === "mr_approve" ? "approve" : ev.name === "mr_note" ? "note" : "rereview";
 			job = applyMrAction(d.id, what).then(() => getDraft(d.id)!.status);
 		} else if (ev.name === "send") job = applyDraftAction(d.id, "send", sendText(d, ev.form.text), "text");
 		else if (ev.name === "emoji" || ev.name === "sticker") {
