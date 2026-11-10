@@ -6,8 +6,8 @@ import { desc, eq, inArray, like } from "drizzle-orm";
 import { loadAgents } from "./agent/router.ts";
 import { changed } from "./bus.ts";
 import { cronSkip } from "./router/board.ts";
-import { db, schema } from "./db/index.ts";
-import type { Schedule } from "./db/schema.ts";
+import { db, getKv, schema, setKv } from "./db/index.ts";
+import type { DevTask, Schedule } from "./db/schema.ts";
 import { NO_CHANGE, PATROL_OK, dispatch, getDevTask } from "./dev.ts";
 import { DraftError } from "./drafts/store.ts";
 import { decide, receive } from "./pipeline.ts";
@@ -185,6 +185,12 @@ export async function fire(s: Schedule, at = now(), manual = false): Promise<str
 		log("定时任务跳过", s.id, skip);
 		return;
 	}
+	const same = await patrolUnchanged(s, at, manual, prev);
+	if (same) {
+		decide([tid], { rule: `跳过：${same}`, actionKind: "none" });
+		log("定时任务跳过", s.id, same);
+		return;
+	}
 	const when = new Date(at * 1000).toLocaleString("sv-SE", { hour12: false }).slice(0, 16);
 	const request = [
 		`[定时任务「${s.name}」] ${manual ? "Yi 手动触发" : `计划时间 ${when}`}（${s.times?.length ? s.cron : `cron \`${s.cron}\``}）。这不是有人在等你回复，结论直接写给 Yi。`,
@@ -219,6 +225,35 @@ export async function fire(s: Schedule, at = now(), manual = false): Promise<str
 	changed();
 	log("定时任务开跑", s.id, task.id);
 	return task.id;
+}
+
+/** 巡检兜底间隔：工单一直没动，也至少隔这么久真跑一轮，看 Sentry 和接口耗时 */
+const PATROL_MAX_SKIP = 2 * 3600;
+
+/**
+ * 巡检这一轮能不能不调模型：上一轮是「无变化 / 正常」、工单指纹（stories.ts patrolFingerprint）没变、离上次真跑不到两小时，就跳过。
+ * 11-10 GD-45214 AB 期间 00:00~13:00 跑了 26 轮，全是「本轮无变化」。全量后巡检（按固定时间点）、手动运行不跳
+ */
+async function patrolUnchanged(
+	s: Schedule,
+	at: number,
+	manual: boolean,
+	prev?: Pick<DevTask, "status" | "summary">,
+): Promise<string | undefined> {
+	if (!s.patrol || manual || s.times?.length) return;
+	let fp: string | undefined;
+	try {
+		const { patrolFingerprint } = await import("./stories.ts");
+		fp = await patrolFingerprint(s.id);
+	} catch (e) {
+		log("读工单指纹失败，照常巡检", s.id, e);
+	}
+	if (!fp) return;
+	const key = `patrolfp:${s.id}`;
+	const last = getKv<{ fp: string; at: number } | null>(key, null);
+	const quiet = prev?.status === "done" && (prev.summary.trimStart().startsWith(NO_CHANGE) || prev.summary.includes(PATROL_OK));
+	if (quiet && last?.fp === fp && at - last.at < PATROL_MAX_SKIP) return "工单没有变化";
+	setKv(key, { fp, at });
 }
 
 /** 一次运行在执行记录里的结果：conclusion 有结论 / quiet 正常或无变化 / failed 失败 / running 进行中 / skipped 跳过 */

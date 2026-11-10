@@ -106,7 +106,16 @@ export function expireDrafts(chat: ChatRef, m: Message) {
 		const src = [{ message_id: d.replyTo, thread_id: d.threadId ?? undefined, sender: { id: d.senderId, name: "", sender_type: "user" } }];
 		if (ownerReplyCovers(chat.chat_mode, m, src) && claim(d.id, LIVE, "expired")) {
 			log("草稿作废：Yi 已亲自回复", d.id);
-			settle({ actionKind: "draft", actionId: d.id, routeId: d.routeId, outcome: "expired", effect: "internal", ref: m.message_id });
+			// 你实际回的那句记在 detail 里：拿来和草稿对比，看草稿准不准
+			settle({
+				actionKind: "draft",
+				actionId: d.id,
+				routeId: d.routeId,
+				outcome: "expired",
+				effect: "internal",
+				ref: m.message_id,
+				detail: `你回的：${m.content}`,
+			});
 			// Yi 没用草稿、自己回的那句，是最直接的口吻样本
 			enqueueMemory({
 				type: "draft",

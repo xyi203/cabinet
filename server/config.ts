@@ -45,8 +45,10 @@ export const SESSION_IDLE_DAYS = Number(env("SESSION_IDLE_DAYS", "7"));
 export const SESSION_MAX_TOKENS = Number(env("SESSION_MAX_TOKENS", "50000"));
 // Yi 正在会话里聊（触发消息前 YI_ACTIVE_WINDOW 秒内说过话）时先等最多 YI_ACTIVE_DELAY 秒再起草：多半他自己就回了。
 // 等的期间每 YI_ACTIVE_CHECK 秒看一次，他回了消息或表情就提前结束（随后按跳过处理）。0 = 不等
+// 11-10 你在聊的会话里 29 份草稿全被你亲自回复作废、一份没发：草稿出来后 10~90 秒你就回了。
+// 所以你在聊时草稿只做兜底：等满 10 分钟你还没回才起草
 export const YI_ACTIVE_WINDOW = Number(env("YI_ACTIVE_WINDOW", "300"));
-export const YI_ACTIVE_DELAY = Number(env("YI_ACTIVE_DELAY", "20"));
+export const YI_ACTIVE_DELAY = Number(env("YI_ACTIVE_DELAY", "600"));
 export const YI_ACTIVE_CHECK = Number(env("YI_ACTIVE_CHECK", "5"));
 // 私聊不管你在不在聊，都等到消息来了 P2P_WAIT 秒再起草；分诊成 deep 的等到 DEEP_WAIT 秒。
 // 11-09 私聊 37 份草稿 27 份被你亲自回复作废（$3.4，占起草花费 93%）：你一半在 75 秒内回，deep 档多在 2~8 分钟

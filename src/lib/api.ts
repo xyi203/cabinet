@@ -554,6 +554,7 @@ export const pollNow = (id?: string) => post<{ skipped: boolean }>("/api/poll", 
 /** 路由规则（server/rules.ts）：config/routes.json，没写的项是默认值 */
 export interface RouteRules {
 	reopen: number;
+	continueGap: number;
 	yiActive: { window: number; delay: number; check: number; p2p: number; deep: number };
 	alert: { quiet: number; maxWait: number; follow: number; senders: string[]; chats: string[] };
 	cron: { patrolPauseAt: number };

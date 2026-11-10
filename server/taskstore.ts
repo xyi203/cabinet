@@ -43,9 +43,11 @@ export function assignTask(triggerIds: string[], r: AssignInput, at = now()): st
 	const first = trs.toSorted((a, b) => a.at - b.at)[0];
 	if (!first) return null;
 	const refs = [...new Set(trs.flatMap((t) => t.refs))];
-	// 定时任务每次一件；告警新批每次一件（续批由 alerts.ts 记成 command）；看板派活每次一件
-	const fresh = first.channel === "cron" || first.channel === "board" || (first.channel === "alert" && r.actionKind === "dev");
-	const hit = fresh ? undefined : findOpen(first.thread, refs, at);
+	// 定时任务每次一件；告警新批每次一件（续批由 alerts.ts 记成 command）；看板派活每次一件，提到 MR 的挂到那个 MR 的事上
+	const fresh =
+		first.channel === "cron" || (first.channel === "board" && !refs.length) || (first.channel === "alert" && r.actionKind === "dev");
+	const actors = new Set(trs.filter((t) => !t.owner && t.actorId).map((t) => t.actorId));
+	const hit = fresh ? undefined : findOpen(first.thread, refs, actors, at);
 	if (hit) return touch(hit, at);
 	const id = newId();
 	db()
@@ -64,30 +66,62 @@ export function assignTask(triggerIds: string[], r: AssignInput, at = now()): st
 	return id;
 }
 
-const firstLine = (s: string) =>
-	s
-		.trim()
-		.split("\n")
-		.find((l) => l.trim())
-		?.trim() ?? s.trim();
+/** 标题取正文第一行；图片只留「[图片]」，不把 img_v3_… 这串 key 当标题 */
+const firstLine = (s: string) => {
+	const text = s.replace(/\[图片 [^\]]+\]/g, "[图片]").trim();
+	const line =
+		text
+			.split("\n")
+			.find((l) => l.trim())
+			?.trim() ?? text;
+	return line === "[图片]" ? "发来一张截图" : line;
+};
 
-/** 同一事件流（或提到同一个 MR）上最近的那件事，还能接着用就返回它 */
-function findOpen(thread: string, refs: string[], at: number): string | undefined {
-	const ttl = routeRules().reopen;
+/**
+ * 同一事件流（或提到同一个 MR）上最近的那件事，还能接着用就返回它：
+ * - 提到 MR：只接同一个 MR 的那件事（开着的，或关闭后 reopen 内）；同一会话里别的事不并，MR 自成一件
+ * - 话题、工作项：开着的直接接，关闭后 reopen 内重开
+ * - 私聊和群主线：同一个人的才接（群里别人的事不并），开着的直接接，关闭后 continueGap 内也算接着聊
+ */
+function findOpen(thread: string, refs: string[], actors: Set<string>, at: number): string | undefined {
+	const { reopen: ttl, continueGap } = routeRules();
 	const conds = [eq(schema.tasks.thread, thread), ...refs.map((r) => like(schema.tasks.refs, `%"${r}"%`))];
 	const rows = db()
 		.select()
 		.from(schema.tasks)
-		.where(and(or(...conds), gte(schema.tasks.updated, at - ttl)))
+		.where(and(or(...conds), gte(schema.tasks.updated, at - Math.max(ttl, continueGap))))
 		.orderBy(desc(schema.tasks.updated))
-		.limit(5)
+		.limit(10)
 		.all();
+	const sameRef = (t: TaskRow) => refs.some((r) => t.refs.includes(r));
+	const reusable = (t: TaskRow, within: number) => {
+		const cur = refreshTask(t.id) ?? t;
+		return !isClosed(cur.status) || (cur.closed ?? 0) >= at - within;
+	};
+	if (refs.length) return rows.find((t) => sameRef(t) && reusable(t, ttl))?.id;
 	for (const t of rows) {
-		const status = refreshTask(t.id)?.status ?? t.status;
-		if (!isClosed(status)) return t.id;
-		const byRef = refs.some((r) => t.refs.includes(r));
-		if ((topical(thread) || byRef) && (t.closed ?? 0) >= at - ttl) return t.id;
+		if (t.thread !== thread) continue;
+		if (topical(thread)) {
+			if (reusable(t, ttl)) return t.id;
+			continue;
+		}
+		// 群主线里别人的事不并进来；Yi 自己的消息（私聊机器人这类）没有对方，不比
+		if (actors.size && !actorsOf(t.id).some((a) => actors.has(a))) continue;
+		const cur = refreshTask(t.id) ?? t;
+		if (!isClosed(cur.status) || (continueGap > 0 && (cur.closed ?? 0) >= at - continueGap)) return t.id;
 	}
+}
+
+/** 这件事里对方（不含 Yi）是哪几个人 */
+function actorsOf(taskId: string): string[] {
+	return db()
+		.selectDistinct({ id: schema.triggers.actorId })
+		.from(schema.triggers)
+		.innerJoin(schema.routes, eq(schema.triggers.routeId, schema.routes.id))
+		.where(and(eq(schema.routes.taskId, taskId), eq(schema.triggers.owner, false)))
+		.all()
+		.map((x) => x.id)
+		.filter(Boolean);
 }
 
 /** 挂上一次新的分派：时间往后推。关闭的会不会重开不在这里定，refreshTask 按最新一次分派的产出重推 */

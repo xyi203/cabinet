@@ -94,6 +94,8 @@ export function RowActions({ t, s, onOpen, onMemory }: { t: TaskView; s: State; 
 			{label}
 		</button>
 	);
+	// 已经在别处处理了：不管走到哪一步都能直接标掉（server/done.ts）
+	const done = () => btn("完成", () => act(`/api/tasks/${encodeURIComponent(t.id)}/done`, {}, "好的，算你已处理"), "ghost");
 	let body: React.ReactNode = null;
 	if (t.status === "in_review" && t.need === "send" && draft?.status === "pending")
 		body = (
@@ -110,6 +112,7 @@ export function RowActions({ t, s, onOpen, onMemory }: { t: TaskView; s: State; 
 							"pri",
 						)}
 				{btn("不回复", () => act(`/api/drafts/${draft.id}/discard`, {}, "好的，这条不回复"), "ghost")}
+				{done()}
 			</>
 		);
 	else if (t.status === "in_review" && t.need === "send" && dev) body = btn("查看改动", onOpen, "pri");
@@ -131,7 +134,14 @@ export function RowActions({ t, s, onOpen, onMemory }: { t: TaskView; s: State; 
 		) : dev ? (
 			btn("重试", () => act(`/api/dev/${dev.id}/message`, { text: "上一轮失败了，接着把这个任务做完" }, "正在重试"), "pri")
 		) : null;
-	else if (t.id.startsWith("q:") && t.hold) body = btn("现在起草", () => act("/api/poll", { id: t.id.slice(2) }, "开始起草"));
+	// 排队、等待、起草中：还没有草稿，也能先标掉（agent 任务在跑的不算，去详情里停）
+	else if ((t.status === "todo" || t.status === "in_progress") && !dev)
+		body = (
+			<>
+				{t.id.startsWith("q:") && t.hold && btn("现在起草", () => act("/api/poll", { id: t.id.slice(2) }, "开始起草"))}
+				{done()}
+			</>
+		);
 	if (!body) return null;
 	return (
 		<div className="acts" onClick={stop}>

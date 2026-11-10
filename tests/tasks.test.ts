@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { eq } from "drizzle-orm";
 const { openDb, useDb, db, schema } = await import("../server/db/index.ts");
 useDb(openDb(":memory:"));
 const { decide, receive, settle } = await import("../server/pipeline.ts");
@@ -7,8 +8,8 @@ const { refreshTask, deriveStatus } = await import("../server/taskstore.ts");
 const { taskViews } = await import("../server/tasks.ts");
 
 const t0 = Math.floor(Date.now() / 1000);
-const msg = (id: string, thread: string, text = id, channel: "lark" | "cron" | "board" | "alert" = "lark") =>
-	receive({ channel, externalId: id, thread, actorName: "张三", text, at: t0 });
+const msg = (id: string, thread: string, text = id, channel: "lark" | "cron" | "board" | "alert" = "lark", actor = "ou_zs") =>
+	receive({ channel, externalId: id, thread, actorId: actor, actorName: actor, text, at: t0 });
 const taskOf = (routeId: number) =>
 	db()
 		.select()
@@ -41,7 +42,7 @@ function devFor(routeId: number, id: string, status: string, agent = "assistant"
 		.run();
 }
 
-test("同一话题的追问挂到同一件事上；私聊主线关闭后再来是新的一件", () => {
+test("同一话题的追问挂到同一件事上；主线关闭后同一个人接着聊并回原来那件，隔久了或换了人是新的一件", () => {
 	const r1 = decide([msg("m1", "lark:oc_1#t1")], { agent: "assistant", rule: "分诊", actionKind: "draft" });
 	draftFor(r1, "d1", "pending");
 	const r2 = decide([msg("m2", "lark:oc_1#t1")], { agent: "assistant", rule: "分诊", actionKind: "draft" });
@@ -51,7 +52,37 @@ test("同一话题的追问挂到同一件事上；私聊主线关闭后再来�
 	draftFor(p1, "d3", "sent");
 	assert.equal(refreshTask(taskOf(p1)!)?.status, "done");
 	const p2 = decide([msg("m4", "lark:ou_p2p")], { agent: "assistant", rule: "分诊", actionKind: "draft" });
-	assert.notEqual(taskOf(p2), taskOf(p1), "私聊主线已经发完了，新消息是新的一件");
+	assert.equal(taskOf(p2), taskOf(p1), "刚发完一分钟又来，算接着聊");
+	draftFor(p2, "d4", "sent");
+	refreshTask(taskOf(p2)!);
+	const p3 = decide([msg("m4b", "lark:ou_p2p", "m4b", "lark", "ou_ls")], { agent: "assistant", rule: "分诊", actionKind: "draft" });
+	assert.notEqual(taskOf(p3), taskOf(p1), "换了一个人，不并");
+	// 归属按分派的时间算：把那件事的关闭时间拨回两小时前
+	db()
+		.update(schema.tasks)
+		.set({ closed: t0 - 7200, updated: t0 - 7200 })
+		.where(eq(schema.tasks.id, taskOf(p1)!))
+		.run();
+	const p4 = decide([msg("m4c", "lark:ou_p2p", "m4c")], { agent: "assistant", rule: "分诊", actionKind: "draft" });
+	assert.notEqual(taskOf(p4), taskOf(p1), "隔了两小时，是新的一件");
+});
+
+test("群主线里开着一件事，有人发来 MR 是单独一件；看板派活提到这个 MR 挂到它上面", () => {
+	const chat = decide([msg("g1", "lark:oc_g", "接口怎么调")], { agent: "assistant", rule: "分诊", actionKind: "draft" });
+	draftFor(chat, "dg1", "pending");
+	const mr = decide([msg("g2", "lark:oc_g", "帮忙 CR https://gitlab.shoplazza.site/x/y/-/merge_requests/7")], {
+		agent: "assistant",
+		rule: "MR",
+		actionKind: "draft",
+	});
+	assert.notEqual(taskOf(mr), taskOf(chat));
+	const board = decide([msg("b1", "board:b1", "这个刚 CR 过 https://gitlab.shoplazza.site/x/y/-/merge_requests/7", "board")], {
+		agent: "assistant",
+		rule: "看板派活",
+		actionKind: "dev",
+		actionId: "dvb",
+	});
+	assert.equal(taskOf(board), taskOf(mr));
 });
 
 test("话题关闭后几天内再来消息会重开；提到同一个 MR 的也接上", () => {

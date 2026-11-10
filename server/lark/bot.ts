@@ -214,7 +214,7 @@ export function messageText(type: string, raw: string, mentions: Mention[] = [])
 		case "audio":
 			return "[语音]";
 		case "merge_forward":
-			return "[合并转发]";
+			return FORWARD_PLACEHOLDER;
 		case "share_chat":
 			return "[群名片]";
 		default:
@@ -291,6 +291,25 @@ export async function getMessage(messageId: string, as: "user" | "bot" = "user")
 		"读取消息",
 	);
 	return d.items?.[0] ? toMessage(d.items[0]) : undefined;
+}
+
+/** 合并转发在消息列表里只是一个占位（「[合并转发]」），转发的内容要按 id 再取一次 */
+export const FORWARD_PLACEHOLDER = "[合并转发]";
+
+/**
+ * 展开合并转发：messages/:id 返回转发本身和里面的每一条（upper_message_id 指向它），拼成文本给 agent 看。
+ * 取不到（没权限、太老）返回 undefined，调用方保留占位
+ */
+export async function expandForward(messageId: string): Promise<string | undefined> {
+	const params = { card_msg_content_type: "raw_card_content" } as any;
+	const d = check(await client().im.v1.message.get({ path: { message_id: messageId }, params }, await asUser()), "读取合并转发");
+	const lines = (d.items ?? [])
+		.filter((x: any) => x.upper_message_id === messageId)
+		.map((x: any) => toMessage(x))
+		.filter((m: Message) => !m.deleted && m.content)
+		.map((m: Message) => `- ${m.content.replace(/\s*\n\s*/g, " ")}`);
+	if (!lines.length) return;
+	return `${FORWARD_PLACEHOLDER}（共 ${lines.length} 条）\n${lines.slice(0, 40).join("\n")}`.slice(0, 4000);
 }
 
 /** 给模型看的上下文：一行一条，时间 + 发送人 + 内容 */
@@ -456,7 +475,10 @@ export async function reactionsOf(messageId: string): Promise<Array<{ emoji: str
 		.catch((e) => {
 			throw larkError(e, "读表情回复");
 		});
-	return (check(res, "读表情回复").items ?? []).map((r: any) => ({ emoji: r.reaction_type?.emoji_type ?? "", by: r.operator?.operator_id ?? "" }));
+	return (check(res, "读表情回复").items ?? []).map((r: any) => ({
+		emoji: r.reaction_type?.emoji_type ?? "",
+		by: r.operator?.operator_id ?? "",
+	}));
 }
 
 export async function reactAsUser(messageId: string, emoji: string) {

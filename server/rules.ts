@@ -24,6 +24,11 @@ export interface RouteRules {
 	/** 归属：话题 / 工作项 / MR 关闭后这么多秒内再来消息就重开同一件事；订阅接续也按它失效（秒） */
 	reopen: number;
 	/**
+	 * 归属：私聊和群主线（没有话题）的事关闭后，同一个人这么多秒内再来消息就接回原来那件事（秒）。
+	 * 草稿发出去事情就关了，不接的话一段连续的对话会拆成一条一件（11-10 主线 253 件里 144 件开在上一件关闭后 30 分钟内）
+	 */
+	continueGap: number;
+	/**
 	 * 你正在聊：触发消息前 window 秒内你说过话，先等最多 delay 秒再处理，每 check 秒看一次你回了没；delay 为 0 不等。
 	 * 私聊另外总要等到消息来了 p2p 秒再起草，分诊成 deep 的等到 deep 秒（0 = 不等）
 	 */
@@ -36,6 +41,7 @@ export interface RouteRules {
 
 export const RULE_DEFAULTS: RouteRules = {
 	reopen: SUBSCRIBE_TTL,
+	continueGap: 1800,
 	yiActive: { window: YI_ACTIVE_WINDOW, delay: YI_ACTIVE_DELAY, check: YI_ACTIVE_CHECK, p2p: P2P_WAIT, deep: DEEP_WAIT },
 	alert: { quiet: ALERT_QUIET, maxWait: ALERT_MAX_WAIT, follow: ALERT_FOLLOW, senders: [...ALERT_SENDERS], chats: [...ALERT_CHATS] },
 	cron: { patrolPauseAt: PATROL_PAUSE_AT },
@@ -63,6 +69,7 @@ function merge(raw: Partial<RouteRules>): RouteRules {
 	const d = RULE_DEFAULTS;
 	return {
 		reopen: raw.reopen ?? d.reopen,
+		continueGap: raw.continueGap ?? d.continueGap,
 		yiActive: { ...d.yiActive, ...raw.yiActive },
 		alert: { ...d.alert, ...raw.alert },
 		cron: { ...d.cron, ...raw.cron },
@@ -74,6 +81,7 @@ export function saveRouteRules(input: unknown): RouteRules {
 	const r = merge((input ?? {}) as Partial<RouteRules>);
 	const nums: Array<[string, number, number, number]> = [
 		["重开时间", r.reopen, 0, 30 * 86400],
+		["接着聊的间隔", r.continueGap, 0, 86400],
 		["你在聊的判断窗口", r.yiActive.window, 0, 3600],
 		["你在聊时最多等", r.yiActive.delay, 0, 600],
 		["你在聊时检查间隔", r.yiActive.check, 1, 60],

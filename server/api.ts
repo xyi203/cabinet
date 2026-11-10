@@ -43,6 +43,7 @@ import { abortRun, conversationTranscript, running } from "./agent/driver.ts";
 import { modelOptions } from "./agent/models.ts";
 import { closeTask, devDiff, discardDev, dispatch, getDevTask, listRepos, messageDev, pushDev, stopDev } from "./dev.ts";
 import { dismissTask, retryTask } from "./retry.ts";
+import { markDone } from "./done.ts";
 import { RULE_DEFAULTS, RuleError, routeRules, saveRouteRules } from "./rules.ts";
 import { dashboardState, sessionLog } from "./tasks.ts";
 import { search } from "./memory/recall.ts";
@@ -236,6 +237,16 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		const state = randomBytes(16).toString("hex");
 		oauthStates.set(state, Date.now());
 		return send(res, 200, { url: authorizeUrl(state) });
+	}
+	// 完成：这件事 Yi 已经在别处处理了，不管走到哪一步都直接标掉（server/done.ts）
+	const doneM = /^\/api\/tasks\/((?:q:)?[\w-]+)\/done$/.exec(decodeURIComponent(p));
+	if (doneM) {
+		try {
+			await markDone(doneM[1]);
+			return send(res, 200, { ok: true });
+		} catch (e) {
+			return send(res, e instanceof DraftError ? 409 : 500, { error: String((e as Error).message).slice(0, 300) });
+		}
 	}
 	const retry = /^\/api\/tasks\/([\w-]+)\/(retry|dismiss)$/.exec(p);
 	if (retry) {

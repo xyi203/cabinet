@@ -22,9 +22,10 @@ interface NumField {
 	put: (r: RouteRules, v: number) => void;
 }
 
-type Key = "reopen" | "window" | "delay" | "check" | "p2p" | "deep" | "quiet" | "maxWait" | "follow" | "patrol";
+type Key = "reopen" | "continue" | "window" | "delay" | "check" | "p2p" | "deep" | "quiet" | "maxWait" | "follow" | "patrol";
 const FIELDS: Record<Key, NumField> = {
 	reopen: { unit: "天", scale: 86400, min: 0, max: 30, get: (r) => r.reopen, put: (r, v) => void (r.reopen = v) },
+	continue: { unit: "分钟", scale: 60, min: 0, max: 1440, get: (r) => r.continueGap, put: (r, v) => void (r.continueGap = v) },
 	window: { unit: "分钟", scale: 60, min: 0, max: 60, get: (r) => r.yiActive.window, put: (r, v) => void (r.yiActive.window = v) },
 	delay: { unit: "秒", scale: 1, min: 0, max: 600, int: true, get: (r) => r.yiActive.delay, put: (r, v) => void (r.yiActive.delay = v) },
 	check: { unit: "秒", scale: 1, min: 1, max: 60, int: true, get: (r) => r.yiActive.check, put: (r, v) => void (r.yiActive.check = v) },
@@ -86,6 +87,7 @@ function parse(form: Form, base: RouteRules): { rules: RouteRules; errors: Error
 
 const same = (a: RouteRules, b: RouteRules) =>
 	a.reopen === b.reopen &&
+	a.continueGap === b.continueGap &&
 	a.yiActive.window === b.yiActive.window &&
 	a.yiActive.delay === b.yiActive.delay &&
 	a.yiActive.check === b.yiActive.check &&
@@ -206,6 +208,11 @@ export function RouteRulesPage() {
 		<div className="max-w-[880px]">
 			<Section title="已完成的事">
 				{num("reopen", "重新打开的期限", "话题、工作项或 MR 完成后，这段时间内来了新消息，会重新打开原来那件事，不另起一件。")}
+				{num(
+					"continue",
+					"接着聊的间隔",
+					"私聊和群里不在话题中的消息：上一件事完成后，同一个人在这段时间内又来消息，算接着聊，并回原来那件事。填 0 表示每次都新起一件。",
+				)}
 			</Section>
 
 			<Section title="你正在聊天时" desc="你多半会自己回，所以先等一会儿再起草。">

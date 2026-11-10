@@ -165,6 +165,35 @@ export function parseTicketInfo(key: string, text: string): TicketInfo {
 	};
 }
 
+/**
+ * 巡检这一轮之前先看工单有没有动：状态、阶段、放量店铺 / 商户、服务版本拼成指纹，不调模型。
+ * 只有巡检（AB 期间按 cron 跑的）用；查不到对应工单返回 undefined，照常跑
+ */
+export async function patrolFingerprint(scheduleId: string): Promise<string | undefined> {
+	const story = db()
+		.select({ tickets: schema.stories.tickets })
+		.from(schema.stories)
+		.all()
+		.find((x) => x.tickets.some((t) => t.patrol?.scheduleId === scheduleId));
+	const key = story?.tickets.find((t) => t.patrol?.scheduleId === scheduleId)?.key;
+	if (!key) return;
+	return ticketFingerprint(await callMcp(`${DEVOPS}issue_get_info`, { issueKey: key }));
+}
+
+/** issue_get_info 的结果 → 指纹：和放量、流转有关的字段，别的（抄送、文案）变了不算 */
+export function ticketFingerprint(text: string): string {
+	const d = parse(text)?.issue ?? {};
+	const info = d.issueInfo ?? {};
+	const param = (k: string) => String((d.issueParams ?? []).find((x: any) => x?.paramKey === k)?.paramValue ?? "");
+	return JSON.stringify({
+		status: info.statusId ?? info.statusName ?? "",
+		stage: info.stage ?? null,
+		stores: param("prodStoreIds"),
+		merchants: param("prodMerchantIds"),
+		services: (d.services ?? []).map((x: any) => `${x?.svcName}@${x?.svcVersion}`),
+	});
+}
+
 async function ticketInfo(key: string): Promise<TicketInfo> {
 	return parseTicketInfo(key, await callMcp(`${DEVOPS}issue_get_info`, { issueKey: key }));
 }

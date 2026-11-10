@@ -20,7 +20,7 @@
 			},
 			"answer": {
 				"desc": "一般问题、协调排期、要 Yi 表态，查一两处就能答",
-				"model": "claude/claude-opus-5-5",
+				"model": "claude/claude-sonnet-5-5",
 				"thinking": "medium"
 			},
 			"deep": {

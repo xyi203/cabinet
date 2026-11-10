@@ -124,3 +124,19 @@ test("巡检提示：每轮先读首次观察的范围和基线，正常时第�
 	assert.match(full, /全量后巡检：全量后 5 \/ 15 \/ 30 \/ 60 分钟/);
 	assert.match(full, /issue_get_info GD-45119/);
 });
+
+test("巡检指纹：放量店铺、状态、版本变了才算变，抄送这类字段不算", async () => {
+	const { ticketFingerprint } = await import("../server/stories.ts");
+	const issue = (stores: string, statusId = "S50", ccTo = "a@x.com") =>
+		JSON.stringify({
+			issue: {
+				issueInfo: { issueKey: "GD-1", statusId, stage: 3, ccTo },
+				issueParams: [{ paramKey: "prodStoreIds", paramValue: stores }],
+				services: [{ svcName: "cart", svcVersion: "v1" }],
+			},
+		});
+	const base = ticketFingerprint(issue("1,2"));
+	assert.equal(ticketFingerprint(issue("1,2", "S50", "b@x.com")), base);
+	assert.notEqual(ticketFingerprint(issue("1,2,3")), base);
+	assert.notEqual(ticketFingerprint(issue("1,2", "S58")), base);
+});

@@ -5,7 +5,7 @@ import { routeRules } from "../rules.ts";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import type { MeegoCard } from "../db/schema.ts";
-import { imageKeys, imagesNote, listMessages, saveImage } from "../lark/bot.ts";
+import { expandForward, FORWARD_PLACEHOLDER, imageKeys, imagesNote, listMessages, saveImage } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import {
 	ASSISTANT,
@@ -73,6 +73,8 @@ export async function makeDraft(chat: ChatRef, msgs: Message[], onDone?: (ids: s
 		for (const m of msgs) {
 			inflight.delete(m.message_id);
 			dismissed.delete(m.message_id);
+			// 进程退出打断的要留着：重启接回时还得认这个标记
+			if (!interrupted) deleteKv(dismissKey(m.message_id));
 		}
 		changed();
 	}
@@ -203,14 +205,18 @@ async function waitUntil(chat: ChatRef, msgs: Message[], until: number, why: str
 /** 正在「你在聊，等一会儿再起草」的聊天：看板上点「立即起草」就不等了 */
 const skipWait = new Map<string, () => void>();
 
-/** Yi 点了「不用起草」的消息：起草前当跳过处理，起草完（或跳过）就清掉 */
+/** Yi 点了「不用起草」的消息：起草前当跳过处理，起草完（或跳过）就清掉。同时记进 kv，重启接回时也认 */
 const dismissed = new Set<string>();
+const dismissKey = (mid: string) => `dismiss:${mid}`;
+const isDismissed = (msgs: Message[]) => msgs.some((m) => dismissed.has(m.message_id) || getKv(dismissKey(m.message_id), false));
+const DISMISSED = "Yi 标记不用起草";
 
 /** 不用起草这条消息：在等的不等了、排队的轮到时跳过、正在起草的中止，都记成跳过、消息算已处理 */
 export function dismissDraft(messageId: string): boolean {
 	const i = inflight.get(messageId);
 	if (!i) return false;
 	dismissed.add(messageId);
+	setKv(dismissKey(messageId), true);
 	log("Yi 标记不用起草", i.chatId, messageId);
 	const d = drafting.get(i.chatId);
 	if (d?.key && !d.aborted && d.msgs.some((m) => m.message_id === messageId) && running.get(d.key)?.chatId === i.chatId) {
@@ -250,6 +256,10 @@ function triggerOf(chat: ChatRef, m: Message): TriggerInput {
 }
 
 async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, attempt?: string) {
+	// 合并转发只有占位：先展开，trigger、分诊和起草看到的都是转发的内容（11-10 有草稿只能回「看不到转发里的内容」）
+	for (const m of msgs)
+		if (m.content === FORWARD_PLACEHOLDER)
+			m.content = (await expandForward(m.message_id).catch((e) => log("展开合并转发失败", m.message_id, e))) ?? m.content;
 	const last = msgs.at(-1)!;
 	// 重启接回、手动重试会再走一遍：trigger 已经记过就不动
 	const triggerIds = msgs.map((m) => receive(triggerOf(chat, m)));
@@ -295,7 +305,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 	async function draftLocked(self: Drafting) {
 		const onError = (e: unknown) => {
 			if (isStopping()) throw e;
-			if (self.aborted) yiRepliedMidway(chat, source, label, routeId, self.dismissed ? "Yi 标记不用起草" : undefined);
+			if (self.aborted) yiRepliedMidway(chat, source, label, routeId, self.dismissed ? DISMISSED : undefined);
 			else failed(chat, msgs, source, label, started, routeId, e);
 		};
 		const open = openRoute(triggerIds, "draft");
@@ -306,6 +316,12 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 		}
 		const saved = getKv<Pending | null>(pendingKey, null)?.stage;
 		if (saved && hasRun(`${requestId}${saved.suffix ?? ""}`)) {
+			// 重启前 Yi 已经点了不用起草：不接回那次运行，按跳过收尾
+			if (isDismissed(msgs)) {
+				Object.assign(source, saved.source);
+				yiRepliedMidway(chat, source, label, saved.routeId, DISMISSED);
+				return;
+			}
 			// 重启接回：上次已经交给 agent 了，直接挂回那次运行
 			log("接回起草", chat.chat_id, requestId);
 			routeId = saved.routeId;
@@ -317,7 +333,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			}
 			return;
 		}
-		const stale = msgs.some((m) => dismissed.has(m.message_id)) ? "Yi 标记不用起草" : await staleReason(chat, msgs);
+		const stale = isDismissed(msgs) ? DISMISSED : await staleReason(chat, msgs);
 		// 已经分派过（私聊 deep 档等到点再来、或重启接回）：按作废收尾那条分派，不另记一条跳过
 		if (stale && open) {
 			yiRepliedMidway(chat, source, label, open.id, stale);
@@ -526,7 +542,7 @@ async function finish(chat: ChatRef, msgs: Message[], first: Stage, requestId: s
 	source.session = sessionId;
 	// 起草可能跑了好几分钟：这期间 Yi 自己回了，草稿就没用了（轮询看到 Yi 的回复时这张草稿还没推，作废不到它）；
 	// 对方又接着发了也不推，后面那条会把这几条一起起草
-	const stale = msgs.some((m) => dismissed.has(m.message_id)) ? "Yi 标记不用起草" : await staleReason(chat, msgs);
+	const stale = isDismissed(msgs) ? DISMISSED : await staleReason(chat, msgs);
 	if (stale) {
 		log(`起草期间${stale}，不推草稿`, chat.chat_id, requestId);
 		record({
@@ -581,7 +597,8 @@ function mergeEarlier(chat: ChatRef, earlier: Message[], into: string) {
 function yiRepliedMidway(chat: ChatRef, source: Source, label: string, routeId: number | undefined, reason = "起草期间Yi 已亲自回复") {
 	log(`${reason}，已中止`, chat.chat_id, source.replyTo);
 	record({ kind: "draft", status: "skipped", chatId: chat.chat_id, source: source.replyTo, label, question: source.text, reason });
-	settle({ actionKind: "draft", routeId, outcome: "expired", effect: "internal", detail: reason });
+	// Yi 在看板上标的是「已处理」，不是亲自回复了
+	settle({ actionKind: "draft", routeId, outcome: reason === DISMISSED ? "completed" : "expired", effect: "internal", detail: reason });
 }
 
 function failed(chat: ChatRef, msgs: Message[], source: Source, label: string, started: number, routeId: number | undefined, e: unknown) {

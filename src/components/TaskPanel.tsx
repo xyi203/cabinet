@@ -273,7 +273,9 @@ export function TaskPanel({
 						</div>
 					</Ev>
 				)}
-				{t.id.startsWith("q:") && <RowActions t={t} s={s} onOpen={() => {}} onMemory={onMemory} />}
+				{(t.id.startsWith("q:") || ((t.status === "todo" || t.status === "in_progress") && !liveDraft && !liveDev)) && (
+					<RowActions t={t} s={s} onOpen={() => {}} onMemory={onMemory} />
+				)}
 			</div>
 			<Embedded.Provider value>
 				{liveDraft && <DraftDrawer key={liveDraft.id} draft={liveDraft} task={logOf(liveDraft, t)} onClose={() => {}} />}
