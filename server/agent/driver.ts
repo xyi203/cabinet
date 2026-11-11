@@ -51,6 +51,7 @@ import { QUOTA_RE, isStopping, log, now } from "../util.ts";
 import { models, resolveModel, textOf } from "./models.ts";
 import { type AgentConfig, loadAgents } from "./router.ts";
 import { findTool, grepTool, lookupTool, lsTool, memoryTool, scheduleTool, showUiTool } from "./tools.ts";
+import { codexDoneKey, codexSteps, runCodex } from "./codex.ts";
 import { type AgentUi, clearPendingUi, takePendingUi } from "../a2ui/surface.ts";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -163,7 +164,10 @@ const runKey = (requestId: string) => `run:${requestId}`;
 
 /** 这个 requestId 上次提交过、还能接回 */
 export const hasRun = (requestId: string) => getKv<RunRecord | null>(runKey(requestId), null) !== null;
-export const forgetRun = (requestId: string) => deleteKv(runKey(requestId));
+export const forgetRun = (requestId: string) => {
+	deleteKv(runKey(requestId));
+	deleteKv(codexDoneKey(requestId));
+};
 
 /** 启动时清掉很久以前的接回凭据（调用方没来得及清的） */
 export function pruneRuns(maxAge = 3 * 86400) {
@@ -484,6 +488,23 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 	let ok = false;
 	let model = agent.model ?? PI_MODEL;
 	try {
+		// 配了 runner: "codex" 的档位（MR 预审）交给 codex：会话、执行日志、重启接回都在 codex.ts 里
+		if (agent.runner === "codex") {
+			const r = await runCodex({
+				key,
+				requestId: opts.requestId,
+				prompt: opts.prompt,
+				cwd: opts.cwd,
+				agent,
+				extraSystem: opts.extraSystem,
+				memory: opts.memory,
+				timeout: opts.timeout,
+			});
+			model = `codex/${r.model}`;
+			ok = true;
+			logRun(opts, model, info.started, true, r.usage);
+			return { text: r.text, usage: r.usage, sessionId: key, ui: null };
+		}
 		const h = await harness();
 		const spec = model;
 		const fallback = agent.fallbackModel ?? PI_FALLBACK_MODEL;
@@ -601,6 +622,9 @@ export interface Step {
 
 /** 执行日志：从 durable 的对话记录里取这一段时间的工具调用、结果和回答 */
 export async function conversationLog(key: string, start?: number, end?: number): Promise<Step[] | undefined> {
+	// codex 跑的那几轮不在 durable 里；同一个 MR 会话以前用 pi 跑过的照样从 durable 取
+	const cx = codexSteps(key, start, end);
+	if (cx?.length) return cx;
 	const id = conversationId(key);
 	if (!id) return undefined;
 	const conv = await (await harness()).conversation(id as any, ctx);

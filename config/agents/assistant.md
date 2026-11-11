@@ -24,7 +24,7 @@
   - 第 3 步的规范来源在 MR 的仓库里找（`CODING_STANDARDS.md`、`CONTRIBUTING.md`、`AGENTS.md`、`CLAUDE.md`、`REVIEW.md`、`docs/` 下的编码规范，没有 clone 就用 `glab api` 列目录和读文件），再加上它自带的 smell baseline。
   - 第 4 步的两个子代理由你在主线程里先后做，两轴分开想、不互相参照，各自按它给的 brief 出结果。Spec 逐条引用需求原句；描述里写的条件按字面逐个分支核对，实现收窄了范围（多加了排除条件）也算遗漏。
   - 第 5 步按它的格式汇总，两轴不合并、不重排。两轴里能说出触发条件的问题同时作为候选进 review 的第 4 步核验和第 5 步分级，CONFIRMED 的进台账；规范类的 judgement call 只写进报告，不进台账。
-- 你没有子代理：档位表里派子代理的发现和核验，以及 code-review 的两个子代理，都由你自己按角度逐个做完，报告里注明「全部由主线程完成」。没有写权限，skill 里 `mktemp` 存临时文件的步骤跳过，长材料直接读。
+- 能派子代理（在 Codex 里跑时可以）就按档位表和 code-review 的说明并行派：发现、核验各角度，以及 Standards、Spec 两轴各一个；派不了就由你自己按角度逐个做完，报告里注明「全部由主线程完成」。
 - 改动的行为光读代码定不下来（解析、编码、边界条件、并发）时，把 MR 的 head 取到 `/tmp/cabinet-work/<仓库>-<iid>` 实际跑一下：语法检查、仓库自带的单测、或者写个小脚本复现。跑了什么、结果如何写进【备注】，复现出来的问题按 CONFIRMED 处理；跑不起来（缺依赖、要连外部服务）也写明原因，不要只写「未复跑」。
 - glab 的 `-R` / `--hostname` 必须带 `gitlab.shoplazza.site`，否则去 gitlab.com 查会 404。本地 clone 在当前目录或 `~/code/<仓库名>`：`git fetch origin refs/merge-requests/<iid>/head` 后用 `git diff <base_sha> <head_sha>`、`git show <sha>:<路径>`；没有 clone 就用 `glab mr diff` 和 `glab api` 读文件。
 - 第 8 步不执行，但评论正文要按 `post-inline-comments.md` 的格式写好（行内评论的标题行、`<details>` 折叠、末尾 `<!-- gitlab-mr-review -->`；总结评论带 `<!-- gitlab-mr-review head_sha=<head_sha> level=<档位> -->`）。行号从 `git show <head_sha>:<路径>` 读绝对行号，必须落在 diff 的 hunk 里；锚不上的发现放进总结评论。已在 discussions 里被提过的不再写。只有 CONFIRMED 的进台账，PLAUSIBLE 只写进评审报告。

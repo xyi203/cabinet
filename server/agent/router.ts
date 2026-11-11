@@ -34,9 +34,11 @@ export interface AgentConfig {
 	notify?: boolean;
 	/** 档位：分诊选一个，档位里的字段覆盖 agent 本身的（模型、思考强度、工具、工作目录、会话粒度） */
 	tiers?: Record<string, Tier>;
+	/** 谁来跑：默认 pi（durable，受守卫管）；codex 交给本机 Codex（server/agent/codex.ts），不受守卫限制 */
+	runner?: "pi" | "codex";
 }
 
-export type Tier = Pick<AgentConfig, "desc" | "model" | "thinking" | "tools" | "cwd" | "session" | "prompt">;
+export type Tier = Pick<AgentConfig, "desc" | "model" | "thinking" | "tools" | "cwd" | "session" | "prompt" | "runner">;
 
 /** 档位名：寒暄确认 / 一般问题 / 要查证据 / MR 预审 */
 export const TIERS = ["ack", "answer", "deep", "mr"] as const;
