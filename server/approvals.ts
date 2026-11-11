@@ -34,7 +34,15 @@ export function pendingApprovals(): Approval[] {
 
 const fmt = (t: number) => when(t);
 
-/** 定时任务的参数：名字、cron、内容都要有，cron 要能解析 */
+/** schedule 工具的 until：本机时间「YYYY-MM-DD HH:mm」→ unix 秒；没给是 undefined，格式不对是 NaN */
+export function scheduleUntil(args: Record<string, unknown>): number | undefined {
+	const v = String(args.until ?? "").trim();
+	if (!v) return;
+	const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/.exec(v);
+	return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() / 1000 : Number.NaN;
+}
+
+/** 定时任务的参数：名字、cron、内容都要有，cron 要能解析，给了结束时间要晚于现在 */
 export function checkSchedule(args: Record<string, unknown>): string | undefined {
 	const name = String(args.name ?? "").trim();
 	const prompt = String(args.prompt ?? "").trim();
@@ -44,6 +52,8 @@ export function checkSchedule(args: Record<string, unknown>): string | undefined
 	} catch (e) {
 		return `cron 写得不对：${(e as CronError).message}。格式是 5 段「分 时 日 月 周」，例如 0 9 * * 1-5`;
 	}
+	const until = scheduleUntil(args);
+	if (until !== undefined && !(until > now())) return "until 要写成晚于现在的本机时间，格式 YYYY-MM-DD HH:mm";
 }
 
 /** 接下来几次运行时间 */
@@ -72,8 +82,19 @@ export const learnText = (l: Learn) => (l.isNew ? `新建规则 ${l.rule}，放�
 export function describe(a: Pick<Approval, "tool" | "args">): string {
 	if (a.tool === "bash") return "```\n" + String(a.args.command ?? "") + "\n```";
 	if (a.tool === "schedule") {
-		const runs = nextRuns(String(a.args.cron)).map(fmt).join("、");
-		return `新建定时任务「${a.args.name}」\n- cron：\`${a.args.cron}\`（接下来：${runs || "算不出"}）\n- 到点交给助手做：${a.args.prompt}`;
+		const until = scheduleUntil(a.args);
+		const runs = nextRuns(String(a.args.cron))
+			.filter((t) => until === undefined || t <= until)
+			.map(fmt)
+			.join("、");
+		return [
+			`新建定时任务「${a.args.name}」`,
+			`- cron：\`${a.args.cron}\`（接下来：${runs || "算不出"}）`,
+			until !== undefined ? `- 结束：${fmt(until)}，之后自动停用` : "",
+			`- 到点交给助手做：${a.args.prompt}`,
+		]
+			.filter(Boolean)
+			.join("\n");
 	}
 	// 发布工单的 params 是多行文字，JSON 里只剩一串 \n，审批时看不清要写进去的内容
 	const { params, ...rest } = a.args as { params?: unknown };
@@ -240,6 +261,7 @@ async function execute(a: Approval): Promise<string> {
 			cron: String(a.args.cron),
 			prompt: String(a.args.prompt),
 			agent: loadAgents().router.agent ?? ASSISTANT,
+			until: scheduleUntil(a.args) ?? null,
 		});
 		return `已建定时任务 ${s.id}「${s.name}」，下次运行 ${s.nextRun ? fmt(s.nextRun) : "无"}`;
 	}

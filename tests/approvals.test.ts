@@ -71,6 +71,32 @@ test("定时任务：参数不对直接拒绝不建审批；批准后建出来",
 	assert.equal(a.status, "done", a.result ?? "");
 	const s = listSchedules().find((x) => x.name === "告警回顾")!;
 	assert.deepEqual([s.cron, s.agent, s.prompt], ["0 9 * * 1-5", "assistant", "看看昨晚的告警"]);
+	assert.equal(s.until, null);
+});
+
+const pad = (n: number) => String(n).padStart(2, "0");
+const local = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+test("定时任务：只跑几次的带 until，卡片写明结束时间，建出来到期自动停；until 不对直接拒绝", async () => {
+	const before = pendingApprovals().length;
+	assert.match(createApproval(req({ tool: "schedule", args: { name: "x", cron: "0 9 * * *", prompt: "y", until: "明天" } })), /until/);
+	assert.match(
+		createApproval(req({ tool: "schedule", args: { name: "x", cron: "0 9 * * *", prompt: "y", until: "2020-01-01 00:00" } })),
+		/until/,
+	);
+	assert.equal(pendingApprovals().length, before);
+	// GD-45119 那次：日和月写死的两次巡检，没有 until 时明年同一天还会再跑
+	const end = new Date(Date.now() + 2 * 86400_000);
+	end.setSeconds(0, 0);
+	const id = idOf(
+		createApproval(
+			req({ tool: "schedule", args: { name: "OOM 巡检", cron: "25 19,20 * * *", prompt: "看内存", until: local(end) }, reason: "新建定时任务" }),
+		),
+	);
+	assert.match(JSON.stringify(approvalCard(getApproval(id)!)), /结束：.*之后自动停用/);
+	await decideApproval(id, "approve");
+	assert.equal((await settled(id)).status, "done");
+	assert.equal(listSchedules().find((x) => x.name === "OOM 巡检")!.until, end.getTime() / 1000);
 });
 
 test("超过 24 小时没处理的过期，过期后不能执行", async () => {

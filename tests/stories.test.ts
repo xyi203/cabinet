@@ -115,6 +115,8 @@ test("巡检提示：每轮先读首次观察的范围和基线，正常时第�
 	const story = { id: "7159107851", typeKey: "issue", title: "functions-api OOM", url: "" } as any;
 	const p = patrolPrompt(story, "GD-45119", "dev-1");
 	assert.match(p, /lookup dev-1/);
+	// 首次观察超时没留基线：按工单 fbgc 的观察项查，不能只看时间线
+	assert.match(p, /超时、失败[\s\S]*issue_get_info GD-45119 读 fbgc/);
 	assert.match(p, /references\/patrol\.md/);
 	assert.ok(p.includes(`「${PATROL_OK}」`));
 	assert.match(observePrompt(story, "GD-45119", "dev-0"), /【巡检范围与基线】[\s\S]*/);

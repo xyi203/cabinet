@@ -99,8 +99,10 @@ export const scheduleTool = defineTool({
 	description:
 		"Yi 让你定期做某件事时（「每天 9 点…」「每周一…」），新建一个定时任务：到点交给助手按 prompt 跑一次，结论私聊 Yi。" +
 		"会先发审批卡片给 Yi，批准后才生效。cron 是 5 段「分 时 日 月 周」，本机时区，例如每个工作日 9 点是 `0 9 * * 1-5`。" +
-		"prompt 写清到点要做什么、看哪些数据、结论要什么样，要能脱离这次对话独立看懂。",
-	parameters: obj({ name: str(), cron: str(), prompt: str() }),
+		"prompt 写清到点要做什么、看哪些数据、结论要什么样，要能脱离这次对话独立看懂。" +
+		"只跑有限几次的（「今天 19:25、20:25 各看一次」）一定给 until（本机时间 `YYYY-MM-DD HH:mm`，写最后一次之后），到点自动停用，不用让 Yi 手动删；" +
+		"不给的话日和月写死的 cron 每年这一天都会再跑。",
+	parameters: obj({ name: str(), cron: str(), prompt: str(), until: opt(str()) }),
 	execute: async () => {
 		throw new Error("新建定时任务需要 Yi 审批，不能直接执行");
 	},

@@ -383,7 +383,8 @@ export function patrolPrompt(s: Story, key: string, observeTaskId?: string, full
 			? `发布工单 ${key}（${header(s)}）已在 ${when(fullAt)} 前后全量（走到 prod 部署），这是全量后巡检：全量后 ${PATROL_FULL_MINUTES.join(" / ")} 分钟各一轮，最后一轮跑完自动停。重点看流量全部切到新版本后的变化：错误率、5xx、P95、资源、重启、Sentry 新增，和 AB 阶段的基线比。`
 			: `发布工单 ${key}（${header(s)}）的定时巡检。`,
 		observeTaskId
-			? `1. 先 lookup ${observeTaskId}，读首次观察结尾的「【巡检范围与基线】」；首次观察还没跑完就先只看放量时间线和 Sentry 新增。`
+			? // 首次观察超时 / 失败时也没有这段：GD-45119 首次观察超时，之后 AB 阶段十几轮都只看了时间线和 Sentry，没查过这次要修的 OOM
+				`1. 先 lookup ${observeTaskId}，读首次观察结尾的「【巡检范围与基线】」。首次观察还在跑：这轮先只看放量时间线和 Sentry 新增。首次观察已经结束却没有这一段（超时、失败）：用 devops 的 issue_get_info ${key} 读 fbgc（发布观察）列的观察项，逐项查（重启 / OOM、资源、受影响接口等），基线取发布前的数据，不要只看时间线。`
 			: `1. 没有首次观察：先用 devops 的 issue_get_info ${key} 读服务、版本和发布方式，基线取发布前的数据。`,
 		`2. 按 ${OBSERVATION_DIR}/references/patrol.md 做增量检查：只读这份，不重读 SKILL.md、不重走七步，不启动 loop。命令拿不准就先跑 \`<脚本> <子命令> --help\`（直接放行），不要猜子命令：猜错的会卡在审批上。`,
 		`3. 没有异常：回复第一行只写「${PATROL_OK}」，后面最多一两句（这一轮会直接归档、不打扰 Yi）。`,

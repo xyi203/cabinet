@@ -372,6 +372,8 @@ export async function due(t = now()) {
 		} catch (e) {
 			log("定时任务的 cron 坏了，停用", s.id, e);
 		}
+		// 下一次已经过了结束时间，这次就是最后一次：当场停用，不留一个 nextRun 挂到明年
+		if (next != null && s.until != null && next > s.until) next = null;
 		// 先推进下一次，再跑：跑的时候出错也不会每 30 秒重试一遍
 		db()
 			.update(schema.schedules)
