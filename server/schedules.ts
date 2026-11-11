@@ -157,6 +157,21 @@ export function saveSchedule(input: ScheduleInput): Schedule {
 	return row;
 }
 
+/**
+ * 直接结束：停用并把结束时间记成现在，看板归到「已结束」，执行记录还能查；
+ * 和暂停不同，结束的是这件事做完了，不会等着恢复。要再跑可以在看板上重新启用
+ */
+export function endSchedule(id: string): Schedule {
+	const s = getSchedule(id);
+	if (!s) throw new DraftError("定时任务不存在");
+	const t = now();
+	const until = s.until != null && s.until < t ? s.until : t;
+	db().update(schema.schedules).set({ enabled: false, nextRun: null, until, updated: t }).where(eq(schema.schedules.id, id)).run();
+	changed();
+	log("结束定时任务", id, s.name);
+	return getSchedule(id)!;
+}
+
 export function deleteSchedule(id: string) {
 	if (!getSchedule(id)) throw new DraftError("定时任务不存在");
 	db().delete(schema.schedules).where(eq(schema.schedules.id, id)).run();

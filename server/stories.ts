@@ -10,7 +10,7 @@ import { callMcp } from "./agent/mcp.ts";
 import { DOC_MODEL, PATROL_CRON, PATROL_DAYS, PATROL_FULL_MINUTES, PATROL_MODEL, OWNER_OPEN_ID, SKILLS_DIR } from "./config.ts";
 import { dispatch, getDevTask, PATROL_OK } from "./dev.ts";
 import { sendToUserAsBot } from "./lark/bot.ts";
-import { deleteSchedule, listSchedules, saveSchedule } from "./schedules.ts";
+import { endSchedule, listSchedules, saveSchedule } from "./schedules.ts";
 import { DraftError } from "./drafts/store.ts";
 import { meegle } from "./meego.ts";
 import { log, now, when } from "./util.ts";
@@ -433,12 +433,12 @@ export async function startPatrol(storyId: string, key: string) {
 	return { observe, schedule: sched };
 }
 
-/** 停止巡检：删掉定时任务，工单上记下原因 */
+/** 停止巡检：结束定时任务（留在「已结束」里能查执行记录），工单上记下原因 */
 export function stopPatrol(storyId: string, key: string, reason = "手动停止") {
 	const { t } = liveTicket(storyId, key);
 	if (!t.patrol || t.patrol.stopped) throw new DraftError("没在巡检");
 	try {
-		deleteSchedule(t.patrol.scheduleId);
+		endSchedule(t.patrol.scheduleId);
 	} catch {
 		// 定时任务已经被删了：只记状态
 	}
@@ -446,17 +446,31 @@ export function stopPatrol(storyId: string, key: string, reason = "手动停止"
 	log("停止巡检", key, reason);
 }
 
-/** 停全量后巡检：删掉定时任务，工单上记下原因 */
+/** 停全量后巡检：结束定时任务，工单上记下原因 */
 export function stopFullPatrol(storyId: string, key: string, reason = "手动停止") {
 	const { t } = liveTicket(storyId, key);
 	if (!t.fullPatrol || t.fullPatrol.stopped) throw new DraftError("没在做全量后巡检");
 	try {
-		deleteSchedule(t.fullPatrol.scheduleId);
+		endSchedule(t.fullPatrol.scheduleId);
 	} catch {
 		// 定时任务已经被删了：只记状态
 	}
 	patchTicket(storyId, key, (x) => ({ ...x, fullPatrol: { ...x.fullPatrol!, stopped: reason } }));
 	log("停止全量后巡检", key, reason);
+}
+
+/**
+ * 定时页上点「结束」：巡检的走停巡检，工单上记成手动停止（全量了也不自动接着巡检）；
+ * 只停定时任务的话，刷新时会被当成到期自动停，原因写错，还会自动转全量后巡检
+ */
+export function endScheduleById(id: string) {
+	for (const s of listStories())
+		for (const t of s.tickets) {
+			if (t.removed) continue;
+			if (t.patrol?.scheduleId === id && !t.patrol.stopped) return stopPatrol(s.id, t.key);
+			if (t.fullPatrol?.scheduleId === id && !t.fullPatrol.stopped) return stopFullPatrol(s.id, t.key);
+		}
+	endSchedule(id);
 }
 
 /**

@@ -29,6 +29,7 @@ import {
 	startPatrol,
 	stopFullPatrol,
 	stopPatrol,
+	endScheduleById,
 	storyTask,
 	syncStories,
 	unbindTicket,
@@ -302,8 +303,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			throw e;
 		}
 	}
-	// 定时任务：新建 / 修改、立即运行、删除
-	const schedM = /^\/api\/schedules(?:\/(cron-\d+)\/(run|delete))?$/.exec(p);
+	// 定时任务：新建 / 修改、立即运行、结束、删除
+	const schedM = /^\/api\/schedules(?:\/(cron-\d+)\/(run|end|delete))?$/.exec(p);
 	if (schedM) {
 		try {
 			// 看板上新设的结束时间不能已经过了（不改结束时间时不传）
@@ -323,6 +324,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 					}),
 				});
 			if (schedM[2] === "run") return send(res, 200, { ok: true, task: await runNow(schedM[1]) });
+			if (schedM[2] === "end") {
+				endScheduleById(schedM[1]);
+				return send(res, 200, { ok: true });
+			}
 			deleteSchedule(schedM[1]);
 			return send(res, 200, { ok: true });
 		} catch (e) {

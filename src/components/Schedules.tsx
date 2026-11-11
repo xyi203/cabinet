@@ -9,6 +9,7 @@ import {
 	type ScheduleRun,
 	type TaskView,
 	deleteSchedule,
+	endSchedule,
 	fetchScheduleRuns,
 	fetchSchedules,
 	runSchedule,
@@ -211,6 +212,18 @@ export function Schedules({
 		["已结束", all.filter(ended)],
 	];
 	const hasRuns = all.some((s) => items.some((t) => t.scheduleId === s.id));
+	// 结束：这件事做完了，归到「已结束」、不再跑；记录留着，之后要跑可以重新启用
+	async function endOne(s: Schedule) {
+		const p = patrolOf(s.id);
+		if (
+			await confirmDialog({
+				title: `结束定时任务「${s.name}」？`,
+				body: p ? `会同时停掉 ${p.ticket.key} 的巡检，工单全量了也不再自动接着巡检。执行记录保留。` : "不再运行，归到「已结束」，执行记录保留。之后要跑可以重新启用。",
+				confirmText: "结束",
+			})
+		)
+			await act(() => endSchedule(s.id), "已结束");
+	}
 
 	const btn = (label: string, on: () => void, cls = "") => (
 		<button className={`btn sm ${cls}`} disabled={busy} onClick={on}>
@@ -378,6 +391,7 @@ export function Schedules({
 						() => act(() => saveSchedule({ ...s, enabled: !s.enabled }), s.enabled ? "已暂停" : done ? "已重新启用" : "已恢复"),
 						"ghost",
 					)}
+					{!done && btn("结束", () => void endOne(s), "ghost")}
 					{btn("编辑", () => setEdit(editOf(s)), "ghost")}
 					{btn(
 						"删除",
@@ -526,6 +540,7 @@ export function Schedules({
 							onOpenTask={(id) => onOpenTask(id, s.id)}
 							onRun={() => act(() => runSchedule(s.id), "已开始运行，结果会出现在执行记录里")}
 							onToggle={() => act(() => saveSchedule({ ...s, enabled: !s.enabled }), s.enabled ? "已暂停" : "已恢复")}
+							onEnd={ended(s) ? undefined : () => void endOne(s)}
 							onEdit={() => {
 								onOpenSched(null);
 								setEdit(editOf(s));
@@ -565,6 +580,7 @@ function ScheduleDrawer({
 	onOpenTask,
 	onRun,
 	onToggle,
+	onEnd,
 	onEdit,
 }: {
 	s: Schedule;
@@ -577,6 +593,8 @@ function ScheduleDrawer({
 	onOpenTask: (taskId: string) => void;
 	onRun: () => void;
 	onToggle: () => void;
+	/** 已结束的不给 */
+	onEnd?: () => void;
 	onEdit: () => void;
 }) {
 	const { data: runs, isLoading } = useQuery({
@@ -622,6 +640,11 @@ function ScheduleDrawer({
 					<button className="btn" disabled={busy} onClick={onToggle}>
 						{s.enabled ? "暂停" : "恢复"}
 					</button>
+					{onEnd && (
+						<button className="btn" disabled={busy} onClick={onEnd}>
+							结束
+						</button>
+					)}
 					<button className="btn" disabled={busy} onClick={onEdit}>
 						编辑
 					</button>

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 const { openDb, useDb } = await import("../server/db/index.ts");
 useDb(openDb(":memory:"));
-const { CronError, nextRun, parseCron, saveSchedule, listSchedules, deleteSchedule, due, upcoming } =
+const { CronError, nextRun, parseCron, saveSchedule, listSchedules, deleteSchedule, due, upcoming, endSchedule } =
 	await import("../server/schedules.ts");
 const { DraftError } = await import("../server/drafts/store.ts");
 
@@ -145,6 +145,11 @@ test("按时间点跑：不解析 cron，依次取下一个，最后一个之后
 	deleteSchedule(s.id);
 });
 
+const endedNow = (id: string) => {
+	const x = listSchedules().find((y) => y.id === id);
+	return Boolean(x && !x.enabled && x.nextRun == null && x.until != null && x.until <= Date.now() / 1000);
+};
+
 test("全量后巡检：停掉 AB 巡检，按 5 / 15 / 30 / 60 分钟建时间点任务；解绑一并停掉", async () => {
 	const { db, schema } = await import("../server/db/index.ts");
 	const { startFullPatrol, getStory, unbindTicket } = await import("../server/stories.ts");
@@ -175,9 +180,53 @@ test("全量后巡检：停掉 AB 巡检，按 5 / 15 / 30 / 60 分钟建时间�
 	const tk = getStory("9000001")!.tickets[0];
 	assert.equal(tk.patrol?.stopped, "已全量，转为全量后巡检");
 	assert.equal(tk.fullPatrol?.scheduleId, s.id);
-	assert.ok(!listSchedules().some((x) => x.id === ab.id));
+	// 停掉的巡检不删，结束后留在「已结束」里查记录
+	assert.ok(endedNow(ab.id));
 	assert.throws(() => startFullPatrol("9000001", "GD-7"), /已经在做/);
 	unbindTicket("9000001", "GD-7");
 	assert.equal(getStory("9000001")!.tickets[0].fullPatrol?.stopped, "已解绑");
-	assert.ok(!listSchedules().some((x) => x.id === s.id));
+	assert.ok(endedNow(s.id));
+});
+
+test("直接结束：停用、不再有下次、结束时间记成现在，早就过期的保留原结束时间", () => {
+	const s = saveSchedule({ name: "OOM 巡检", cron: "25 19,20 9 11 *", agent: "assistant", prompt: "看内存" });
+	assert.ok(s.nextRun);
+	const t = Date.now() / 1000;
+	const e = endSchedule(s.id);
+	assert.equal(e.enabled, false);
+	assert.equal(e.nextRun, null);
+	assert.ok(e.until != null && e.until >= t - 1 && e.until <= Date.now() / 1000);
+	// id 按毫秒生成：先删掉再建下一条，免得同一毫秒撞 id
+	deleteSchedule(s.id);
+	const old = saveSchedule({ name: "过期", cron: "0 9 * * *", agent: "assistant", prompt: "x", until: t - 3600, enabled: false });
+	assert.equal(endSchedule(old.id).until, t - 3600);
+	assert.throws(() => endSchedule("cron-404"), /不存在/);
+	deleteSchedule(old.id);
+});
+
+test("定时页结束巡检任务：工单上记成手动停止，之后全量也不自动接着巡检", async () => {
+	const { db, schema } = await import("../server/db/index.ts");
+	const { endScheduleById, getStory } = await import("../server/stories.ts");
+	const ab = saveSchedule({ name: "巡检 GD-8 · x", cron: "*/30 * * * *", agent: "assistant", prompt: "巡检", patrol: true });
+	const t = Date.now() / 1000;
+	db()
+		.insert(schema.stories)
+		.values({
+			id: "9000002",
+			projectKey: "p",
+			typeKey: "story",
+			title: "x",
+			url: "",
+			stage: "release",
+			tickets: [{ key: "GD-8", title: "", status: "prodAB实验中", patrol: { observeTaskId: "dev-1", scheduleId: ab.id, started: t } }],
+			created: t,
+			updated: t,
+		})
+		.run();
+	endScheduleById(ab.id);
+	assert.equal(getStory("9000002")!.tickets[0].patrol?.stopped, "手动停止");
+	const x = listSchedules().find((y) => y.id === ab.id)!;
+	assert.equal(x.enabled, false);
+	// 已经停过的再点一次：只结束定时任务，不报「没在巡检」
+	endScheduleById(ab.id);
 });

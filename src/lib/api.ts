@@ -424,6 +424,8 @@ export const fetchScheduleRuns = (id: string) =>
 export const saveSchedule = (s: Partial<Schedule> & Pick<Schedule, "name" | "cron" | "agent" | "prompt">) =>
 	post<{ item: Schedule }>("/api/schedules", s).then((d) => d.item);
 export const runSchedule = (id: string) => post<{ task: string }>(`/api/schedules/${id}/run`).then((d) => d.task);
+/** 直接结束：停用并归到「已结束」，巡检的工单上记成手动停止 */
+export const endSchedule = (id: string) => post(`/api/schedules/${id}/end`);
 export const deleteSchedule = (id: string) => post(`/api/schedules/${id}/delete`);
 
 export interface QuotaWindow {
