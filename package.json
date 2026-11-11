@@ -16,6 +16,7 @@
 		"check": "oxlint && oxfmt --check && pnpm typecheck && pnpm test"
 	},
 	"dependencies": {
+		"@a2ui/web_core": "0.15.0",
 		"@earendil-works/chord": "1.5.0",
 		"@earendil-works/pi-ai": "1.5.0",
 		"@earendil-works/pi-codemode": "1.5.0",
@@ -31,7 +32,8 @@
 		"react": "^19.3.1",
 		"react-dom": "^19.3.1",
 		"react-markdown": "^10.1.0",
-		"remark-gfm": "^4.0.1"
+		"remark-gfm": "^4.0.1",
+		"zod": "^4.6.7"
 	},
 	"devDependencies": {
 		"@tailwindcss/vite": "^4.3.4",

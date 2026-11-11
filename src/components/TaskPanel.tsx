@@ -5,7 +5,7 @@ import type { Draft, State, Task, TaskEvent, TaskView } from "../lib/api";
 import { AGENT_NAME, SOURCE, STATUS, describeDraft, hm, isLive, time, titleOf } from "../lib/format";
 import { ApprovalActions, RowActions, useAct } from "./Actions";
 import { DevDrawer } from "./DevDrawer";
-import { Markdown } from "./Markdown";
+import { Conclusion } from "./AgentUi";
 import { Drawer, Embedded } from "./Drawer";
 import { DraftDrawer } from "./Drawers";
 import { MsgText } from "./MsgText";
@@ -176,7 +176,9 @@ export function TaskPanel({
 							<span>{d.title}</span>
 							<span>{AGENT_NAME[d.agent] ?? d.agent}</span>
 						</div>
-						<div className="ob">{d.summary ? <Markdown text={d.summary} /> : <div className="quote">{d.error || d.request}</div>}</div>
+						<div className="ob">
+							{d.summary ? <Conclusion text={d.summary} ui={d.ui} devId={d.id} /> : <div className="quote">{d.error || d.request}</div>}
+						</div>
 					</div>
 				),
 			});

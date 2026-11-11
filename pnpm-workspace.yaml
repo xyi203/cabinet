@@ -3,3 +3,12 @@ allowBuilds:
   "@google/genai": false
   protobufjs: false
   better-sqlite3: false
+
+# @a2ui/web_core 0.15.0 声明 zod ^3.25.76，但 zod 3.x 有只在 4.6.6+ 修复的高危漏洞，项目里其余依赖也都是 zod 4；
+# 统一成 zod 4，web_core 在 zod 4 下的两处问题用 patches/ 里的补丁修（上游 a2ui#3826、#3825）。
+# 只用 web_core 做服务端校验；它在 zod 4 下认不出子组件引用（reference-map），所以看板不用 @a2ui/react 渲染，见 src/components/AgentUi.tsx
+overrides:
+  "@a2ui/web_core>zod": 4.6.7
+
+patchedDependencies:
+  "@a2ui/web_core@0.15.0": patches/@a2ui__web_core@0.15.0.patch

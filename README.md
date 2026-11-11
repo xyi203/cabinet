@@ -56,6 +56,7 @@ server/          后端（Node 直接跑 TypeScript）
   retry.ts       失败任务重试
   api.ts         看板接口、SSE、托管前端构建产物
   memory/        长期记忆：存取与生命周期、召回（关键词 + 向量）、自动提取、「记住」
+  a2ui/          结论的结构化报告：show_ui 工具的组件目录和校验（A2UI v1.0，zod 4 补丁见 patches/），看板按它渲染（src/components/AgentUi.tsx）
   db/            Drizzle + Turso（turso.ts：drizzle 与 durable 存储的 Turso 适配）
 src/             看板前端（TanStack Start + React Query）
 config/          agents.json、skill-rules.json、各 agent 提示词、系统规则、起草规则

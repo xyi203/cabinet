@@ -210,6 +210,7 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 			session: null,
 			runs: 0,
 			usage: null,
+			ui: null,
 			created: t,
 			updated: t,
 			routeId: routeBoard(id, agentName, request, input),
@@ -264,6 +265,7 @@ export async function dispatch(input: DispatchInput): Promise<DevTask> {
 		session: null,
 		runs: 0,
 		usage: null,
+		ui: null,
 		created: t,
 		updated: t,
 		routeId: routeBoard(id, "dev", request, input),
@@ -354,6 +356,7 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 			text: raw,
 			usage,
 			sessionId,
+			ui,
 		} = await sem.run(() =>
 			runPi({
 				cwd: task.worktree || task.repo || DEFAULT_CWD,
@@ -374,6 +377,8 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 				// 写操作审批的结果作为新消息发回这个任务
 				origin: { label: `${dev ? "开发任务" : "任务"}「${task.title.slice(0, 40)}」`, devTaskId: id },
 				memory: { query: opinion ?? `${task.title}\n${task.request}`.slice(0, 1000), scope: {} },
+				// 结论在看板上看，可以附一份结构化报告；开发任务的结论是改动说明，不需要
+				ui: !dev,
 			}),
 		);
 		const prev = task.usage;
@@ -394,7 +399,8 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 			if (warn) log(warn, id);
 		}
 		const quiet = quietRound(task, text);
-		update(id, { status: quiet ? "done" : "review", summary: text, session: sessionId, usage: total });
+		// 报告跟着这一轮的结论走：这一轮没交就清掉，不留上一轮的
+		update(id, { status: quiet ? "done" : "review", summary: text, session: sessionId, usage: total, ui });
 		// 对话页的聊天 Yi 就在看板上看着，不私聊卡片
 		if (!quiet && !task.chat && (dev || base?.notify || task.notify || now() - started > 60)) void notify(id, `第 ${run} 轮完成`, text);
 	} catch (e) {

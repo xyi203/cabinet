@@ -1,4 +1,5 @@
 import { blob, index, integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import type { AgentUi } from "../a2ui/surface.ts";
 
 // 时间统一存 unix 秒（浮点），和 pi 会话日志、旧数据保持一致
 
@@ -249,6 +250,8 @@ export const devTasks = sqliteTable("dev_tasks", {
 	storyId: text("story_id"),
 	/** 发布工单巡检的一轮：本轮正常就直接归档、不私聊；额度用完不换备用模型 */
 	patrol: integer("patrol", { mode: "boolean" }).notNull().default(false),
+	/** 最近一轮用 show_ui 交的结构化报告（A2UI v1.0 消息），看板按它渲染 summary；这一轮没交为空 */
+	ui: text("ui", { mode: "json" }).$type<AgentUi | null>(),
 });
 
 /**

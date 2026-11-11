@@ -18,7 +18,7 @@ import {
 import { AGENT_NAME, hm, money, time, waitingOn, when } from "../lib/format";
 import { confirmDialog } from "./Confirm";
 import { Drawer } from "./Drawer";
-import { Markdown } from "./Markdown";
+import { Conclusion } from "./AgentUi";
 import { dur } from "./ui";
 import { toast } from "./Toast";
 
@@ -218,7 +218,9 @@ export function Schedules({
 		if (
 			await confirmDialog({
 				title: `结束定时任务「${s.name}」？`,
-				body: p ? `会同时停掉 ${p.ticket.key} 的巡检，工单全量了也不再自动接着巡检。执行记录保留。` : "不再运行，归到「已结束」，执行记录保留。之后要跑可以重新启用。",
+				body: p
+					? `会同时停掉 ${p.ticket.key} 的巡检，工单全量了也不再自动接着巡检。执行记录保留。`
+					: "不再运行，归到「已结束」，执行记录保留。之后要跑可以重新启用。",
 				confirmText: "结束",
 			})
 		)
@@ -709,7 +711,11 @@ function ScheduleDrawer({
 										</button>
 										{open && (
 											<div className="rundetail">
-												{r.outcome === "failed" ? <div className="err">{r.detail}</div> : r.detail && <Markdown text={r.detail} />}
+												{r.outcome === "failed" ? (
+													<div className="err">{r.detail}</div>
+												) : (
+													r.detail && <Conclusion text={r.detail} ui={r.ui} devId={r.devId} />
+												)}
 												{r.taskId && inBoard.has(r.taskId) && (
 													<div className="oa">
 														<button className="btn sm" onClick={() => onOpenTask(r.taskId!)}>

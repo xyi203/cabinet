@@ -16,6 +16,7 @@ import { AGENT_NAME, money, time } from "../lib/format";
 import { EFFORT } from "./ModelPicker";
 import { dur } from "./ui";
 import { Drawer, type Msg, MsgLine } from "./Drawer";
+import { Conclusion } from "./AgentUi";
 import { Markdown } from "./Markdown";
 import { ModelPicker } from "./ModelPicker";
 import { confirmDialog } from "./Confirm";
@@ -379,7 +380,7 @@ export function DevDrawer({
 				<>
 					<div className="label">结论</div>
 					<div className="chat-agent conclusion">
-						<Markdown text={d.summary} />
+						<Conclusion text={d.summary} ui={d.ui} devId={d.id} />
 					</div>
 				</>
 			)}

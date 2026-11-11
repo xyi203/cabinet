@@ -1,9 +1,11 @@
 // durable 自带 read / bash；这里补上只读的 grep / find / ls，参数里的路径由守卫按允许目录检查
 import { defineTool } from "@earendil-works/pi-durable";
-import { bool, num, obj, opt, str } from "@earendil-works/pi-schema";
+import { arr, bool, num, obj, opt, str, unknown } from "@earendil-works/pi-schema";
 import { execFile } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
+import { SHOW_UI_HELP } from "../a2ui/catalog.ts";
+import { buildSurface, setPendingUi } from "../a2ui/surface.ts";
 import { LOOKUP_HELP, lookup } from "../lookup.ts";
 import { render, search } from "../memory/recall.ts";
 
@@ -91,6 +93,19 @@ export const lookupTool = defineTool({
 		LOOKUP_HELP,
 	parameters: obj({ id: str() }),
 	execute: async (args) => text(lookup(args.id)),
+});
+
+// 结论的结构化报告（A2UI）：只在看板上显示，不发出去；暂存到这次运行结束，由 runPi 交给调用方落库
+export const showUiTool = defineTool({
+	name: "show_ui",
+	description: SHOW_UI_HELP,
+	parameters: obj({ components: arr(unknown()) }),
+	execute: async (args, api) => {
+		const built = buildSurface(args.components);
+		if ("error" in built) return { output: [{ type: "text" as const, text: `校验没通过，改了再调：\n${built.error}` }], isError: true };
+		setPendingUi(String(api.conversationId), built.messages);
+		return text("已收下，会和文字结论一起显示在看板上。");
+	},
 });
 
 // 新建定时任务：守卫一律判成「要审批」，由 approvals.ts 在 Yi 批准后建；这里的 execute 不会被走到

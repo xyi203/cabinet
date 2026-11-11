@@ -1,0 +1,1 @@
+ALTER TABLE `dev_tasks` ADD `ui` text;

@@ -372,6 +372,8 @@ export function observePrompt(s: Story, key: string, docTask?: string) {
 		docTask ? `这张工单的发布观察文档在任务 ${docTask} 的结论里（lookup ${docTask}），观察指标以文档为准。` : "",
 		"不要启动 loop 或定时巡查：之后由 cabinet 每 30 分钟派一轮巡检，每轮是新会话。",
 		"回复结尾单独写一段「【巡检范围与基线】」：服务和版本区间、要盯的 deployment / 渠道 / 受影响接口、各项基线数值、每轮该查什么。之后每一轮巡检都只靠这段来做，写全、写具体。",
+		// 下一轮巡检和飞书私聊都只读文字结论，报告只是看板上的另一种排版
+		"文字结论写完后，再调一次 show_ui 把它整理成结构化报告给 Yi 在看板上看：一句话结论、要 Yi 拍板的事（带回复按钮）、a/b 或当前 / 基线的关键数和对比表，依据和基线收起。文字结论照常写全，不要因为有报告就省略。",
 	]
 		.filter(Boolean)
 		.join("\n\n");
@@ -388,7 +390,7 @@ export function patrolPrompt(s: Story, key: string, observeTaskId?: string, full
 			: `1. 没有首次观察：先用 devops 的 issue_get_info ${key} 读服务、版本和发布方式，基线取发布前的数据。`,
 		`2. 按 ${OBSERVATION_DIR}/references/patrol.md 做增量检查：只读这份，不重读 SKILL.md、不重走七步，不启动 loop。命令拿不准就先跑 \`<脚本> <子命令> --help\`（直接放行），不要猜子命令：猜错的会卡在审批上。`,
 		`3. 没有异常：回复第一行只写「${PATROL_OK}」，后面最多一两句（这一轮会直接归档、不打扰 Yi）。`,
-		"4. 有异常：第一行写清异常和证据，再给建议（停止放量 / 回滚 / 继续观察）。满足 patrol.md 的停止条件时，第一行写「建议停止巡检」和原因。",
+		"4. 有异常：第一行写清异常和证据，再给建议（停止放量 / 回滚 / 继续观察）。满足 patrol.md 的停止条件时，第一行写「建议停止巡检」和原因。文字写完再调一次 show_ui，把异常、建议（做成带回复按钮的 Decision）和对比数据整理成报告；没有异常的轮次不要调。",
 	].join("\n");
 }
 

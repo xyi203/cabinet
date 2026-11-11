@@ -7,6 +7,7 @@ import { loadAgents } from "./agent/router.ts";
 import { changed } from "./bus.ts";
 import { cronSkip } from "./router/board.ts";
 import { db, getKv, schema, setKv } from "./db/index.ts";
+import type { AgentUi } from "./a2ui/surface.ts";
 import type { DevTask, Schedule } from "./db/schema.ts";
 import { NO_CHANGE, PATROL_OK, dispatch, getDevTask } from "./dev.ts";
 import { DraftError } from "./drafts/store.ts";
@@ -284,6 +285,8 @@ export interface ScheduleRun {
 	brief: string;
 	/** 完整结论（Markdown）或完整报错，展开时看；太长的截断 */
 	detail: string;
+	/** 结论附带的结构化报告（A2UI），有就按它显示 detail */
+	ui: AgentUi | null;
 	/** 工作台里的那件事、助手任务；跳过的没有 */
 	taskId: string | null;
 	devId: string | null;
@@ -330,7 +333,16 @@ export function scheduleRuns(id: string, limit = 200): ScheduleRun[] {
 		const r = t.routeId != null ? byRoute.get(t.routeId) : undefined;
 		const dev = r?.actionKind === "dev" && r.actionId ? devs.get(r.actionId) : undefined;
 		const task = r?.taskId ? tasks.get(r.taskId) : undefined;
-		const base = { at: t.at, taskId: task?.id ?? null, devId: dev?.id ?? null, waiting: false, cost: null, seconds: null, detail: "" };
+		const base = {
+			at: t.at,
+			taskId: task?.id ?? null,
+			devId: dev?.id ?? null,
+			waiting: false,
+			cost: null,
+			seconds: null,
+			detail: "",
+			ui: null,
+		};
 		if (!r) return { ...base, outcome: "running" as const, label: "进行中", brief: "等待分派" };
 		if (!dev) return { ...base, outcome: "skipped" as const, label: "跳过", brief: r.rule.replace(/^跳过：/, "") || "这次没有运行" };
 		const summary = dev.summary.trim();
@@ -350,6 +362,7 @@ export function scheduleRuns(id: string, limit = 200): ScheduleRun[] {
 			...base,
 			outcome,
 			label: LABEL[outcome],
+			ui: outcome === "conclusion" ? (dev.ui ?? null) : null,
 			detail: detail.length > DETAIL_MAX ? `${detail.slice(0, DETAIL_MAX)}\n\n…（太长了，完整内容在任务详情里）` : detail,
 			brief:
 				outcome === "failed"

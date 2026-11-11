@@ -1,0 +1,113 @@
+diff --git a/src/catalog/spec_annotations.js b/src/catalog/spec_annotations.js
+index 294e216a0276cc4281ea59a23e417b409b96e1a9..32f1e4119c243d6a1753059286463ee097dc9960 100644
+--- a/src/catalog/spec_annotations.js
++++ b/src/catalog/spec_annotations.js
+@@ -15,8 +15,14 @@
+  */
+ import { z } from 'zod';
+ const annotations = new WeakMap();
++const rawDescribeMethods = new WeakMap();
++function cloneSchema(schema, description = schema.description) {
++    const describeFn = rawDescribeMethods.get(schema) ?? z.ZodType?.prototype?.describe ?? schema.describe;
++    return describeFn.call(schema, description);
++}
+ function cloneWithDefAnnotation(schema, nextAnnotation, description = schema.description) {
+-    const copy = z.ZodType.prototype.describe.call(schema, description);
++    const copy = cloneSchema(schema, description);
++    rawDescribeMethods.set(copy, z.ZodType?.prototype?.describe ?? copy.describe);
+     annotations.set(copy, nextAnnotation);
+     copy.describe = (nextDescription) => cloneWithDefAnnotation(copy, annotations.get(copy) ?? nextAnnotation, nextDescription);
+     return copy;
+@@ -34,7 +40,7 @@ function cloneWithDefAnnotation(schema, nextAnnotation, description = schema.des
+  * @returns An annotated copy of `schema`.
+  */
+ export function spec(schema, annotation) {
+-    const copy = z.ZodType.prototype.describe.call(schema, schema.description);
++    const copy = cloneSchema(schema, schema.description);
+     annotations.set(copy, { ...annotations.get(schema), ...annotation });
+     return copy;
+ }
+diff --git a/src/processing/adapters/base.js b/src/processing/adapters/base.js
+index 8d1ae1be527f987de4a33ce59bab53e0d6329105..ec9170dac79ca358e380e34b0f1e203633f24637 100644
+--- a/src/processing/adapters/base.js
++++ b/src/processing/adapters/base.js
+@@ -158,7 +158,7 @@ export class BaseVersionAdapter {
+         const preparedPayload = this.preparePayloadForValidation(msgObj);
+         const parseResult = this.schema.safeParse(preparedPayload);
+         if (!parseResult.success) {
+-            const formattedErrors = parseResult.error.errors.map(formatZodIssue).join('; ');
++            const formattedErrors = parseResult.error.issues.map(formatZodIssue).join('; ');
+             const envCtx = extractEnvelopeErrorContext(msgObj, this.version);
+             const preliminaryErr = new A2uiValidationError(`Invalid ${this.version} message: ${formattedErrors}`, parseResult.error, 'VALIDATION_ERROR');
+             const mapped = mapErrorToRendererMessage(preliminaryErr, envCtx);
+diff --git a/src/processing/format-zod-issue.js b/src/processing/format-zod-issue.js
+index 72e8fb0aa534cc1f7cc9546727fd36e1d8c35954..de5d8b32bd1557d1a9b23c0095519abc88daebf1 100644
+--- a/src/processing/format-zod-issue.js
++++ b/src/processing/format-zod-issue.js
+@@ -29,7 +29,7 @@ export function formatZodIssue(err) {
+     const path = err.path.join('.') || 'root';
+     switch (err.code) {
+         case z.ZodIssueCode.invalid_union: {
+-            const unionIssues = err.unionErrors?.flatMap(uErr => uErr.issues);
++            const unionIssues = err.unionErrors?.flatMap(uErr => uErr.issues) ?? err.errors?.flat();
+             if (unionIssues && unionIssues.length > 0) {
+                 return unionIssues.map(formatZodIssue).join('; ');
+             }
+@@ -46,6 +46,8 @@ export function formatZodIssue(err) {
+         }
+         case z.ZodIssueCode.invalid_type: {
+             const issue = err;
++            if (issue.received === undefined && issue.message)
++                return `${path}: ${issue.message}`;
+             return `${path}: Expected ${issue.expected}, received ${issue.received}`;
+         }
+         case z.ZodIssueCode.custom:
+diff --git a/src/validation/payload-validator.js b/src/validation/payload-validator.js
+index 169b284dede132be77b2090547e74c8d1d6d2281..460b89e7b694c90d76c1aca8cd4196d2d39130bd 100644
+--- a/src/validation/payload-validator.js
++++ b/src/validation/payload-validator.js
+@@ -194,7 +194,7 @@ export class PayloadValidator {
+         this.validateCommonEnvelopeFields(properties, knownKeys, componentType, id, componentCatalogId);
+         const result = componentApi.schema.safeParse(properties);
+         if (!result.success) {
+-            const formattedErrors = result.error.errors.map(formatZodIssue).join(', ');
++            const formattedErrors = result.error.issues.map(formatZodIssue).join(', ');
+             const details = zodIssuesToDetails(result.error.issues);
+             const uniquePaths = new Set(details.map(d => d.path));
+             const firstPath = uniquePaths.size === 1 ? details[0]?.path : undefined;
+@@ -215,7 +215,7 @@ export class PayloadValidator {
+             delete properties['accessibility'];
+             const accResult = AccessibilityAttributesSchema.optional().safeParse(accVal);
+             if (!accResult.success) {
+-                const formattedErrors = accResult.error.errors.map(formatZodIssue).join(', ');
++                const formattedErrors = accResult.error.issues.map(formatZodIssue).join(', ');
+                 const details = zodIssuesToDetails(accResult.error.issues, '/accessibility');
+                 throw new A2uiValidationError(`Validation failed for component '${componentType}' (${id}): ${formattedErrors}`, details, 'VALIDATION_ERROR', { path: details[0]?.path });
+             }
+@@ -226,7 +226,7 @@ export class PayloadValidator {
+             delete properties['metadata'];
+             const metaResult = ComponentCommonSchema.shape.metadata.safeParse(metaVal);
+             if (!metaResult.success) {
+-                const formattedErrors = metaResult.error.errors.map(formatZodIssue).join(', ');
++                const formattedErrors = metaResult.error.issues.map(formatZodIssue).join(', ');
+                 const details = zodIssuesToDetails(metaResult.error.issues, '/metadata');
+                 throw new A2uiValidationError(`Validation failed for component '${componentType}' (${id}): ${formattedErrors}`, details, 'VALIDATION_ERROR', { path: details[0]?.path });
+             }
+@@ -363,7 +363,7 @@ export class PayloadValidator {
+         }
+         const result = fn.schema.safeParse(args ?? {});
+         if (!result.success) {
+-            const formattedErrors = result.error.errors.map(formatZodIssue).join(', ');
++            const formattedErrors = result.error.issues.map(formatZodIssue).join(', ');
+             const details = zodIssuesToDetails(result.error.issues, '/args');
+             throw new A2uiValidationError(`Validation failed for function '${name}': ${formattedErrors}`, details, 'VALIDATION_ERROR', { path: details[0]?.path });
+         }
+@@ -384,7 +384,7 @@ export class PayloadValidator {
+             return theme;
+         const result = themeSchema.safeParse(theme);
+         if (!result.success) {
+-            const formattedErrors = result.error.errors.map(formatZodIssue).join(', ');
++            const formattedErrors = result.error.issues.map(formatZodIssue).join(', ');
+             const details = zodIssuesToDetails(result.error.issues, '/theme');
+             throw new A2uiValidationError(`Validation failed for theme: ${formattedErrors}`, details, 'VALIDATION_ERROR', { path: details[0]?.path ?? '/theme' });
+         }

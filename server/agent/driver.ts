@@ -50,7 +50,8 @@ import { closeMcp, loadServers, mcpNamespaces, mcpTools } from "./mcp.ts";
 import { QUOTA_RE, isStopping, log, now } from "../util.ts";
 import { models, resolveModel, textOf } from "./models.ts";
 import { type AgentConfig, loadAgents } from "./router.ts";
-import { findTool, grepTool, lookupTool, lsTool, memoryTool, scheduleTool } from "./tools.ts";
+import { findTool, grepTool, lookupTool, lsTool, memoryTool, scheduleTool, showUiTool } from "./tools.ts";
+import { type AgentUi, clearPendingUi, takePendingUi } from "../a2ui/surface.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -81,6 +82,8 @@ export interface RunOptions {
 	timeout?: number;
 	/** 记进 runs 表的档位（assistant 的 ack / answer / deep / mr，agent 任务是 task），统计页按它拆分 */
 	tier?: string;
+	/** 给 show_ui：结论能在看板上按结构化报告显示的运行（agent 任务）才给，起草、问答不给 */
+	ui?: boolean;
 }
 
 /** 每次运行记一条，统计页用；记账失败不影响运行 */
@@ -137,6 +140,8 @@ export interface RunResult {
 	usage: Usage;
 	/** 实际使用的会话 key，执行日志按它查 */
 	sessionId: string;
+	/** 这次运行用 show_ui 交的结构化报告；没交为空 */
+	ui: AgentUi | null;
 }
 
 /**
@@ -201,6 +206,7 @@ const TOOLS = {
 	memory: memoryTool,
 	lookup: lookupTool,
 	schedule: scheduleTool,
+	show_ui: showUiTool,
 };
 type ToolName = keyof typeof TOOLS;
 const DEFAULT_TOOLS: ToolName[] = ["read", "grep", "find", "ls", "bash", "memory", "schedule"];
@@ -462,9 +468,13 @@ function withMcp(agent: AgentConfig, base: ToolRegistration[]) {
 
 export async function runPi(opts: RunOptions): Promise<RunResult> {
 	const agent = opts.agent ?? {};
-	const base = (agent.tools ?? DEFAULT_TOOLS).filter((t): t is ToolName => t in TOOLS && t !== "lookup");
+	const base = (agent.tools ?? DEFAULT_TOOLS).filter((t): t is ToolName => t in TOOLS && t !== "lookup" && t !== "show_ui");
 	// agent 显式配成不带工具（tools: []）的不加
-	const toolNames: ToolName[] = opts.lookup && base.length ? [...base, "lookup"] : base;
+	const toolNames: ToolName[] = [
+		...base,
+		...(opts.lookup && base.length ? (["lookup"] as const) : []),
+		...(opts.ui && base.length ? (["show_ui"] as const) : []),
+	];
 	const key = opts.requestId
 		? runKeyFor(opts.sessionId, opts.requestId)
 		: opts.sessionId || `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -529,6 +539,7 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 			const before = await usageNow(h, conv.id);
 			const memory = opts.memory ? await recallBlock(opts.memory.query, opts.memory.scope) : "";
 			const content = memory ? `${memory}\n\n---\n\n${opts.prompt}` : opts.prompt;
+			clearPendingUi(String(conv.id));
 			submission = await conv.submit({ type: "input", content, requestId: opts.requestId }, ctx);
 			record = { key, convId: Number(conv.id), submissionId: String(submission.id), before, at: now() };
 			if (opts.requestId) setKv(runKey(opts.requestId), record);
@@ -568,7 +579,7 @@ export async function runPi(opts: RunOptions): Promise<RunResult> {
 		};
 		ok = true;
 		logRun(opts, record.continueId && fallback ? fallback : model, info.started, true, usage);
-		return { text, usage, sessionId: key };
+		return { text, usage, sessionId: key, ui: takePendingUi(String(conv.id), now()) };
 	} finally {
 		// 失败（含被中止）也记一条：用量拿不到记 0；进程退出打断的下次接回，不记
 		if (!ok && !isStopping()) logRun(opts, model, info.started, false);

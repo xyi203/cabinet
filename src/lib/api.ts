@@ -84,6 +84,14 @@ export interface DevTask {
 	/** 发布工单巡检的一轮 */
 	patrol?: boolean;
 	storyId?: string | null;
+	/** 最近一轮附带的结构化报告（A2UI），有就按它显示 summary */
+	ui?: AgentUi | null;
+}
+
+/** agent 用 show_ui 交的结构化报告：A2UI v1.0 消息（见 server/a2ui） */
+export interface AgentUi {
+	messages: unknown[];
+	at: number;
 }
 
 export interface StoryTicket {
@@ -413,6 +421,7 @@ export interface ScheduleRun {
 	label: string;
 	brief: string;
 	detail: string;
+	ui: AgentUi | null;
 	taskId: string | null;
 	devId: string | null;
 	waiting: boolean;

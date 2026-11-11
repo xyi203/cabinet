@@ -442,6 +442,9 @@ export class Guard {
 			case "memory":
 				// 只读，只查 cabinet 自己的记忆库
 				return ALLOW;
+			case "show_ui":
+				// 只把报告暂存给看板显示，不碰外部
+				return ALLOW;
 			case "schedule":
 				// 新建定时任务：到点会以 Yi 的名义跑 agent，算写操作
 				return approve("新建定时任务");
