@@ -8,6 +8,7 @@ import { queuePatch, sendCardToUserAsBot, sendToUserAsBot } from "../lark/bot.ts
 import { log, now } from "../util.ts";
 import { draftCard, where } from "./card.ts";
 import { draftMrs, type MrLedger, parseLedger, saveLedger } from "./mr.ts";
+import { saveFollowups, takeFollowups } from "../followups.ts";
 import { describeReply, type Kind, NO_REPLY_MARK, parseDraftBody, splitNote } from "./format.ts";
 
 export class DraftError extends Error {}
@@ -126,8 +127,11 @@ export function quietDraft(d: { replaces?: string; report: string; kind: string;
 	return !d.replaces && !d.report && (d.kind === "reaction" || d.noReply);
 }
 
-export async function pushDraft(source: Source, draft: string, replaces?: string): Promise<string> {
-	const { body: rawBody, note: rawNote, report, comments } = splitNote(draft);
+export async function pushDraft(source: Source, raw: string, replaces?: string): Promise<string> {
+	// 【复查】是给 cabinet 的，不进草稿；读不懂或没记上的原因写进备注
+	const fu = takeFollowups(raw);
+	const { body: rawBody, note: splitN, report, comments } = splitNote(fu.text);
+	const rawNote = [splitN, fu.error ?? ""].filter(Boolean).join("\n");
 	const mr = draftMrs([{ id: "", routeId: source.routeId ?? null }]).get("");
 	// MR 预审的评论台账：Yi 在卡片上过目，点「发到 MR」时照着发
 	let ledger: MrLedger | undefined;
@@ -175,6 +179,16 @@ export async function pushDraft(source: Source, draft: string, replaces?: string
 			.run();
 	});
 	if (ledger) saveLedger(dmId, ledger);
+	if (fu.specs.length) {
+		const taskId = source.routeId != null ? taskOfRoute(source.routeId) : null;
+		const warn = taskId ? saveFollowups(taskId, "draft", dmId, fu.specs) : "这条草稿挂不到任务上，约的复查没记上";
+		if (warn)
+			db()
+				.update(schema.drafts)
+				.set({ note: [row.note, warn].filter(Boolean).join("\n") })
+				.where(eq(schema.drafts.id, dmId))
+				.run();
+	}
 	if (isCard) setKv(cardKey(dmId), true);
 	if (replaces) syncCard(replaces);
 	changed();
@@ -195,4 +209,9 @@ export function pickDraft(parent: string | undefined, statuses: string[]): Draft
 		.limit(20)
 		.all()
 		.find((d) => !isQuiet(d.id) && now() - d.created < 1800);
+}
+
+/** 一次分派挂在哪件事上 */
+function taskOfRoute(routeId: number): string | null {
+	return db().select({ taskId: schema.routes.taskId }).from(schema.routes).where(eq(schema.routes.id, routeId)).get()?.taskId ?? null;
 }

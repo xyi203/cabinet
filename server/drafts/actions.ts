@@ -19,6 +19,8 @@ import { gatherContext } from "./context.ts";
 import { describeReply, draftLabel, type Kind, resolveEmoji, resolveSticker, stickerHint } from "./format.ts";
 import { CardInputError, draftCard, draftStateText, parseCardAction, sendText } from "./card.ts";
 import { claim, DraftError, getDraft, isQuiet, LIVE, pushDraft, setStatus, syncCard } from "./store.ts";
+import { cancelFollowups } from "../followups.ts";
+import { taskOfAction } from "../taskstore.ts";
 import { applyMrAction, draftMrs, type MrLedger } from "./mr.ts";
 
 /** MR 预审的改写：Yi 多半是要删改某几条评论，把当前的报告和台账原样给回去 */
@@ -76,32 +78,61 @@ async function rerun(d: Draft, requestId: string, ask: string, memoryQuery: stri
 	return { text, context };
 }
 
-/** 正在复审的草稿：同一个 MR 不并发跑两轮 */
-const rereviewing = new Set<string>();
+/** 正在出新一版的草稿（复审、到期复查）：同一条不并发跑两轮 */
+const rerunning = new Set<string>();
+
+/**
+ * 在原会话里再跑一轮、出新一版草稿（新卡片），同一件事回到「等你发送」；上一版还没处理就替换掉它。
+ * 复审和到期复查共用；question 记进流水，看板时间线里能看到这一版为什么来的
+ */
+async function newVersion(id: string, requestId: string, ask: (d: Draft) => string, memoryQuery: string, question: string) {
+	const d = getDraft(id);
+	if (!d) throw new DraftError("草稿不存在");
+	if (rerunning.has(id) || d.status === "sending" || d.status === "revising") throw new DraftError("这条草稿正在处理，稍等一下");
+	const live = LIVE.includes(d.status);
+	if (live && !claim(id, LIVE, "revising")) throw new DraftError("这条草稿正在处理，稍等一下");
+	rerunning.add(id);
+	changed();
+	try {
+		const started = now();
+		const { text, context } = await rerun(d, requestId, ask(d), memoryQuery);
+		await pushDraft({ ...sourceOf(d), context }, text, live ? id : undefined);
+		record({
+			kind: "draft",
+			status: "revised",
+			dm: id,
+			chatId: d.chatId,
+			source: d.replyTo,
+			question,
+			seconds: now() - started,
+			session: d.session,
+		});
+	} catch (e) {
+		if (live) claim(id, ["revising"], d.status);
+		throw e;
+	} finally {
+		rerunning.delete(id);
+		changed();
+	}
+}
 
 /**
  * MR 复审：评论发出后对方推了新提交、在线程里回复了，或 Yi 点了「复审」。在同一个会话里按 review skill 的
- * mr-re-review.md 审增量、维护旧线程，出新一版草稿（新卡片），同一件事回到「等你发送」。上一版还没处理就替换掉它
+ * mr-re-review.md 审增量、维护旧线程，出新一版草稿
  */
 export async function reReview(id: string, reason: string): Promise<void> {
 	const d = getDraft(id);
 	if (!d) throw new DraftError("草稿不存在");
 	const mr = draftMrs([d]).get(id);
 	if (!mr) throw new DraftError("这条草稿不是 MR 预审");
-	if (rereviewing.has(id) || d.status === "sending" || d.status === "revising") throw new DraftError("这个 MR 正在处理，稍等一下");
-	const live = LIVE.includes(d.status);
-	if (live && !claim(id, LIVE, "revising")) throw new DraftError("这条草稿正在处理，稍等一下");
-	rereviewing.add(id);
-	changed();
 	log("开始复审", mr.url, reason);
-	try {
-		const head = mr.ledger?.head_sha;
-		const started = now();
-		const { text, context } = await rerun(
-			d,
-			`rereview:${id}:${Date.now()}`,
+	const head = mr.ledger?.head_sha;
+	await newVersion(
+		id,
+		`rereview:${id}:${Date.now()}`,
+		(cur) =>
 			[
-				`上一轮评审报告：\n${d.report || "（无）"}`,
+				`上一轮评审报告：\n${cur.report || "（无）"}`,
 				`上一轮的评论台账${mr.done.includes("note") ? "（已经发到 MR 上了）" : "（还没发）"}：\n${mr.ledger ? JSON.stringify(mr.ledger, null, 2) : "（无）"}`,
 				`这次是复审，原因：${reason}。`,
 				`按 review skill 的 references/mr-re-review.md 做：上次审到的 head 是 ${head ?? "MR 总结评论标记里的 head_sha"}，只审它之后的增量（force-push 就全量审并说明）；` +
@@ -111,26 +142,29 @@ export async function reReview(id: string, reason: string): Promise<void> {
 						: "上一轮台账还没发，这一轮的台账要包含仍然成立的旧发现，替代上一轮。"),
 				"按 MR 预审的输出格式完整输出（回复、【评审报告】、【MR评论】三段都要有），评审报告开头写清这一轮看了什么、旧线程处理结果。",
 			].join("\n\n"),
-			`${d.text}\n复审 ${mr.project}!${mr.iid}`,
-		);
-		await pushDraft({ ...sourceOf(d), context }, text, live ? id : undefined);
-		record({
-			kind: "draft",
-			status: "revised",
-			dm: id,
-			chatId: d.chatId,
-			source: d.replyTo,
-			question: `复审：${reason}`,
-			seconds: now() - started,
-			session: d.session,
-		});
-	} catch (e) {
-		if (live) claim(id, ["revising"], d.status);
-		throw e;
-	} finally {
-		rereviewing.delete(id);
-		changed();
-	}
+		`${d.text}\n复审 ${mr.project}!${mr.iid}`,
+		`复审：${reason}`,
+	);
+}
+
+/**
+ * 到期复查（server/followups.ts）：agent 之前在这件事上约的【复查】到点了。MR 预审按复审走；其余在原会话里先核实再决定，
+ * 要回就出新一版草稿，不用回就写【无需回复】
+ */
+export async function followUpDraft(id: string, key: string, about: string): Promise<void> {
+	const d = getDraft(id);
+	if (!d) throw new DraftError("草稿不存在");
+	if (draftMrs([d]).get(id)) return reReview(id, `到期复查（${key}）：${about}`);
+	log("到期复查", id, key);
+	await newVersion(
+		id,
+		`followup:${id}:${key}:${Date.now()}`,
+		() =>
+			`这是你之前约的到期复查（${key}）：${about}\n\n先到原处核实现在的情况（对方在会话里有没有新消息、事情有没有进展），再按草稿规则决定：` +
+			"要回就写新的回复；不用回就写【无需回复】加一句原因；还要再等就再约【复查】。",
+		`${d.text}\n${about}`,
+		`到期复查：${about}`,
+	);
 }
 
 export type Action = "send" | "discard" | "revise" | "complete";
@@ -194,6 +228,8 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 				session: d.session,
 			});
 		} else {
+			// 不回复、完成都是 Yi 把这件事关了：约好的复查不再跑（发送不算，发完常常还要回来看）
+			cancelFollowups(taskOfAction(id));
 			record({ kind: "draft", status: busy, dm: id, chatId: d.chatId, source: d.replyTo });
 			settle({ actionKind: "draft", actionId: id, routeId: d.routeId, outcome: busy, effect: "internal" });
 			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: busy as "discarded" | "completed" });

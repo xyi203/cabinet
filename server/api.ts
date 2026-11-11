@@ -44,6 +44,7 @@ import { modelOptions } from "./agent/models.ts";
 import { closeTask, devDiff, discardDev, dispatch, getDevTask, listRepos, messageDev, pushDev, stopDev } from "./dev.ts";
 import { dismissTask, retryTask } from "./retry.ts";
 import { markDone } from "./done.ts";
+import { cancelFollowup } from "./followups.ts";
 import { RULE_DEFAULTS, RuleError, routeRules, saveRouteRules } from "./rules.ts";
 import { dashboardState, sessionLog } from "./tasks.ts";
 import { search } from "./memory/recall.ts";
@@ -247,6 +248,13 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		const state = randomBytes(16).toString("hex");
 		oauthStates.set(state, Date.now());
 		return send(res, 200, { url: authorizeUrl(state) });
+	}
+	// 取消一个约好的复查
+	const fuM = /^\/api\/tasks\/(tsk-[\w-]+)\/followups\/(.+)\/cancel$/.exec(decodeURIComponent(p));
+	if (fuM) {
+		cancelFollowup(fuM[1], fuM[2]);
+		changed();
+		return send(res, 200, { ok: true });
 	}
 	// 完成：这件事 Yi 已经在别处处理了，不管走到哪一步都直接标掉（server/done.ts）
 	const doneM = /^\/api\/tasks\/((?:q:)?[\w-]+)\/done$/.exec(decodeURIComponent(p));

@@ -19,6 +19,7 @@ import { listMemories } from "./memory/store.ts";
 import { now } from "./util.ts";
 import { watchdogIssues } from "./watchdog.ts";
 import { quotaNow } from "./quota.ts";
+import { pendingFollowups } from "./followups.ts";
 import { type Need, type Outputs, type TaskStatus, applyStatus, outputsOf } from "./taskstore.ts";
 
 export type TaskEvent =
@@ -58,6 +59,8 @@ export interface TaskView {
 	/** 记忆冲突：两条记忆的 id */
 	memories?: number[];
 	events: TaskEvent[];
+	/** agent 约好、还没到期的复查 */
+	followups?: Array<{ key: string; at: number; about: string }>;
 }
 
 const OUTCOME: Record<string, string> = {
@@ -223,6 +226,7 @@ function view(
 		devTasks: devs.map((d) => d.id),
 		approvals: o.approvals.map((a) => a.id),
 		events,
+		followups: pendingFollowups(row.id).map((f) => ({ key: f.key, at: f.at, about: f.about })),
 	};
 }
 

@@ -2,8 +2,8 @@
 // 当前那份产出（待确认的草稿、agent 任务）嵌在时间线末尾，直接复用原来的草稿抽屉和任务抽屉：改稿、发送、对话、看改动、推送都在那里
 import type { ReactNode } from "react";
 import type { Draft, State, Task, TaskEvent, TaskView } from "../lib/api";
-import { AGENT_NAME, SOURCE, STATUS, describeDraft, hm, isLive, titleOf } from "../lib/format";
-import { ApprovalActions, RowActions } from "./Actions";
+import { AGENT_NAME, SOURCE, STATUS, describeDraft, hm, isLive, time, titleOf } from "../lib/format";
+import { ApprovalActions, RowActions, useAct } from "./Actions";
 import { DevDrawer } from "./DevDrawer";
 import { Markdown } from "./Markdown";
 import { Drawer, Embedded } from "./Drawer";
@@ -263,6 +263,7 @@ export function TaskPanel({
 						</div>
 					</Ev>
 				)}
+				{!!t.followups?.length && <Followups t={t} />}
 				{t.need === "retry" && !liveDev && (
 					<Ev at={t.updated}>
 						<div className="out need">
@@ -285,5 +286,32 @@ export function TaskPanel({
 				{liveDev && <DevDrawer key={liveDev.id} dev={liveDev} onClose={() => {}} />}
 			</Embedded.Provider>
 		</Drawer>
+	);
+}
+
+/** agent 约好、还没到期的复查：到点它会在原会话里接着做；不需要了可以取消 */
+function Followups({ t }: { t: TaskView }) {
+	const { busy, act } = useAct();
+	return (
+		<div className="out">
+			<div className="oh">
+				<span>约好的复查</span>
+			</div>
+			<div className="ob">
+				{t.followups!.map((f) => (
+					<div key={f.key} className="row-inline">
+						<span className="num">{time(f.at)}</span>
+						<span className="flex-1">{f.about}</span>
+						<button
+							className="btn ghost sm"
+							disabled={busy}
+							onClick={() => act(`/api/tasks/${t.id}/followups/${encodeURIComponent(f.key)}/cancel`, {}, "已取消这次复查")}
+						>
+							取消
+						</button>
+					</div>
+				))}
+			</div>
+		</div>
 	);
 }

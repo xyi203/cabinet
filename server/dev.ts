@@ -18,6 +18,8 @@ import { DraftError, getDraft } from "./drafts/store.ts";
 import { sem } from "./agent/slots.ts";
 import { ASSISTANT, LEGACY_TIER, TASK_TIER, completeAny, loadAgents, routerModels, withTier } from "./agent/router.ts";
 import { exec, isStopping, log, now } from "./util.ts";
+import { cancelFollowups, saveFollowups, takeFollowups } from "./followups.ts";
+import { taskOfAction } from "./taskstore.ts";
 
 const WORKTREES = path.join(DATA_DIR, "worktrees");
 export const BRANCH_RE = /^(feature|fix)\/[a-z0-9]+$/;
@@ -348,7 +350,11 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 	let interrupted = false;
 	try {
 		if (!agent) throw new Error(`agents.json 里没有 ${task.agent} agent`);
-		const { text, usage, sessionId } = await sem.run(() =>
+		const {
+			text: raw,
+			usage,
+			sessionId,
+		} = await sem.run(() =>
 			runPi({
 				cwd: task.worktree || task.repo || DEFAULT_CWD,
 				sessionId: sessionOf(id),
@@ -379,6 +385,14 @@ async function runDev(id: string, opinion?: string, from = "Yi") {
 					cost: prev.cost + usage.cost,
 				}
 			: usage;
+		// 【复查】是给 cabinet 的：从结论里拿掉，记成到期再接着这个会话跑
+		const fu = takeFollowups(raw);
+		const text = fu.error ? `${fu.text}\n\n（${fu.error}）` : fu.text;
+		if (fu.specs.length) {
+			const taskId = taskOfAction(id);
+			const warn = taskId ? saveFollowups(taskId, "dev", id, fu.specs) : "这个任务挂不到工作台上的事，约的复查没记上";
+			if (warn) log(warn, id);
+		}
 		const quiet = quietRound(task, text);
 		update(id, { status: quiet ? "done" : "review", summary: text, session: sessionId, usage: total });
 		// 对话页的聊天 Yi 就在看板上看着，不私聊卡片
@@ -562,6 +576,7 @@ export async function discardDev(id: string) {
 	}
 	update(id, { status: "discarded" });
 	settle({ actionKind: "dev", actionId: id, routeId: t.routeId, outcome: "discarded", effect: isDev(t) ? "local" : "internal" });
+	cancelFollowups(taskOfAction(id));
 }
 
 export const devTasksList = () => db().select().from(schema.devTasks).all();
@@ -584,4 +599,6 @@ export async function closeTask(id: string) {
 	}
 	update(id, { status: "done" });
 	settle({ actionKind: "dev", actionId: id, routeId: t.routeId, outcome: "done", effect: "internal" });
+	// Yi 点了完成：这件事约好的复查不再跑
+	cancelFollowups(taskOfAction(id));
 }

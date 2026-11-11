@@ -187,6 +187,8 @@ export interface TaskView {
 	approvals: string[];
 	memories?: number[];
 	events: TaskEvent[];
+	/** agent 约好、还没到期的复查（server/followups.ts） */
+	followups?: Array<{ key: string; at: number; about: string }>;
 }
 
 /** 待审批的写操作；command 是给人看的命令原文，learn 是「执行并以后放行」会记进规则的那条 */

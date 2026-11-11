@@ -17,6 +17,7 @@ import { deleteKv, listKv, setKv } from "./db/index.ts";
 import { enqueueMemory } from "./memory/extract.ts";
 import { rememberStatement } from "./memory/remember.ts";
 import { MemoryError } from "./memory/store.ts";
+import { takeFollowups } from "./followups.ts";
 import { isStopping, log, now } from "./util.ts";
 
 const seen = new Set<string>();
@@ -229,7 +230,9 @@ export async function answer(ev: BotEvent, attempt?: string) {
 					label,
 					memory: { query: text, scope: { personId: ev.senderId === OWNER_OPEN_ID ? undefined : ev.senderId, chatId: ev.chatId } },
 				});
-				await reply(ev, answer);
+				// 私聊问答没有接得回的产出，约不了复查：拿掉【复查】段，免得把 JSON 发给你
+				const fu = takeFollowups(answer);
+				await reply(ev, fu.specs.length || fu.error ? `${fu.text}\n\n（私聊问答里约不了复查，要跟进请在看板派个任务）` : fu.text);
 				settle({ actionKind: "qa", actionId: ev.messageId, routeId, outcome: "replied", effect: "bot" });
 				await unreact(ev.messageId, rid);
 				await react(ev.messageId, "DONE");
