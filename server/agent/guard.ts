@@ -1,7 +1,8 @@
-// agent 的工具守卫：读文件只能在允许目录里；命令按 config/skill-rules.json 判成 放行 / 要审批 / 拒绝。
+// agent 的工具守卫：读文件只能在允许目录里；带 Yi 登录态的命令（git、skill-rules.json 登记的命令族、skill 脚本）判成 放行 / 要审批 / 拒绝，
+// 其余命令直接在本机执行（管道、&&、重定向都行）。
 // 由 durable 的 beforeTool 钩子调用（server/agent/driver.ts）；钩子抛错时 durable 也会拦截（fail-closed）。
 // 每个会话用自己的策略创建一份守卫，同一进程里并行的 agent 互不影响。
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
@@ -79,12 +80,22 @@ const gitReadOnly = new Set([
 	"grep",
 ]);
 // --filters 让 cat-file 跑仓库配置的 smudge 过滤器（外部程序）
-const gitBannedArg = /^(--output|--ext-diff|--textconv|--filters|--no-index|-c$|--exec|--upload-pack|--config|--open-files-in-pager|-O)/;
+// --template 会把模板里的 hooks 带进新仓库，--remote 让 archive 去远端执行，--separate-git-dir 能把 .git 放到任意位置
+const gitBannedArg =
+	/^(--output|--ext-diff|--textconv|--filters|--no-index|-c$|--exec|--upload-pack|--config|--open-files-in-pager|-O|--template|--remote(=|$)|--separate-git-dir)/;
 // MR 审查要拉 MR 的 head（review skill）：不带「:目标」，只落到 FETCH_HEAD，不动本地分支
 const mrRef = /^refs\/merge-requests\/\d+\/head$/;
 
 // 开发任务在自己的 worktree 里可以做的本地 git 写操作；push / fetch / 切分支 / reset 一律不放
 const gitLocalWrite = new Set(["add", "commit", "restore", "rm", "mv"]);
+
+/**
+ * agent 取代码跑单测、复现用的目录：clone、worktree 只能放这里，这里的仓库可以随便切版本，不碰 Yi 自己的 checkout。
+ * 用固定路径而不是 $TMPDIR：命令里带变量的 git 会被当成藏了受管命令拦下
+ */
+export const WORK_TMP = path.join(realpathSync("/tmp"), "cabinet-work");
+// 只在临时仓库里放开的 git 子命令：切版本、清理、拉代码都只影响那份副本；push 仍然不行
+const gitWorkWrite = new Set(["checkout", "switch", "reset", "clean", "fetch", "apply", "stash"]);
 
 // lark-cli 用的是 Yi 的飞书账号：--output 会落盘，拒绝；--as 只许 user。
 // 默认身份是 auto（可能落到机器人身份），飞书 skill 也要求写 --as user，所以 user 放行，换成 bot 等别的身份拒绝
@@ -206,6 +217,60 @@ export function tokenize(cmd: string): string[] | string {
 	return out;
 }
 
+/**
+ * 复合命令按 |、||、&&、;、& 和换行切成几段（引号里的不算），每段去掉重定向（> 文件、2>&1、< 文件）后单独判。
+ * 只用于判定，执行的还是原命令
+ */
+export function splitCommands(cmd: string): string[] {
+	const out: string[] = [];
+	let cur = "",
+		quote = "";
+	for (let i = 0; i < cmd.length; i++) {
+		const ch = cmd[i];
+		if (quote) {
+			if (ch === quote) quote = "";
+			cur += ch;
+			continue;
+		}
+		if (ch === "'" || ch === '"') quote = ch;
+		// 2>&1、&> 文件 是重定向，不是后台执行
+		const redirect = ch === "&" && (cmd[i - 1] === ">" || cmd[i + 1] === ">");
+		if (!redirect && (ch === "|" || ch === "&" || ch === ";" || ch === "\n")) {
+			out.push(cur);
+			cur = "";
+			continue;
+		}
+		cur += ch;
+	}
+	out.push(cur);
+	return out.map((c) => c.replace(/(\d*|&)>>?\s*(&\d+|[^\s'"]+)|<\s*[^\s'"]+/g, " ").trim()).filter(Boolean);
+}
+
+// 能把别的命令包起来执行的：bash -c "glab …"、xargs glab、python -c "os.system('glab …')" 这类要看参数里带没带受管命令
+const WRAPPERS = new Set([
+	"bash",
+	"sh",
+	"zsh",
+	"fish",
+	"env",
+	"xargs",
+	"eval",
+	"exec",
+	"command",
+	"nohup",
+	"timeout",
+	"time",
+	"watch",
+	"nice",
+	"sudo",
+	"python",
+	"python3",
+	"node",
+	"php",
+	"perl",
+	"ruby",
+]);
+
 const real = (list: string[]) =>
 	list.flatMap((p) => {
 		try {
@@ -231,7 +296,12 @@ export class Guard {
 	constructor(policy: GuardPolicy) {
 		// 根目录不存在时直接丢弃，不能让守卫构造失败
 		this.writeRoots = real(policy.writeRoots ?? []);
-		this.roots = [...real(policy.roots), ...this.writeRoots];
+		try {
+			mkdirSync(WORK_TMP, { recursive: true });
+		} catch {
+			// 建不了就不给这个目录，real() 会把它丢掉
+		}
+		this.roots = [...real(policy.roots), ...this.writeRoots, ...real([WORK_TMP])];
 		this.commands = (policy.commands ?? []).map((c) => c.trim().split(/\s+/));
 		this.scripts = loadRules(policy.skillsDir, policy.rules);
 		this.skillsDir = real([policy.skillsDir])[0] ?? policy.skillsDir;
@@ -275,8 +345,8 @@ export class Guard {
 	// 统一改写成绝对路径，既能正确执行，也能按绝对路径做白名单匹配
 	normalizeScriptPath(cmd: string): string {
 		const trimmed = cmd.trim();
-		for (const [name, rule] of Object.entries(this.scripts)) {
-			if (!this.enabled.has(name)) continue;
+		// 没给这个 agent 的命令族也改写：改成绝对路径才认得出来，按「这个 agent 不能用」拒绝，而不是当成普通命令放行
+		for (const rule of Object.values(this.scripts)) {
 			const abs = rule.argv0[rule.argv0.length - 1];
 			if (!path.isAbsolute(abs)) continue;
 			const prefix = rule.argv0.length > 1 ? `${rule.argv0[0]} ` : "";
@@ -294,6 +364,22 @@ export class Guard {
 			args = [args[0], ...args.slice(3)];
 			cwd = target;
 		}
+		if (args.some((a) => gitBannedArg.test(a))) return "不允许的 git 参数";
+		const inWork = (p: string | undefined) => (p ? this.resolveInside(cwd, p, [WORK_TMP]) : undefined);
+		const positional = args.slice(2).filter((a) => !a.startsWith("-"));
+		// 取代码跑单测：clone 和 worktree 只能放到 WORK_TMP；archive 只能输出到标准输出（--output 已禁）
+		if (args[1] === "clone")
+			return positional.length >= 2 && inWork(positional.at(-1)) ? undefined : `git clone 要写明目标目录，而且只能放在 ${WORK_TMP} 下`;
+		if (args[1] === "worktree") {
+			const [op, target] = positional;
+			if (op === "list" || op === "prune") return undefined;
+			if (op === "add" && args.some((a) => /^(-b|-B|--orphan)$/.test(a))) return "git worktree add 不能建分支，用 --detach";
+			if ((op === "add" || op === "remove") && inWork(target)) return undefined;
+			return `git worktree 只能 list / prune，add / remove 的目录只能在 ${WORK_TMP} 下`;
+		}
+		if (args[1] === "archive") return undefined;
+		// WORK_TMP 里的仓库是 agent 自己的副本：切版本、拉代码随便，push 照样不行
+		if (gitWorkWrite.has(args[1]) && inWork(cwd)) return undefined;
 		// 只读 agent 核对发布区间要先拉 tag、审 MR 要拉 MR 的 head：fetch 只许 --tags / --prune / -q、origin 和 MR 的 ref
 		if (args[1] === "fetch" && !this.writeRoots.length)
 			return args.slice(2).every((a) => ["--tags", "--prune", "-q", "--quiet", "origin"].includes(a) || mrRef.test(a))
@@ -307,7 +393,6 @@ export class Guard {
 		const localWrite = this.enabled.has("git-local") && gitLocalWrite.has(args[1]);
 		if (localWrite && !this.writable(cwd, ".")) return "git 写操作只能在开发任务自己的 worktree 里执行";
 		if (!gitReadOnly.has(args[1]) && !localWrite) return `不允许的 git 子命令: ${args[1]}`;
-		if (args.some((a) => gitBannedArg.test(a))) return "不允许的 git 参数";
 		if (
 			(args[1] === "branch" || args[1] === "tag") &&
 			args.slice(2).some((a) => !a.startsWith("-") || /^-(d|D|m|M|f)$|^--(delete|move|force)/.test(a))
@@ -325,7 +410,8 @@ export class Guard {
 		const interp = INTERPRETERS.has(args[0]) && args[1] ? args[0] : undefined;
 		const raw = interp ? args[1] : args[0];
 		if (!raw?.includes("/")) return undefined;
-		const file = this.resolveInside(cwd, raw);
+		// 只要在 skill 目录里就算 skill 脚本（不管这个 agent 能不能读它），这样没开放的脚本也会被认出来
+		const file = this.resolveInside(cwd, raw, [this.skillsDir]);
 		if (!file || !file.startsWith(this.skillsDir + path.sep)) return undefined;
 		const [skill, dir] = path.relative(this.skillsDir, file).split(path.sep);
 		if (dir !== "scripts") return undefined;
@@ -381,13 +467,54 @@ export class Guard {
 		return approve(`${name}${sub ? ` ${sub}` : ""} 还没登记是读还是写（直接放行的有：${joinWords(rule.read) || "无"}）`);
 	}
 
+	/**
+	 * 一条命令的判定。带 Yi 登录态、或者会改仓库的命令（git、开发任务的构建命令、登记的命令族、skill 脚本）照规则判；其余直接放行。
+	 * 复合命令逐段判：任何一段要审批或被拒，整条拒绝（要审批的只能单独一条，审批卡片上才看得清执行的是什么）
+	 */
 	bashVerdict(cmd: string, cwd: string): Verdict {
 		const tokens = tokenize(cmd.trim());
-		if (typeof tokens === "string") return deny(tokens);
+		if (typeof tokens !== "string") return tokens.length ? this.single(tokens, cmd, cwd) : deny("空命令");
+		for (const seg of splitCommands(cmd)) {
+			const t = tokenize(seg);
+			// 带变量、$(…)、通配符的段：只看它有没有把受管命令藏在里面
+			const v = typeof t === "string" ? (this.hidesGoverned(seg) ? deny(this.hiddenReason(seg)) : ALLOW) : this.single(t, seg, cwd);
+			if (v.kind === "deny") return v;
+			if (v.kind === "approve") return deny(`${v.reason}：要审批的命令只能单独写一条，不能和别的命令连在一起`);
+		}
+		return ALLOW;
+	}
+
+	/** 单条命令：受管的照规则判；包装命令（bash -c、xargs、python -c……）里藏了受管命令的拒绝；其余放行 */
+	single(tokens: string[], text: string, cwd: string): Verdict {
+		const v = this.governed(tokens, cwd);
+		if (v) return v;
+		if (WRAPPERS.has(path.basename(tokens[0])) && this.hidesGoverned(text.slice(text.indexOf(tokens[0]) + tokens[0].length)))
+			return deny(this.hiddenReason(text));
+		return ALLOW;
+	}
+
+	/** 受管命令的名字：git、登记命令族的命令名（glab、lark-cli、archery……）、skill 脚本目录 */
+	private governedNames(): string[] {
+		const names = Object.values(this.scripts).map((r) => path.basename(r.argv0[r.argv0.length - 1]));
+		return ["git", ...new Set(names)];
+	}
+
+	hidesGoverned(text: string): boolean {
+		if (text.includes(this.skillsDir)) return true;
+		return this.governedNames().some((n) => new RegExp(`(^|[\\s'"\`(/|;&$])${escapeRe(n)}(?=$|[\\s'"\`);|&])`).test(text));
+	}
+
+	private hiddenReason(text: string) {
+		const n = this.governedNames().find((x) => new RegExp(`(^|[^\\w-])${escapeRe(x)}([^\\w-]|$)`).test(text)) ?? "skill 脚本";
+		return `${n} 带着 Yi 的登录态，要单独、直接地写（不放进 bash -c、xargs、$(…)、变量里），守卫才能判断是读还是写`;
+	}
+
+	/** 受规则管的命令给出判定；不归规则管的返回 undefined（直接放行） */
+	governed(tokens: string[], cwd: string): Verdict | undefined {
 		let args = tokens.map((t) => t.replace(/^~(?=$|\/)/, homedir()));
-		if (!args.length) return deny("空命令");
 		const reason = (r: string | undefined): Verdict => (r ? deny(r) : ALLOW);
-		if (args[0] === "git" && (this.enabled.has("git") || this.enabled.has("git-local"))) return reason(this.checkGit(args, cwd));
+		if (args[0] === "git")
+			return this.enabled.has("git") || this.enabled.has("git-local") ? reason(this.checkGit(args, cwd)) : deny("这个 agent 不能用 git");
 		// go -C <目录> test 这类写法：目录在 worktree 内就当作在那里执行
 		if (args[1] === "-C" && this.commands.some((c) => c[0] === args[0])) {
 			const dir = this.writable(cwd, args[2]);
@@ -405,22 +532,20 @@ export class Guard {
 			return bad ? deny(`参数里的路径不在 worktree 内: ${bad}`) : ALLOW;
 		}
 		for (const [name, rule] of Object.entries(this.scripts)) {
-			if (!this.enabled.has(name)) continue;
 			const head = args.slice(0, rule.argv0.length).map((a) => (a.includes("/") ? path.resolve(cwd, a) : a));
 			if (head.join("\0") !== rule.argv0.join("\0")) continue;
+			if (!this.enabled.has(name)) return deny(`这个 agent 不能用 ${name}`);
 			return this.ruleVerdict(name, rule, args.slice(rule.argv0.length));
 		}
-		// skill 目录里还没登记规则的脚本：交给 Yi 审批（可以顺手记成只读），不直接拒绝
-		const script = this.anyScript ? this.skillScript(args, cwd) : undefined;
+		// skill 目录里还没登记规则的脚本：多半要用 Yi 的登录态，交给 Yi 审批（可以顺手记成只读）
+		const script = this.skillScript(args, cwd);
 		if (script) {
+			if (!this.anyScript) return deny(`这个 agent 不能跑 skill 脚本：${path.basename(script.file)}`);
 			if (helpOnly(script.rest)) return ALLOW;
 			const sub = subcommand(script.rest);
 			return approve(`${script.skill} 的脚本 ${path.basename(script.file)}${sub ? ` ${sub}` : ""} 还没登记命令规则`);
 		}
-		const allowed = [...this.enabled, ...this.commands.map((c) => c.join(" "))];
-		return deny(
-			`这个 agent 不允许执行: ${args[0]}（可用：${allowed.join(", ")}；skill 目录里的脚本用绝对路径写，没登记的会交给 Yi 审批；看文件、搜代码用 read / grep / find / ls 工具）`,
-		);
+		return undefined;
 	}
 
 	checkBash(cmd: string, cwd: string): string | undefined {

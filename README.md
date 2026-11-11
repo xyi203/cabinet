@@ -94,7 +94,7 @@ agent 跑在 [pi-durable](https://github.com/earendil-works/pi/tree/main/package
 - 机器人身份：用 App ID / Secret，由 SDK 管理 tenant token。用于长连接收消息、回复 @机器人、私聊草稿、上传表情包图片。
 - 用户身份：在看板上点「授权飞书」，走 OAuth 授权码流程。回调地址是 `OAUTH_REDIRECT`（默认 `http://127.0.0.1:9768/callback`），必须在开发者后台「安全设置 → 重定向 URL」里配好；只有授权期间才监听这个端口。refresh_token 存在 SQLite 的 `kv` 表里，到期前自动刷新。
 - 以 Yi 身份发出的唯一入口是 `applyDraftAction("send")`，只由 Yi 的「发」指令或看板确认触发。并发确认时只有一个会生效。
-- agent 只有只读能力：守卫限制读文件的目录（排除凭证类文件），bash 只放行 agent 配置里列出的只读命令族。meegle、glab 的写操作只由 cabinet 在 Yi 确认后执行。
+- agent 的命令直接在本机执行（管道、重定向、脚本都行），读文件范围是整个家目录（排除凭证类文件）。带 Yi 登录态的命令按 `config/skill-rules.json` 判：git、glab、lark-cli、meegle 和 skill 脚本读的放行，写的要 Yi 审批，审批的命令必须单独一条（`server/agent/guard.ts`）。
 - 看板只监听 127.0.0.1，并校验 Host / Origin；写接口需要同源下发的 token。
 
 ## 使用

@@ -187,7 +187,8 @@
 			"repo view",
 			"ci view",
 			"ci status",
-			"api"
+			"api",
+			"repo clone"
 		],
 		"write": [
 			"mr note",

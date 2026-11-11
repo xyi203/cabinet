@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { Guard, RULES_FILE, loadRules, mcpReadOnly, rememberRead, tokenize } from "../server/agent/guard.ts";
+import { Guard, RULES_FILE, WORK_TMP, loadRules, mcpReadOnly, rememberRead, tokenize } from "../server/agent/guard.ts";
 
 const root = mkdtempSync(path.join(tmpdir(), "cabinet-guard-"));
 const repo = path.join(root, "repo");
@@ -30,14 +30,22 @@ test("读文件限制在根目录内，排除凭证与软链逃逸", () => {
 	assert.ok(g.check("edit", { path: "a.go" }, repo));
 });
 
-test("bash 只允许单条命令", () => {
-	deny("git log | head");
-	deny("git log; rm -rf /");
+test("普通命令直接放行；复合命令逐段判，受管命令照规则，要审批的不能连写，也不能藏进 bash -c / $(…)", () => {
+	allow("cat a.go | wc -l");
+	allow("python3 -c 1");
+	allow("ls *");
+	allow("bash ./scripts/test.sh");
+	allow("git log | head");
+	allow("git log > /tmp/x 2>&1");
+	allow("cd sub && git status");
+	allow(`grep -rn "glab" .`);
+	deny("git log; git push origin HEAD");
+	deny("git log && glab mr note 1 -m x");
+	deny("glab mr note 1 -m x | cat");
+	deny('bash -c "glab mr approve 1"');
+	deny("echo $(glab mr approve 1)");
+	deny("env FOO=1 glab mr merge 1");
 	deny("git log $(whoami)");
-	deny('git log "$HOME"');
-	deny("git log `id`");
-	deny("git log > /tmp/x");
-	deny("ls *");
 	assert.deepEqual(tokenize(`git log --grep "a (b) c"`), ["git", "log", "--grep", "a (b) c"]);
 });
 
@@ -82,8 +90,9 @@ test("未启用的命令族一律拒绝", () => {
 	deny("glab mr view 1", gitOnly);
 	deny("meegle workitem get", gitOnly);
 	deny("archery instances", gitOnly);
-	deny("cat a.go", gitOnly);
-	deny("python3 -c 1", gitOnly);
+	// 不归规则管的普通命令照样能跑
+	allow("cat a.go", gitOnly);
+	allow("python3 -c 1", gitOnly);
 });
 
 test("开发任务：只能写自己的 worktree，git 只放本地写操作", () => {
@@ -117,8 +126,8 @@ test("开发任务：只能写自己的 worktree，git 只放本地写操作", (
 	ok(`go -C ${wt} test ./...`, repo);
 	no(`go -C ${repo} test ./...`, wt);
 	no("go test /etc/...");
-	no("go run main.go");
-	no("go test ./... ; rm -rf /");
+	// 构建命令之外的命令不受限
+	ok("go run main.go");
 });
 
 test("lark-cli：读文档和知识库放行，建 / 改文档走审批，只许 --as user", () => {
@@ -233,8 +242,8 @@ test("没登记的 skill 脚本、没登记的子命令交给审批，并能记�
 	});
 	// bash 没配 "*" 的 agent 不放没登记的脚本
 	assert.equal(kind(`${tool} list`, g), "deny");
-	// 不在 skill 目录里的照样拒绝
-	assert.equal(kind("cat a.go"), "deny");
+	// 不在 skill 目录里的普通命令直接放行
+	assert.equal(kind("cat a.go"), "allow");
 	// 已登记规则里没列出的子命令：审批，可以记成只读；规则里的写操作不能记
 	const archery = path.join(skills, "archery/scripts/archery");
 	assert.equal(kind(`${archery} explain --sql x`), "approve");
@@ -301,4 +310,24 @@ test("登记过的命令：--help 放行，deny 的子命令带 --help 也拒绝
 	assert.equal(v("foo --version"), "allow");
 	assert.equal(v("foo auth --help"), "deny");
 	assert.equal(v("foo info GD-1"), "approve");
+});
+
+test("取代码跑单测：clone、worktree 只能放 /tmp/cabinet-work，那里的副本能切版本，push 照样不行", () => {
+	const wt = path.join(WORK_TMP, "guard-test");
+	allow(`git clone git@gitlab.example.com:a/b.git ${wt}`);
+	allow(`git worktree add --detach ${wt} abc123`);
+	allow(`git worktree remove --force ${wt}`);
+	allow("git worktree list");
+	allow(`git -C ${WORK_TMP} checkout abc123`);
+	allow(`git -C ${WORK_TMP} fetch origin refs/heads/main`);
+	allow("git archive abc123 src | tar -x -C /tmp/x");
+	deny("git clone git@gitlab.example.com:a/b.git");
+	deny("git clone git@gitlab.example.com:a/b.git /Users/someone/code/b");
+	deny(`git worktree add -b feat ${wt} abc123`);
+	deny("git worktree add ../elsewhere abc123");
+	deny(`git -C ${WORK_TMP} push origin HEAD`);
+	deny("git checkout abc123");
+	deny(`git clone --template=/tmp/hooks git@gitlab.example.com:a/b.git ${wt}`);
+	deny("git archive --remote=git@x:a/b.git HEAD");
+	assert.equal(g.check("read", { path: path.join(WORK_TMP, "x.go") }, repo), undefined, "临时副本里的代码能用 read 工具看");
 });

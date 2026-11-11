@@ -35,7 +35,8 @@ export const MAX_CONCURRENCY = Number(env("MAX_CONCURRENCY", "3"));
 export const THREAD_CONTEXT_N = Number(env("THREAD_CONTEXT_N", "15"));
 export const DEFAULT_CWD = expand(env("DEFAULT_CWD", "~"));
 
-export const READ_ROOTS = [DEFAULT_CWD];
+// agent 能读整个家目录（加上工作目录，测试里它在临时目录）；.env、密钥这类凭证文件由守卫另外挡（server/agent/guard.ts）
+export const READ_ROOTS = [...new Set([expand("~"), DEFAULT_CWD])];
 
 // 截图在 data/images 保留的天数；会话闲置超过这么多天，下次换新会话（旧会话里的长上下文和图片不再每轮重发）。0 = 不清理 / 不换
 export const IMAGE_RETAIN_DAYS = Number(env("IMAGE_RETAIN_DAYS", "7"));
