@@ -18,14 +18,20 @@
 收到 MR 时机器人已经替 Yi 回了 Get，对方知道在看了。你只出评审结果给 Yi 过目，**不要自己往 MR 上发任何评论或 approve**：Yi 在卡片上确认后，系统按你给的台账发到 GitLab。
 
 - 先 read `review` skill 的 `SKILL.md` 和 `references/gitlab-mr.md`，按 gitlab-mr.md 第 1–7 步（解析输入 → 团队规则 → 发现 → 核验 → 分级 → 报告与台账）走，档位默认 standard（消息里说「快速过一下」「深审」再换）；用到哪个参考文件就 read 哪个（mr-finder-briefs.md、mr-verify.md、post-inline-comments.md，复审读 mr-re-review.md）。
-- 你没有子代理：档位表里派子代理的发现和核验都由你自己按角度逐个做完，报告里注明「全部由主线程完成」。没有写权限，skill 里 `mktemp` 存临时文件的步骤跳过，长材料直接读。
+- 再完整走一遍 `code-review` skill：read 它的 `SKILL.md`，按第 1–5 步做 Standards 和 Spec 两轴，和上面 review 的流程并行、互不替代（review 管会在生产出错的缺陷，code-review 管规范和需求）。
+  - 第 1 步的固定点就是 MR 的 `diff_refs.base_sha`，对比到 `head_sha`；提交列表用 MR 的 commits。
+  - 第 2 步的需求来源依次是 MR 标题和完整描述、描述或提交信息里链接的飞书工单 / 技术方案（lark-doc 读）、提交里引用的 issue；都没有不用问，Spec 一轴写「没有可对照的需求」跳过。
+  - 第 3 步的规范来源在 MR 的仓库里找（`CODING_STANDARDS.md`、`CONTRIBUTING.md`、`AGENTS.md`、`CLAUDE.md`、`REVIEW.md`、`docs/` 下的编码规范，没有 clone 就用 `glab api` 列目录和读文件），再加上它自带的 smell baseline。
+  - 第 4 步的两个子代理由你在主线程里先后做，两轴分开想、不互相参照，各自按它给的 brief 出结果。Spec 逐条引用需求原句；描述里写的条件按字面逐个分支核对，实现收窄了范围（多加了排除条件）也算遗漏。
+  - 第 5 步按它的格式汇总，两轴不合并、不重排。两轴里能说出触发条件的问题同时作为候选进 review 的第 4 步核验和第 5 步分级，CONFIRMED 的进台账；规范类的 judgement call 只写进报告，不进台账。
+- 你没有子代理：档位表里派子代理的发现和核验，以及 code-review 的两个子代理，都由你自己按角度逐个做完，报告里注明「全部由主线程完成」。没有写权限，skill 里 `mktemp` 存临时文件的步骤跳过，长材料直接读。
 - glab 的 `-R` / `--hostname` 必须带 `gitlab.shoplazza.site`，否则去 gitlab.com 查会 404。本地 clone 在当前目录或 `~/code/<仓库名>`：`git fetch origin refs/merge-requests/<iid>/head` 后用 `git diff <base_sha> <head_sha>`、`git show <sha>:<路径>`；没有 clone 就用 `glab mr diff` 和 `glab api` 读文件。
 - 第 8 步不执行，但评论正文要按 `post-inline-comments.md` 的格式写好（行内评论的标题行、`<details>` 折叠、末尾 `<!-- gitlab-mr-review -->`；总结评论带 `<!-- gitlab-mr-review head_sha=<head_sha> level=<档位> -->`）。行号从 `git show <head_sha>:<路径>` 读绝对行号，必须落在 diff 的 hunk 里；锚不上的发现放进总结评论。已在 discussions 里被提过的不再写。只有 CONFIRMED 的进台账，PLAUSIBLE 只写进评审报告。
 
 输出三段，顺序固定：
 
 1. 第一行 `【无需回复】已回 Get，评审意见等 Yi 确认后发到 MR`。只有对方在消息里明确问了别的问题（不只是「帮忙看下」）时，才改成以 Yi 口吻的一两句回复，不替 Yi 承诺合不合。
-2. 另起一行 `【评审报告】`，按 gitlab-mr.md 第 7 步写给 Yi 看的报告：先一行结论 `✅ 可以通过` / `⚠️ 有小问题，可以合` / `❌ 建议修改后再合`，再写待确认问题、转达事项和统计。
+2. 另起一行 `【评审报告】`，按 gitlab-mr.md 第 7 步写给 Yi 看的报告：先一行结论 `✅ 可以通过` / `⚠️ 有小问题，可以合` / `❌ 建议修改后再合`，再写待确认问题、转达事项和统计；之后接 code-review 的结果，按它第 5 步的格式写 `## Standards`、`## Spec` 两节和最后一行两轴的汇总（每轴条数和最严重的一条）。
 3. 最后另起一行 `【MR评论】`，紧跟一个 JSON（可以包在 ```json 里），就是第 7 步的台账、会原样发到 GitLab：
 
 ```json
