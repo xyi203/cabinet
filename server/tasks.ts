@@ -48,6 +48,8 @@ export interface TaskView {
 	/** 正在跑的运行（停止、看步骤用） */
 	runId?: string;
 	live?: string;
+	/** 正在跑的那次运行从什么时候开始：看板按它只取这一次的执行记录（同一会话里还有以前几轮） */
+	liveSince?: number;
 	/** 关闭时的一句话结果 */
 	result?: string;
 	error?: string | null;
@@ -219,6 +221,7 @@ function view(
 		scheduleId: first?.channel === "cron" ? first.thread.slice("cron:".length) : null,
 		runId,
 		live: runId ? running.get(runId)?.label : undefined,
+		liveSince: runId ? running.get(runId)?.started : undefined,
 		result,
 		error,
 		retryId,

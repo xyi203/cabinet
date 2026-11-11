@@ -9,6 +9,7 @@ import { Conclusion } from "./AgentUi";
 import { Drawer, Embedded } from "./Drawer";
 import { DraftDrawer } from "./Drawers";
 import { MsgText } from "./MsgText";
+import { StepLog } from "./StepLog";
 import { Pill, StoryTag, workerName } from "./Workbench";
 
 const OUTCOME: Record<string, string> = {
@@ -96,6 +97,22 @@ function eventNode(e: TaskEvent): ReactNode {
 			{e.detail ? `：${e.detail}` : ""}
 		</div>
 	);
+}
+
+/** 正在跑的那次运行：会话 key 就是 runId，只取这次开始之后的步骤 */
+function currentRun(t: TaskView, runId: string): Task {
+	return {
+		id: runId,
+		type: "draft",
+		status: "in_progress",
+		sub: "",
+		title: t.title,
+		label: "",
+		created: t.liveSince ?? t.updated,
+		session: runId,
+		start: t.liveSince,
+		runId,
+	};
 }
 
 /** 草稿起草那次运行的步骤：DraftDrawer 按这个拉执行日志 */
@@ -261,6 +278,20 @@ export function TaskPanel({
 										去记忆页处理
 									</button>
 								</div>
+							</div>
+						</div>
+					</Ev>
+				)}
+				{/* 正在跑的这次（起草、复审、追问）：草稿还没出来、或者嵌着的草稿是上一版时，从这里看当前的执行记录。agent 任务在下面嵌着的任务里看 */}
+				{t.runId && !(liveDev && (liveDev.status === "running" || liveDev.status === "pushing")) && (
+					<Ev at={t.liveSince ?? t.updated}>
+						<div className="out">
+							<div className="oh">
+								<span>正在处理</span>
+								<span>{t.live}</span>
+							</div>
+							<div className="ob">
+								<StepLog task={currentRun(t, t.runId)} />
 							</div>
 						</div>
 					</Ev>

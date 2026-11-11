@@ -4,13 +4,17 @@ import { useLiveSteps } from "../lib/live";
 import { dur } from "./ui";
 import { Markdown } from "./Markdown";
 
-/** 执行日志：运行中的任务用 SSE 推来的实时步骤，结束的从会话文件里取 */
+/**
+ * 执行日志：运行中的任务用 SSE 推来的实时步骤，结束的从会话记录里取。
+ * 运行中途才打开的页面收不全实时步骤，也从会话记录里取，每 5 秒刷新一次直到跑完。
+ */
 export function StepLog({ task }: { task?: Task }) {
 	const live = useLiveSteps(task?.runId);
 	const { data, isLoading } = useQuery({
 		queryKey: ["log", task?.session, task?.start, task?.end],
 		queryFn: () => fetchLog(task!),
 		enabled: Boolean(task?.session) && !live,
+		refetchInterval: task?.runId && task.end == null ? 5000 : false,
 	});
 	if (!task) return <div className="foot">没有处理记录</div>;
 	const steps = live ?? data;

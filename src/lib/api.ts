@@ -187,6 +187,8 @@ export interface TaskView {
 	hold?: number;
 	runId?: string;
 	live?: string;
+	/** 正在跑的那次运行的开始时间 */
+	liveSince?: number;
 	result?: string;
 	error?: string | null;
 	retryId?: string;

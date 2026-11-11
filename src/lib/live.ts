@@ -4,6 +4,8 @@ import { useEffect, useSyncExternalStore } from "react";
 import type { Step } from "./api";
 
 const steps = new Map<string, Step[]>();
+/** 从 run_start 起完整收到的运行：页面在运行中途才打开时，SSE 只补得到后半段，这种不算，改从执行日志里取 */
+const complete = new Set<string>();
 const listeners = new Set<() => void>();
 let version = 0;
 const notify = () => {
@@ -12,8 +14,10 @@ const notify = () => {
 };
 
 function onLive(e: any) {
-	if (e.type === "run_start") steps.set(e.runId, []);
-	else if (e.type === "tool_start")
+	if (e.type === "run_start") {
+		steps.set(e.runId, []);
+		complete.add(e.runId);
+	} else if (e.type === "tool_start")
 		steps.set(e.runId, [...(steps.get(e.runId) ?? []), { t: e.t, kind: "call", tool: e.tool, args: e.args, callId: e.callId }]);
 	else if (e.type === "tool_end")
 		steps.set(
@@ -31,7 +35,7 @@ export function useLiveSteps(runId?: string): Step[] | undefined {
 		() => version,
 		() => 0,
 	);
-	return runId ? steps.get(runId) : undefined;
+	return runId && complete.has(runId) ? steps.get(runId) : undefined;
 }
 
 export function useLiveUpdates(onStatus: (connected: boolean) => void) {
