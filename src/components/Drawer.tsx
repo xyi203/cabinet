@@ -4,6 +4,16 @@ import { toast } from "./Toast";
 /** 嵌在任务详情的时间线里：草稿、agent 任务的抽屉内容原样复用，只是不再盖一层遮罩 */
 export const Embedded = createContext(false);
 
+/**
+ * 工作台右边的详情：操作都交给页面底部的选项卡和输入框（Workbench 的 Dock），
+ * 抽屉里的发送 / 审批 / 停止这些按钮不再重复出现；草稿框里改的字记在这里，选「发送」时发的就是它
+ */
+export interface DockCtx {
+	edit: (draftId: string) => string | undefined;
+	setEdit: (draftId: string, text: string) => void;
+}
+export const Docked = createContext<DockCtx | null>(null);
+
 export function Drawer({
 	title,
 	onClose,

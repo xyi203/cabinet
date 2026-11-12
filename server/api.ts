@@ -496,7 +496,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		return send(res, 202, { ok: true });
 	}
 	try {
-		const status = await applyDraftAction(id, action as "send", arg, kind);
+		const status = await applyDraftAction(id, action as "send", arg, kind, body.to === "dm" ? "dm" : "reply");
 		return send(res, 200, { ok: true, status });
 	} catch (e) {
 		if (e instanceof DraftError) return send(res, 409, { error: e.message });

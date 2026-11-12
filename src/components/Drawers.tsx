@@ -3,7 +3,7 @@ import { useContext, useState } from "react";
 import { type Draft, type Task, fetchStickers, post } from "../lib/api";
 import { GLYPH, STATUS, describeDraft, money, time, where } from "../lib/format";
 import { DispatchForm } from "./DevDrawer";
-import { Drawer, Embedded, type Msg, MsgLine } from "./Drawer";
+import { Docked, Drawer, Embedded, type Msg, MsgLine } from "./Drawer";
 import { Markdown } from "./Markdown";
 import { MsgText } from "./MsgText";
 import { StepLog } from "./StepLog";
@@ -18,7 +18,11 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 	const qc = useQueryClient();
 	const { data: stickers } = useQuery({ queryKey: ["stickers"], queryFn: fetchStickers });
 	const editable = d.status !== "noreply" && d.kind === "text";
-	const [text, setText] = useState(editable ? d.draft : "");
+	// 停在工作台右边时：发送、改写、表情都在底部的选项卡和输入框里；这里改的字记到 Docked，选「发送」发的就是它
+	const dock = useContext(Docked);
+	const [own, setOwn] = useState(editable ? d.draft : "");
+	const text = dock ? (dock.edit(d.id) ?? (editable ? d.draft : "")) : own;
+	const setText = dock ? (v: string) => dock.setEdit(d.id, v) : setOwn;
 	const [opinion, setOpinion] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [msg, setMsg] = useState<Msg>(null);
@@ -63,32 +67,34 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 			title={embedded ? `回复 ${d.senderName}` : where(d)}
 			onClose={onClose}
 			actions={
-				<>
-					<button
-						className="btn primary"
-						disabled={busy || !(text.trim() || suggested)}
-						title={`以你的身份发给 ${d.senderName}`}
-						onClick={() => void (text.trim() ? act("send", text.trim()) : act("send", suggested, d.kind))}
-					>
-						发送
-					</button>
-					<button className="btn" disabled={busy} onClick={() => act("discard")}>
-						不回复
-					</button>
-					<button className="btn" disabled={busy} title="已经在别处处理过了，不发任何消息" onClick={() => act("complete")}>
-						完成
-					</button>
-					<span className="spacer" />
-					<button
-						className="btn ghost"
-						disabled={busy}
-						aria-expanded={dispatching}
-						title="交给助手去查，或让开发助手改代码"
-						onClick={() => setDispatching(!dispatching)}
-					>
-						转成任务
-					</button>
-				</>
+				dock ? undefined : (
+					<>
+						<button
+							className="btn primary"
+							disabled={busy || !(text.trim() || suggested)}
+							title={`以你的身份发给 ${d.senderName}`}
+							onClick={() => void (text.trim() ? act("send", text.trim()) : act("send", suggested, d.kind))}
+						>
+							发送
+						</button>
+						<button className="btn" disabled={busy} onClick={() => act("discard")}>
+							不回复
+						</button>
+						<button className="btn" disabled={busy} title="已经在别处处理过了，不发任何消息" onClick={() => act("complete")}>
+							完成
+						</button>
+						<span className="spacer" />
+						<button
+							className="btn ghost"
+							disabled={busy}
+							aria-expanded={dispatching}
+							title="交给助手去查，或让开发助手改代码"
+							onClick={() => setDispatching(!dispatching)}
+						>
+							转成任务
+						</button>
+					</>
+				)
 			}
 		>
 			{!embedded && (
@@ -137,21 +143,35 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 				placeholder={placeholder}
 				onChange={(e) => setText(e.target.value)}
 			/>
-			<div className="revise">
-				<input
-					value={opinion}
-					placeholder="想怎么改？例如：语气随意点，补一句今天下班前给结论"
-					aria-label="改写意见"
-					onChange={(e) => setOpinion(e.target.value)}
-					onKeyDown={(e) => {
-						if (e.key === "Enter" && !e.nativeEvent.isComposing && opinion.trim()) void act("revise", opinion.trim());
-					}}
-				/>
-				<button className="btn" disabled={busy || !opinion.trim()} onClick={() => act("revise", opinion.trim())}>
-					改写
-				</button>
-			</div>
-			{!isMeego && (
+			{dock && (
+				<div className="flex justify-end">
+					<button
+						className="link text-[12px]"
+						aria-expanded={dispatching}
+						title="交给助手去查，或让开发助手改代码"
+						onClick={() => setDispatching(!dispatching)}
+					>
+						转成任务
+					</button>
+				</div>
+			)}
+			{!dock && (
+				<div className="revise">
+					<input
+						value={opinion}
+						placeholder="想怎么改？例如：语气随意点，补一句今天下班前给结论"
+						aria-label="改写意见"
+						onChange={(e) => setOpinion(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" && !e.nativeEvent.isComposing && opinion.trim()) void act("revise", opinion.trim());
+						}}
+					/>
+					<button className="btn" disabled={busy || !opinion.trim()} onClick={() => act("revise", opinion.trim())}>
+						改写
+					</button>
+				</div>
+			)}
+			{!isMeego && !dock && (
 				<>
 					<div className="label">或者回一个表情</div>
 					<div className="emojis">

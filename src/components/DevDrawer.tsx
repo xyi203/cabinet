@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import {
 	type DevTask,
 	type Draft,
@@ -15,7 +15,7 @@ import { useLiveSteps } from "../lib/live";
 import { AGENT_NAME, money, time } from "../lib/format";
 import { EFFORT } from "./ModelPicker";
 import { dur } from "./ui";
-import { Drawer, type Msg, MsgLine } from "./Drawer";
+import { Docked, Drawer, type Msg, MsgLine } from "./Drawer";
 import { Conclusion } from "./AgentUi";
 import { Markdown } from "./Markdown";
 import { ModelPicker } from "./ModelPicker";
@@ -301,6 +301,9 @@ export function DevDrawer({
 	const conclusion = !running && d.status !== "pushing" && Boolean(d.summary?.trim());
 	// 开发任务只查清楚、没改代码，或者 MR 已经提了，也能直接完成；还有没推送的改动时只能推送或放弃
 	const canClose = d.status === "pushed" || (d.status === "review" && Boolean(diff) && !diff!.commits && !diff!.uncommitted);
+	// 停在工作台右边时：说话、停止、完成在底部的输入框和选项卡里，这里只留推送和放弃（要看改动才能决定）
+	const docked = useContext(Docked) != null;
+	const extra = canPush || (!running && isDev);
 	return (
 		<Drawer
 			onBack={onBack}
@@ -310,28 +313,32 @@ export function DevDrawer({
 			}
 			onClose={onClose}
 			actions={
-				!canTalk ? undefined : (
+				!canTalk || (docked && !extra) ? undefined : (
 					<div className="chat-input">
-						<textarea
-							value={text}
-							disabled={d.status === "pushing"}
-							placeholder={
-								d.status === "done"
-									? "已经完成了。再发消息，它会接着这次对话继续做（⌘↩ 发送）"
-									: running
-										? "补充一句，它会在下一步之前看到，例如「先别动 pb」（⌘↩ 发送）"
-										: "提问、补充要求，或让它接着改（⌘↩ 发送）"
-							}
-							onChange={(e) => setText(e.target.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void act("message");
-							}}
-						/>
+						{!docked && (
+							<textarea
+								value={text}
+								disabled={d.status === "pushing"}
+								placeholder={
+									d.status === "done"
+										? "已经完成了。再发消息，它会接着这次对话继续做（⌘↩ 发送）"
+										: running
+											? "补充一句，它会在下一步之前看到，例如「先别动 pb」（⌘↩ 发送）"
+											: "提问、补充要求，或让它接着改（⌘↩ 发送）"
+								}
+								onChange={(e) => setText(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void act("message");
+								}}
+							/>
+						)}
 						<div className="row">
-							<button className="btn primary" disabled={busy || !text.trim()} onClick={() => act("message")}>
-								发送
-							</button>
-							{running && (
+							{!docked && (
+								<button className="btn primary" disabled={busy || !text.trim()} onClick={() => act("message")}>
+									发送
+								</button>
+							)}
+							{running && !docked && (
 								<button className="btn" disabled={busy} onClick={() => act("stop")}>
 									停止
 								</button>
@@ -341,7 +348,7 @@ export function DevDrawer({
 									{d.mrUrl ? "推送新提交" : "推送并创建 MR"}
 								</button>
 							)}
-							{!running && !ended && (!isDev || canClose) && (
+							{!running && !ended && (!isDev || canClose) && !docked && (
 								<button className="btn" disabled={busy} onClick={() => act("close")}>
 									完成
 								</button>

@@ -49,18 +49,27 @@ async function poll(since: number, full: boolean) {
 	}
 }
 
-/** 以 Yi 的身份回复：表情回复加在对方那条消息上；群里 @ 回对方 */
-async function send(d: Draft) {
+/** 以 Yi 的身份回复：表情回复加在对方那条消息上；群里 @ 回对方；dm 时不回原消息，私聊发给对方 */
+async function send(d: Draft, dm = false) {
 	const uuid = `d-${d.id}`.slice(0, 50);
 	if (d.kind === "reaction") return void (await reactAsUser(d.replyTo, d.draft));
-	const target = d.chatMode === "p2p" ? { chatId: d.chatId } : { replyTo: d.replyTo, inThread: Boolean(d.threadId) };
+	const target = dm
+		? { openId: d.senderId }
+		: d.chatMode === "p2p"
+			? { chatId: d.chatId }
+			: { replyTo: d.replyTo, inThread: Boolean(d.threadId) };
 	if (d.kind === "sticker") {
 		const sticker = resolveSticker(d.draft);
 		if (!sticker) throw new DraftError(`表情包 ${d.draft} 不在目录里了`);
 		return void (await sendImageAsUser(target, path.join(PATHS.stickers, sticker), uuid));
 	}
-	const body = d.chatMode === "p2p" ? d.draft : `<at user_id="${d.senderId}"></at> ${d.draft}`;
+	const body = d.chatMode === "p2p" || dm ? d.draft : `<at user_id="${d.senderId}"></at> ${d.draft}`;
 	await sendTextAsUser(target, body, uuid);
+}
+
+/** 私聊发给草稿回复的那个人（飞书项目评论的发评人也走这里） */
+export async function sendDm(d: Draft, openId: string) {
+	await send({ ...d, senderId: openId }, true);
 }
 
 export const larkChannel: Channel = {

@@ -6,6 +6,8 @@ import { changed } from "../bus.ts";
 import { OWNER_NAME, OWNER_OPEN_ID, PATHS } from "../config.ts";
 import type { Draft } from "../db/schema.ts";
 import { channelOfDraft } from "../channels/index.ts";
+import { sendDm } from "../channels/lark.ts";
+import { meegoSenderLarkId } from "../channels/meego.ts";
 import { getMessage, LarkError, react } from "../lark/bot.ts";
 import { ASSISTANT, LEGACY_TIER, TASK_TIER, loadAgents, resolveCwd, withTier } from "../agent/router.ts";
 import { settle } from "../pipeline.ts";
@@ -29,9 +31,16 @@ function mrRevision(report: string, ledger?: MrLedger) {
 	return `当前评审报告：\n${report || "（无）"}\n\n当前将发到 MR 的评论台账：\n${ledger ? JSON.stringify(ledger, null, 2) : "（无）"}\n\nYi 没提到的评论原样保留，不要重新审一遍。`;
 }
 
-/** 发回草稿来的那个渠道（channels/）：飞书私聊和群、飞书项目评论 */
-async function sendDraft(d: Draft) {
-	await channelOfDraft(d).send!(d);
+/** 发到哪：reply 回原来那条（默认）；dm 私聊发评人 / 发消息的人（看板上改的去处） */
+export type Target = "reply" | "dm";
+
+/** 发回草稿来的那个渠道（channels/）：飞书私聊和群、飞书项目评论；dm 一律走飞书私聊 */
+async function sendDraft(d: Draft, to: Target = "reply") {
+	if (to === "reply" || d.chatMode === "p2p") return void (await channelOfDraft(d).send!(d));
+	if (d.kind === "reaction") throw new DraftError("表情是加在原消息上的，不能改成私聊");
+	const openId = d.chatMode === "meego" ? await meegoSenderLarkId(d) : d.senderId;
+	if (!openId?.startsWith("ou_")) throw new DraftError(`找不到 ${d.senderName} 的飞书账号，只能回到原处`);
+	await sendDm(d, openId);
 }
 
 /** 草稿行里的来源部分：改写、复审出新一版时原样带过去 */
@@ -172,7 +181,7 @@ export type Action = "send" | "discard" | "revise" | "complete";
 
 /** 「发 / 不发 / 改 / 完成」的唯一实现，飞书私聊和看板共用。
  * send：arg 非空时用 (kind, arg) 替换草稿再发（看板里手改过的文字、指定的表情或表情包）；revise：arg 是修改意见 */
-export async function applyDraftAction(id: string, action: Action, arg = "", kind: Kind = "text"): Promise<string> {
+export async function applyDraftAction(id: string, action: Action, arg = "", kind: Kind = "text", to: Target = "reply"): Promise<string> {
 	arg = arg.trim();
 	if (action === "send" && arg && kind !== "text") {
 		const resolved = kind === "reaction" ? resolveEmoji(arg) : resolveSticker(arg);
@@ -192,7 +201,7 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 	try {
 		if (action === "send") {
 			const toSend = arg ? { ...d, kind, draft: arg } : d;
-			await sendDraft(toSend);
+			await sendDraft(toSend, to);
 			setStatus(id, "sent", arg ? { kind, draft: arg } : {});
 			if (!isQuiet(id)) void react(id, "DONE");
 			record({ kind: "draft", status: "sent", dm: id, chatId: d.chatId, source: d.replyTo, answer: toSend.draft });
@@ -202,7 +211,7 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 				routeId: d.routeId,
 				outcome: "sent",
 				effect: "outward",
-				detail: describeReply(toSend.kind, toSend.draft),
+				detail: `${to === "dm" && d.chatMode !== "p2p" ? "私聊发给对方：" : ""}${describeReply(toSend.kind, toSend.draft)}`,
 			});
 			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: "sent" });
 		} else if (action === "revise") {

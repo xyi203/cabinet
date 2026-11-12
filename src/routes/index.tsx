@@ -176,7 +176,14 @@ function Dashboard() {
 				{state && !connected && <div className="issue">和 Cabinet 服务的连接断了，正在重连，页面上的内容可能不是最新的。</div>}
 				{state && !state.auth.authorized && <AuthBanner />}
 				{!state && !error && <div className="empty">加载中…</div>}
-				{state && view === "work" && <Workbench s={state} nav={nav} open={search.task} />}
+				{state && view === "work" && (
+					<Workbench
+						s={state}
+						nav={nav}
+						open={search.task}
+						onSelect={(id) => void navigate({ to: "/", search: (prev) => ({ ...prev, task: id }), replace: true })}
+					/>
+				)}
 				{state && view === "stories" && (
 					<>
 						<div className="phead">
@@ -230,7 +237,8 @@ function Dashboard() {
 				)}
 				{state && view === "settings" && <Settings s={state} tab={tab} setTab={(t) => go("settings", { tab: t })} />}
 			</main>
-			{state && task && (
+			{/* 工作台的详情在页面右边，不再盖抽屉 */}
+			{state && task && view !== "work" && (
 				<TaskPanel
 					key={task.id}
 					t={task}

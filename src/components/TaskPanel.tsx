@@ -1,12 +1,12 @@
 // 任务详情：一件事的来龙去脉排成一条时间线（docs/router-worker.md §5.2）——进来的消息、路由判定、每版草稿、审批、agent 任务、结果。
 // 当前那份产出（待确认的草稿、agent 任务）嵌在时间线末尾，直接复用原来的草稿抽屉和任务抽屉：改稿、发送、对话、看改动、推送都在那里
-import type { ReactNode } from "react";
+import { type ReactNode, useContext } from "react";
 import type { Draft, State, Task, TaskEvent, TaskView } from "../lib/api";
 import { AGENT_NAME, SOURCE, STATUS, describeDraft, hm, isLive, time, titleOf } from "../lib/format";
 import { ApprovalActions, RowActions, useAct } from "./Actions";
 import { DevDrawer } from "./DevDrawer";
 import { Conclusion } from "./AgentUi";
-import { Drawer, Embedded } from "./Drawer";
+import { Docked, Drawer, Embedded } from "./Drawer";
 import { DraftDrawer } from "./Drawers";
 import { MsgText } from "./MsgText";
 import { StepLog } from "./StepLog";
@@ -151,6 +151,8 @@ export function TaskPanel({
 	onBack?: () => void;
 	backLabel?: string;
 }) {
+	// 停在工作台右边时，审批、重试、完成这些都在底部的选项卡里，时间线上不再重复
+	const docked = useContext(Docked) != null;
 	const drafts = t.drafts.map((id) => s.drafts.find((d) => d.id === id)).filter((d): d is Draft => d != null);
 	const devs = t.devTasks.map((id) => s.devTasks.find((d) => d.id === id)).filter((d) => d != null);
 	const lastDraft = drafts.at(-1);
@@ -219,7 +221,7 @@ export function TaskPanel({
 							<span>谁要做</span>
 							<div>{a.origin}</div>
 						</div>
-						<ApprovalActions a={a} />
+						{!docked && <ApprovalActions a={a} />}
 					</div>
 				</div>
 			),
@@ -273,11 +275,13 @@ export function TaskPanel({
 							</div>
 							<div className="ob">
 								<div>{t.title}</div>
-								<div className="oa">
-									<button className="btn pri sm" onClick={onMemory}>
-										去记忆页处理
-									</button>
-								</div>
+								{!docked && (
+									<div className="oa">
+										<button className="btn pri sm" onClick={onMemory}>
+											去记忆页处理
+										</button>
+									</div>
+								)}
 							</div>
 						</div>
 					</Ev>
@@ -305,12 +309,12 @@ export function TaskPanel({
 							</div>
 							<div className="ob">
 								<div className="err">{t.error || "这次处理失败了"}</div>
-								<RowActions t={t} s={s} onOpen={() => {}} onMemory={onMemory} />
+								{!docked && <RowActions t={t} s={s} onOpen={() => {}} onMemory={onMemory} />}
 							</div>
 						</div>
 					</Ev>
 				)}
-				{(t.id.startsWith("q:") || ((t.status === "todo" || t.status === "in_progress") && !liveDraft && !liveDev)) && (
+				{!docked && (t.id.startsWith("q:") || ((t.status === "todo" || t.status === "in_progress") && !liveDraft && !liveDev)) && (
 					<RowActions t={t} s={s} onOpen={() => {}} onMemory={onMemory} />
 				)}
 			</div>

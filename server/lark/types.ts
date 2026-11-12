@@ -30,7 +30,8 @@ export interface Chat {
 	p2p_target_type?: string;
 }
 
-export type UserTarget = { chatId: string } | { replyTo: string; inThread: boolean };
+/** chatId 发进会话；openId 私聊这个人（看板上把群里的回复改成私聊）；replyTo 回复原消息 */
+export type UserTarget = { chatId: string } | { openId: string } | { replyTo: string; inThread: boolean };
 
 export interface BotEvent {
 	messageId: string;

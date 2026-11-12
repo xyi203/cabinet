@@ -2532,3 +2532,32 @@ pre.cmd {
 .chat-agent:not(.conclusion) .md thead th {
 	background: var(--panel);
 }
+
+/* 工作台右边的详情（Workbench）：TaskPanel 和里面嵌着的草稿 / 任务都按嵌入方式排，输入框沿用抽屉里的样子；
+ * 操作在页面底部的选项卡里，嵌入内容的按钮行不再贴底 */
+.dock > .embed {
+	border-top: 0;
+	padding-top: 0;
+}
+.dock > .embed > header {
+	font-size: 16px;
+	margin-bottom: 8px;
+}
+.dock textarea,
+.dock input {
+	width: 100%;
+	font: inherit;
+	color: var(--text);
+	background: var(--panel);
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	padding: 8px 10px;
+}
+.dock textarea {
+	min-height: 96px;
+	resize: vertical;
+}
+.dock .embed > .actions {
+	position: static;
+	padding: 10px 0 0;
+}

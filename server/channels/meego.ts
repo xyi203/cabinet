@@ -61,11 +61,14 @@ async function pollMeego(since: number) {
 		routeMeego({ chat_id: `meego-${wid}`, chat_mode: "meego", name: (list.at(-1)!.meego as any).workItemTitle }, list);
 }
 
+/** 发评人在飞书里的 id：早于这个字段的草稿没存，回头从通知卡片里取 */
+export async function meegoSenderLarkId(d: Draft) {
+	return d.meego!.senderLarkId ?? (await getMessage(d.replyTo).catch(() => undefined))?.userIds?.[d.senderName];
+}
+
 async function send(d: Draft) {
 	if (d.kind !== "text") throw new DraftError("飞书项目评论只能回文字，表情和表情包发不了");
-	// 早于这个字段的草稿没存发评人的 user_id：回头从通知卡片里取
-	const larkId = d.meego!.senderLarkId ?? (await getMessage(d.replyTo).catch(() => undefined))?.userIds?.[d.senderName];
-	await sendMeegoComment(d.meego!, d.senderName, d.draft, larkId);
+	await sendMeegoComment(d.meego!, d.senderName, d.draft, await meegoSenderLarkId(d));
 }
 
 export const meegoChannel: Channel = {

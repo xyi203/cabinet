@@ -443,9 +443,12 @@ export async function unreact(messageId: string, reactionId?: string) {
 async function sendAsUser(target: UserTarget, msgType: string, content: string, uuid: string) {
 	const auth = await asUser();
 	const res = await (
-		"chatId" in target
+		"chatId" in target || "openId" in target
 			? client().im.v1.message.create(
-					{ params: { receive_id_type: "chat_id" }, data: { receive_id: target.chatId, msg_type: msgType, content, uuid } },
+					{
+						params: { receive_id_type: "chatId" in target ? "chat_id" : "open_id" },
+						data: { receive_id: "chatId" in target ? target.chatId : target.openId, msg_type: msgType, content, uuid },
+					},
 					auth,
 				)
 			: client().im.v1.message.reply(
