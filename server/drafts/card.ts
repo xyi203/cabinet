@@ -159,7 +159,8 @@ function mrActions(d: Draft, mr: DraftMr): object[] {
 	return [...out, columns(...cols)];
 }
 
-export function draftCard(d: Draft, notice = "", mr?: DraftMr): object {
+/** link：「在看板查看」指向哪里，调用方算好传进来（card.ts 不碰库） */
+export function draftCard(d: Draft, notice = "", mr?: DraftMr, link = BOARD): object {
 	const state = STATE[d.status] ?? { text: d.status, template: "grey" };
 	const live = isLive(d.status);
 	const elements: object[] = [];
@@ -223,7 +224,7 @@ export function draftCard(d: Draft, notice = "", mr?: DraftMr): object {
 				),
 			);
 		elements.push({ tag: "form", name: "draft", elements: form });
-		elements.push(footnote("也可以引用这张卡片回复「发送」「不回复」「完成」「改写 语气软一点」「表情 赞」", BOARD));
+		elements.push(footnote("也可以引用这张卡片回复「发送」「不回复」「完成」「改写 语气软一点」「表情 赞」", link));
 	}
 	return {
 		schema: "2.0",
@@ -290,7 +291,7 @@ const FAILURE_STATE: Record<string, { text: string; template: string }> = {
 };
 
 /** 起草失败的提醒：对方的消息没人回，带「重试」「忽略」；处理过后原地变灰 */
-export function failureCard(f: FailureInfo, status: "failed" | "retrying" | "dismissed" = "failed"): object {
+export function failureCard(f: FailureInfo, status: "failed" | "retrying" | "dismissed" = "failed", link = BOARD): object {
 	const state = FAILURE_STATE[status];
 	const button = (a: string, label: string, type = "default") => ({
 		tag: "button",
@@ -301,7 +302,7 @@ export function failureCard(f: FailureInfo, status: "failed" | "retrying" | "dis
 	const elements: object[] = [text(cut(f.text, LIMIT.source)), text(`失败原因：${cut(f.error, LIMIT.notice)}`, "grey", "notation")];
 	if (status === "failed") {
 		elements.push(columns([button("retry", "重试", "primary_filled")], [button("ignore", "忽略")]));
-		elements.push(footnote("", BOARD));
+		elements.push(footnote("", link));
 	}
 	return {
 		schema: "2.0",

@@ -1,6 +1,6 @@
 // Watchdog：主流程之外的控制回路。定时按确定的规则查一遍，有新问题私聊 Yi 一张卡片（同一个问题只提醒一次，恢复后清掉），
 // 当前的问题同时放进看板「待你处理」。只查不修：修复（重试、重新授权、重启）由 Yi 决定。
-import { DRAFT_ENABLED, OWNER_OPEN_ID, PORT, POLL_INTERVAL, WATCHDOG_INTERVAL } from "./config.ts";
+import { DRAFT_ENABLED, OWNER_OPEN_ID, POLL_INTERVAL, WATCHDOG_INTERVAL } from "./config.ts";
 import { routeRules } from "./rules.ts";
 import { deleteKv, getKv, listKv, setKv } from "./db/index.ts";
 import { running } from "./agent/driver.ts";
@@ -10,6 +10,7 @@ import { inflight } from "./drafts/store.ts";
 import { sendCardToUserAsBot, userAuthStatus } from "./lark/bot.ts";
 import { lastPoll } from "./poller.ts";
 import { recentRecords } from "./records.ts";
+import { opsLink } from "./boardlink.ts";
 import { footnote } from "./drafts/card.ts";
 import { log, now, span } from "./util.ts";
 
@@ -127,7 +128,7 @@ function card(issues: Issue[]) {
 		body: {
 			elements: [
 				...issues.map((i) => ({ tag: "markdown", content: `**${i.title}**\n${i.detail}` })),
-				footnote("同一个问题只提醒一次", `http://127.0.0.1:${PORT}/`),
+				footnote("同一个问题只提醒一次", opsLink()),
 			],
 		},
 	};

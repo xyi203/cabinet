@@ -63,11 +63,16 @@ const HINTS: Record<View, string> = {
 
 export const Route = createFileRoute("/")({
 	component: Dashboard,
-	validateSearch: (search: Record<string, unknown>): { view?: View; story?: string; tab?: string; sched?: string } => ({
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { view?: View; story?: string; tab?: string; sched?: string; task?: string; dev?: string } => ({
 		view: typeof search.view !== "string" ? undefined : search.view in TITLES ? (search.view as View) : ALIASES[search.view],
 		story: typeof search.story === "string" || typeof search.story === "number" ? String(search.story) : undefined,
 		tab: typeof search.tab === "string" ? search.tab : undefined,
 		sched: typeof search.sched === "string" ? search.sched : undefined,
+		// 任务详情抽屉：task 是看板上的一件事（tsk-xxx、apv:、q:、fail-、qa-、mem:），dev 是没挂在任何事上的 agent 任务
+		task: typeof search.task === "string" || typeof search.task === "number" ? String(search.task) : undefined,
+		dev: typeof search.dev === "string" || typeof search.dev === "number" ? String(search.dev) : undefined,
 	}),
 });
 
@@ -96,8 +101,6 @@ function Dashboard() {
 	const search = Route.useSearch();
 	const view: View = search.view ?? "work";
 	const navigate = useNavigate();
-	// 打开的任务详情；backStory / backCron：从哪条需求、哪个定时任务的执行记录点进来的，能返回
-	const [open, setOpen] = useState<{ id?: string; dev?: string; backStory?: string; backCron?: string } | null>(null);
 	const [storyReopen, setStoryReopen] = useState(0);
 	const [connected, setConnected] = useState(true);
 	const { data: state, error } = useQuery({ queryKey: ["state"], queryFn: fetchState, refetchInterval: connected ? 15_000 : 5_000 });
@@ -106,45 +109,35 @@ function Dashboard() {
 	const go = (v: View, extra: { story?: string; tab?: string; sched?: string } = {}) =>
 		void navigate({ to: "/", search: v === "work" ? {} : { view: v, ...extra } });
 	const tab = search.tab && (TAB_ALIASES[search.tab] ?? search.tab);
+	type Detail = { task?: string; dev?: string; story?: string; sched?: string };
+	/** 打开任务详情：写进 URL（压入历史），当前页面和其余参数保持不变；story / sched 记着从哪点进来的，用来返回 */
+	const openDetail = (d: Detail) => void navigate({ to: "/", search: (prev) => ({ ...prev, task: undefined, dev: undefined, ...d }) });
 	/** agent 任务 id → 它所在的那件事；不在工作台窗口里的（老任务、对话）直接开任务抽屉 */
 	const openDev = (devId: string, backStory?: string) => {
 		const t = state?.items.find((x) => x.devTasks.includes(devId));
-		setOpen(t ? { id: t.id, backStory } : { dev: devId, backStory });
+		openDetail({ ...(t ? { task: t.id } : { dev: devId }), ...(backStory ? { story: backStory } : {}) });
 	};
 	const nav = {
-		onOpen: (id: string) => setOpen({ id }),
+		onOpen: (id: string) => openDetail({ task: id }),
 		onStory: (id: string) => {
-			setOpen(null);
 			setStoryReopen((n) => n + 1);
 			go("stories", { story: id });
 		},
-		onMemory: () => {
-			setOpen(null);
-			go("memory");
-		},
+		onMemory: () => go("memory"),
 		/** 去定时页；带 id 时直接打开那个定时任务的执行记录 */
-		onCron: (id?: string) => {
-			setOpen(null);
-			go("cron", id ? { sched: id } : {});
-		},
+		onCron: (id?: string) => go("cron", id ? { sched: id } : {}),
 	};
-	const back = open?.backStory
-		? () => {
-				const id = open.backStory!;
-				setOpen(null);
-				setStoryReopen((n) => n + 1);
-				go("stories", { story: id });
-			}
-		: open?.backCron
-			? () => {
-					const id = open.backCron!;
-					setOpen(null);
-					go("cron", { sched: id });
-				}
-			: undefined;
-	const backLabel = open?.backCron ? "返回定时任务" : "返回需求";
-	const task = open?.id ? state?.items.find((x) => x.id === open.id) : undefined;
-	const dev = open?.dev ? state?.devTasks.find((x) => x.id === open.dev) : undefined;
+	const task = search.task ? state?.items.find((x) => x.id === search.task) : undefined;
+	const dev = !task && search.dev ? state?.devTasks.find((x) => x.id === search.dev) : undefined;
+	/** 抽屉开着的时候，底下的需求 / 定时抽屉不渲染；返回就是去掉 task / dev，它们自然回来 */
+	const detail = !!(task || dev);
+	const closeDetail = () =>
+		void navigate({ to: "/", search: (prev) => ({ ...prev, task: undefined, dev: undefined, story: undefined, sched: undefined }) });
+	const backCron = view === "cron" ? search.sched : undefined;
+	const backStory = view === "stories" ? search.story : undefined;
+	const back =
+		backCron || backStory ? () => void navigate({ to: "/", search: (prev) => ({ ...prev, task: undefined, dev: undefined }) }) : undefined;
+	const backLabel = backCron ? "返回定时任务" : "返回需求";
 	const waiting = state?.items.filter(waitingOn).length ?? 0;
 
 	return (
@@ -183,13 +176,18 @@ function Dashboard() {
 				{state && !connected && <div className="issue">和 Cabinet 服务的连接断了，正在重连，页面上的内容可能不是最新的。</div>}
 				{state && !state.auth.authorized && <AuthBanner />}
 				{!state && !error && <div className="empty">加载中…</div>}
-				{state && view === "work" && <Workbench s={state} nav={nav} open={open?.id} />}
+				{state && view === "work" && <Workbench s={state} nav={nav} open={search.task} />}
 				{state && view === "stories" && (
 					<>
 						<div className="phead">
 							<h1>需求</h1>
 						</div>
-						<StoryBoard key={`${search.story ?? ""}:${storyReopen}`} state={state} initialOpen={search.story} onOpenDev={openDev} />
+						<StoryBoard
+							key={`${search.story ?? ""}:${detail}:${storyReopen}`}
+							state={state}
+							initialOpen={detail ? undefined : search.story}
+							onOpenDev={openDev}
+						/>
 					</>
 				)}
 				{state && view === "cron" && (
@@ -203,11 +201,10 @@ function Dashboard() {
 							items={state.items}
 							now={state.now}
 							onOpenTask={(id, fromSched) => {
-								setOpen({ id, backCron: fromSched });
-								if (fromSched) go("cron");
+								openDetail({ task: id, ...(fromSched ? { sched: fromSched } : {}) });
 							}}
 							onOpenStory={nav.onStory}
-							openId={search.sched}
+							openId={detail ? undefined : search.sched}
 							onOpenSched={(id) => go("cron", id ? { sched: id } : {})}
 						/>
 					</>
@@ -238,7 +235,7 @@ function Dashboard() {
 					key={task.id}
 					t={task}
 					s={state}
-					onClose={() => setOpen(null)}
+					onClose={closeDetail}
 					onStory={nav.onStory}
 					onCron={nav.onCron}
 					onMemory={nav.onMemory}
@@ -246,9 +243,7 @@ function Dashboard() {
 					backLabel={backLabel}
 				/>
 			)}
-			{state && !task && dev && (
-				<DevDrawer key={dev.id} dev={dev as DevTask} onClose={() => setOpen(null)} onBack={back} backLabel={backLabel} />
-			)}
+			{state && !task && dev && <DevDrawer key={dev.id} dev={dev as DevTask} onClose={closeDetail} onBack={back} backLabel={backLabel} />}
 			<ToastHost />
 		</div>
 	);

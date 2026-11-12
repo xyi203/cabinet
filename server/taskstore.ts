@@ -161,9 +161,24 @@ export function taskOfAction(actionId: string): string | null {
 	const dev = draft
 		? undefined
 		: db().select({ routeId: schema.devTasks.routeId }).from(schema.devTasks).where(eq(schema.devTasks.id, actionId)).get();
-	const routeId = draft?.routeId ?? dev?.routeId;
+	return taskOfRouteId(draft?.routeId ?? dev?.routeId);
+}
+
+/** 一次分派 → 它属于的那件事 */
+export function taskOfRouteId(routeId: number | null | undefined): string | null {
 	if (routeId == null) return null;
 	return db().select({ taskId: schema.routes.taskId }).from(schema.routes).where(eq(schema.routes.id, routeId)).get()?.taskId ?? null;
+}
+
+/** 被回复的那条消息（草稿的 replyTo / 审批的 draftReplyTo）→ 它被分派进的那件事；还没分派的返回 null */
+export function taskOfReplyTo(replyTo: string): string | null {
+	const t = db()
+		.select({ routeId: schema.triggers.routeId })
+		.from(schema.triggers)
+		.where(like(schema.triggers.id, `%:${replyTo}`))
+		.all()
+		.find((x) => x.routeId != null);
+	return taskOfRouteId(t?.routeId);
 }
 
 // ---------- 状态：按产出推 ----------

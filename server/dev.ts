@@ -20,6 +20,7 @@ import { ASSISTANT, LEGACY_TIER, TASK_TIER, completeAny, loadAgents, routerModel
 import { exec, isStopping, log, now } from "./util.ts";
 import { cancelFollowups, saveFollowups, takeFollowups } from "./followups.ts";
 import { taskOfAction } from "./taskstore.ts";
+import { devLink } from "./boardlink.ts";
 
 const WORKTREES = path.join(DATA_DIR, "worktrees");
 export const BRANCH_RE = /^(feature|fix)\/[a-z0-9]+$/;
@@ -63,7 +64,7 @@ const latestCard = (id: string) => getKv<string | null>(`devcard-latest:${id}`, 
 export function renderDevCard(msgId: string, notice = ""): object | undefined {
 	const sent = cardOf(msgId);
 	const t = sent && getDevTask(sent.id);
-	return t ? devCard(t, sent.round, latestCard(t.id) === msgId, notice) : undefined;
+	return t ? devCard(t, sent.round, latestCard(t.id) === msgId, notice, devLink(t.id)) : undefined;
 }
 
 export function syncDevCard(id: string, notice = "") {
@@ -427,7 +428,7 @@ async function notify(id: string, what: string, body: string, failed = false) {
 	const round: Round = { what, body, failed };
 	let dm: string;
 	try {
-		dm = await sendCardToUserAsBot(OWNER_OPEN_ID, devCard(t, round));
+		dm = await sendCardToUserAsBot(OWNER_OPEN_ID, devCard(t, round, true, "", devLink(t.id)));
 	} catch (e) {
 		// 卡片被拒也不能漏掉通知：退回富文本
 		log("任务卡片发送失败，改发文字", id, e);

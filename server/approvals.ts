@@ -9,7 +9,7 @@ import { type Learn, rememberRead, tokenize } from "./agent/guard.ts";
 import { callMcp } from "./agent/mcp.ts";
 import { ASSISTANT, loadAgents } from "./agent/router.ts";
 import { changed } from "./bus.ts";
-import { OWNER_OPEN_ID, PORT } from "./config.ts";
+import { OWNER_OPEN_ID } from "./config.ts";
 import { db, schema } from "./db/index.ts";
 import type { Approval } from "./db/schema.ts";
 import { messageDev } from "./dev.ts";
@@ -19,6 +19,7 @@ import { CronError, nextRun, parseCron, saveSchedule } from "./schedules.ts";
 import { ticketsCreated } from "./stories.ts";
 import { execFile } from "node:child_process";
 import { footnote } from "./drafts/card.ts";
+import { approvalLink } from "./boardlink.ts";
 import { log, now, when } from "./util.ts";
 
 export const APPROVAL_TTL = 86400;
@@ -165,7 +166,7 @@ export function approvalCard(a: Approval): object {
 			],
 		});
 	}
-	elements.push(footnote(`${fmt(a.created)} 发起`, `http://127.0.0.1:${PORT}/`));
+	elements.push(footnote(`${fmt(a.created)} 发起`, approvalLink(a)));
 	return {
 		schema: "2.0",
 		config: { update_multi: true, summary: { content: `审批：${a.reason}` } },

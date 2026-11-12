@@ -2,6 +2,7 @@
 import { OWNER_OPEN_ID } from "../config.ts";
 import { getKv, setKv } from "../db/index.ts";
 import { patchCard, sendCardToUserAsBot } from "../lark/bot.ts";
+import { failureLink } from "../boardlink.ts";
 import { log } from "../util.ts";
 import { type FailureInfo, failureCard } from "./card.ts";
 
@@ -9,7 +10,7 @@ const key = (taskId: string) => `failcard:${taskId}`;
 
 export async function notifyFailure(f: FailureInfo) {
 	try {
-		const id = await sendCardToUserAsBot(OWNER_OPEN_ID, failureCard(f));
+		const id = await sendCardToUserAsBot(OWNER_OPEN_ID, failureCard(f, "failed", failureLink(f.taskId)));
 		setKv(key(f.taskId), { id, info: f });
 	} catch (e) {
 		log("起草失败提醒发送失败", f.taskId, e);

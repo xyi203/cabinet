@@ -21,6 +21,7 @@ import { CardInputError, draftCard, draftStateText, parseCardAction, sendText } 
 import { claim, DraftError, getDraft, isQuiet, LIVE, pushDraft, setStatus, syncCard } from "./store.ts";
 import { cancelFollowups } from "../followups.ts";
 import { taskOfAction } from "../taskstore.ts";
+import { draftLink } from "../boardlink.ts";
 import { applyMrAction, draftMrs, type MrLedger } from "./mr.ts";
 
 /** MR 预审的改写：Yi 多半是要删改某几条评论，把当前的报告和台账原样给回去 */
@@ -313,13 +314,13 @@ export async function onDraftCardAction(data: unknown) {
 				`「${ev.name === "revise" ? "改写" : ev.name === "mr_approve" ? "批准 MR" : ev.name === "mr_note" ? "发到 MR" : "发送"}」没有成功：${reason(r.error)}`,
 			);
 		});
-		return toast("info", BUSY_TOAST[ev.name] ?? "正在发送…", draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id)));
+		return toast("info", BUSY_TOAST[ev.name] ?? "正在发送…", draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id), draftLink(d.id)));
 	}
-	const card = () => draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id));
+	const card = () => draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id), draftLink(d.id));
 	if (settled.ok) return toast("success", DONE_TOAST[ev.name] ?? "已处理", card());
 	if (!(settled.error instanceof DraftError)) log("草稿卡片操作失败", ev.name, d.id, settled.error);
 	const msg = reason(settled.error);
 	// 回滚状态时排了一次不带提示的重画，可能晚于这个回调响应到达：再排一次带提示的，最后停在有原因的那张
 	syncCard(d.id, msg);
-	return toast("error", msg, draftCard(getDraft(d.id)!, msg, draftMrs([d]).get(d.id)));
+	return toast("error", msg, draftCard(getDraft(d.id)!, msg, draftMrs([d]).get(d.id), draftLink(d.id)));
 }

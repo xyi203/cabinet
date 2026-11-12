@@ -66,7 +66,7 @@ function header(t: DevTask, round: Round, latest: boolean) {
 }
 
 /** latest：是不是这个任务最新的那张通知；只有最新的带按钮 */
-export function devCard(t: DevTask, round: Round, latest = true, notice = ""): object {
+export function devCard(t: DevTask, round: Round, latest = true, notice = "", link = BOARD): object {
 	const h = header(t, round, latest);
 	const elements: object[] = [];
 	if (notice) elements.push(note(notice, "red"));
@@ -125,7 +125,7 @@ export function devCard(t: DevTask, round: Round, latest = true, notice = ""): o
 			latest && open
 				? `也可以引用这张卡片回复：直接写的话会发给${isDev(t) ? "开发助手" : "助手"}；回「${isDev(t) ? "推送」「停止」「放弃" : "停止」「完成"}」就照做`
 				: "",
-			BOARD,
+			link,
 		),
 	);
 	return {

@@ -213,6 +213,7 @@ test("起草失败卡片：重试 / 忽略，处理过后没有按钮", () => {
 	assert.deepEqual(buttonsOf(failureCard(f)), ["retry", "ignore"]);
 	assert.deepEqual(buttonsOf(failureCard(f, "retrying")), []);
 	assert.deepEqual(buttonsOf(failureCard(f, "dismissed")), []);
+	assert.match(JSON.stringify(failureCard(f, "failed", "http://x/?task=t1")), /\[在看板查看\]\(http:\/\/x\/\?task=t1\)/);
 });
 
 test("卡片回调只认 Yi，按 value.k 分给任务和失败提醒", async () => {

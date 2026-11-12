@@ -1,5 +1,6 @@
 // 草稿表的读写：状态原子切换（claim）、推送给 Yi、挑出要操作的那条；起草中的消息在内存里记一份
 import { and, desc, eq, inArray } from "drizzle-orm";
+import { draftLink } from "../boardlink.ts";
 import { changed } from "../bus.ts";
 import { OWNER_OPEN_ID } from "../config.ts";
 import { db, getKv, schema, setKv } from "../db/index.ts";
@@ -90,7 +91,7 @@ export function syncCard(id: string, notice = "") {
 	if (!getKv(cardKey(id), false)) return;
 	queuePatch(id, () => {
 		const d = getDraft(id);
-		return d && draftCard(d, notice, draftMrs([d]).get(id));
+		return d && draftCard(d, notice, draftMrs([d]).get(id), draftLink(id));
 	});
 }
 
@@ -164,7 +165,12 @@ export async function pushDraft(source: Source, raw: string, replaces?: string):
 		try {
 			dmId = await sendCardToUserAsBot(
 				OWNER_OPEN_ID,
-				draftCard({ id: "", context: "", agent: null, session: null, route: null, ...row } as Draft, "", mr && { ...mr, ledger }),
+				draftCard(
+					{ id: "", context: "", agent: null, session: null, route: null, ...row } as Draft,
+					"",
+					mr && { ...mr, ledger },
+					draftLink("", source.routeId),
+				),
 			);
 		} catch (e) {
 			// 卡片被平台拒了（结构不对、超长）也不能丢草稿：退回富文本
