@@ -129,19 +129,28 @@ interface Drafting {
 	dismissed?: boolean;
 	/** 分诊成 deep 的私聊：先不起草，等到这个时间（秒）再来 */
 	deferUntil?: number;
+	/** MR 预审：Yi 亲自回复不中止（见 mrStale） */
+	mr?: boolean;
 }
 const drafting = new Map<string, Drafting>();
 
 /** 轮询看到 Yi 在这个聊天里发了消息：正在起草、而且这条算回复了那几条消息，就中止起草 */
 export function abortIfYiReplied(chat: ChatRef, m: Message) {
 	const d = drafting.get(chat.chat_id);
-	if (!d?.key || d.aborted || m.create_time < d.msgs.at(-1)!.create_time || !ownerReplyCovers(chat.chat_mode, m, d.msgs)) return;
+	if (!d?.key || d.aborted || d.mr || m.create_time < d.msgs.at(-1)!.create_time || !ownerReplyCovers(chat.chat_mode, m, d.msgs)) return;
 	// 订阅接续的会话可能被别的聊天共用：只停这个聊天自己的那次运行
 	if (running.get(d.key)?.chatId !== chat.chat_id) return;
 	d.aborted = true;
 	log("起草期间 Yi 已亲自回复，中止运行", chat.chat_id, d.key);
 	abortRun(d.key).catch((e) => log("中止起草失败", d.key, e));
 }
+
+/**
+ * MR 预审的产出是 Yi 过目后发到 MR 上的评论，不是替 Yi 回对方：Yi 在会话里回一句「收到」或回个表情，预审照样要。
+ * 11-12 monkey!810 的 codex 预审开跑一分钟 Yi 回了一句，被当成「已亲自回复」中止、跑完的结果也没推，当天 CR 没出来。
+ * 对方又接着发了（合到后面那条）、Yi 在看板上点了不用起草，照常处理
+ */
+const mrStale = (stale: string | null) => (stale?.startsWith("Yi 已") ? null : stale);
 
 /** 消息来了 sec 秒的时间点（秒）：按最后一条算，轮询晚到的部分不再重复等 */
 const sinceLast = (msgs: Message[], sec: number) => msgs.at(-1)!.create_time / 1000 + sec;
@@ -287,8 +296,9 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 		const saved = getKv<Pending | null>(pendingKey, null)?.stage;
 		const resuming = Boolean(saved && hasRun(`${requestId}${saved.suffix ?? ""}`));
 		// 重启接回、手动重试不等：前者已经在跑，后者是 Yi 自己点的。等的时候不占并发名额
-		if (!resuming && !attempt) await waitBeforeDraft(chat, msgs);
-		const self: Drafting = { msgs };
+		// MR 预审不等 Yi：他回不回都要预审
+		if (!resuming && !attempt && !mrMsg) await waitBeforeDraft(chat, msgs);
+		const self: Drafting = { msgs, mr: Boolean(mrMsg) };
 		drafting.set(chat.chat_id, self);
 		try {
 			await sem.run(() => draftLocked(self));
@@ -335,7 +345,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			}
 			return;
 		}
-		const stale = isDismissed(msgs) ? DISMISSED : await staleReason(chat, msgs);
+		const stale = isDismissed(msgs) ? DISMISSED : await staleReason(chat, msgs).then((r) => (mrMsg ? mrStale(r) : r));
 		// 已经分派过（私聊 deep 档等到点再来、或重启接回）：按作废收尾那条分派，不另记一条跳过
 		if (stale && open) {
 			yiRepliedMidway(chat, source, label, open.id, stale);
@@ -404,6 +414,8 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				} else sid = sessionKey(name, withTier(agents[name] ?? {}, info.tier), chat.chat_id, info);
 			}
 			const agent = withTier(agents[name] ?? {}, info.tier);
+			// 接续到 MR 会话的后续消息也是 mr 档，同样不因 Yi 回复中止
+			if (info.tier === "mr") self.mr = true;
 			const { rule: _rule, ...routeExtra } = info;
 			routeId =
 				open?.id ??
@@ -544,7 +556,9 @@ async function finish(chat: ChatRef, msgs: Message[], first: Stage, requestId: s
 	source.session = sessionId;
 	// 起草可能跑了好几分钟：这期间 Yi 自己回了，草稿就没用了（轮询看到 Yi 的回复时这张草稿还没推，作废不到它）；
 	// 对方又接着发了也不推，后面那条会把这几条一起起草
-	const stale = isDismissed(msgs) ? DISMISSED : await staleReason(chat, msgs);
+	const stale = isDismissed(msgs)
+		? DISMISSED
+		: await staleReason(chat, msgs).then((r) => (stageAgent(stage).tier === "mr" ? mrStale(r) : r));
 	if (stale) {
 		log(`起草期间${stale}，不推草稿`, chat.chat_id, requestId);
 		record({
