@@ -224,7 +224,8 @@
 			"wiki +node-list",
 			"wiki +node-get",
 			"wiki +space-list",
-			"wiki +member-list"
+			"wiki +member-list",
+			"im +chat-messages-list"
 		],
 		"write": [
 			"docs +create",
