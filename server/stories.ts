@@ -142,6 +142,11 @@ export interface TicketInfo {
 }
 
 const ENDED_RE = /终止|关闭|取消|作废|驳回/;
+/**
+ * AB 实验结束了（状态如「prodAB实验结束」），还没全量：AB 巡检比的是 a / b 两组，实验停了就没得比，不用再巡检。
+ * 工单本身没结束，之后走到 prod 部署照样转全量后巡检
+ */
+export const abEnded = (status: string) => /实验结束/.test(status);
 
 /** issue_get_info 的结果：{ issue: { issueInfo, issueParams, steps } } */
 export function parseTicketInfo(key: string, text: string): TicketInfo {
@@ -414,6 +419,7 @@ export async function startPatrol(storyId: string, key: string) {
 	const { s, t } = liveTicket(storyId, key);
 	if (t.patrol && !t.patrol.stopped) throw new DraftError("已经在巡检了");
 	if (t.ended) throw new DraftError(`工单已经结束（${t.status}），不用巡检`);
+	if (abEnded(t.status) && !t.full) throw new DraftError(`AB 实验已经结束（${t.status}），不用巡检`);
 	const observe = await dispatch({
 		agent: "assistant",
 		request: observePrompt(s, key, t.doc?.taskId),
@@ -511,7 +517,7 @@ export function startFullPatrol(storyId: string, key: string, auto = false) {
 const MANUAL_STOP = new Set(["手动停止", "已解绑"]);
 
 /**
- * 刷新后收尾：AB 巡检过的工单一全量就转成全量后巡检；工单结束（没全量就终止了）停巡检并私聊一句；
+ * 刷新后收尾：AB 巡检过的工单一全量就转成全量后巡检；工单结束（没全量就终止了）或 AB 实验结束了，停巡检并私聊一句；
  * 定时任务到期停用、跑完或被删了，工单上也标成停了
  */
 function syncPatrols() {
@@ -543,6 +549,13 @@ function syncPatrols() {
 					void sendToUserAsBot(OWNER_OPEN_ID, `发布工单 ${t.key}（${s.title}）已结束（${t.status}），巡检已自动停止。`).catch((e) =>
 						log("巡检停止通知失败", t.key, e),
 					);
+			} else if (abEnded(t.status) && !t.full) {
+				stopPatrol(s.id, t.key, "AB 实验已结束");
+				if (OWNER_OPEN_ID)
+					void sendToUserAsBot(
+						OWNER_OPEN_ID,
+						`发布工单 ${t.key}（${s.title}）AB 实验已结束（${t.status}），巡检已自动停止；之后全量会自动转全量后巡检。`,
+					).catch((e) => log("巡检停止通知失败", t.key, e));
 			} else if (!sched || !sched.enabled) {
 				patchTicket(s.id, t.key, (x) => ({
 					...x,

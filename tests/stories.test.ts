@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-const { mergeTickets, parseStoryRef, parseTicketInfo, parseTicketKeys, patrolPrompt, observePrompt, ticketContext } =
+const { abEnded, mergeTickets, parseStoryRef, parseTicketInfo, parseTicketKeys, patrolPrompt, observePrompt, ticketContext } =
 	await import("../server/stories.ts");
 
 test("交给助手时带上挂着的发布工单、观察文档链接和首次观察，解绑的不带", () => {
@@ -141,4 +141,11 @@ test("巡检指纹：放量店铺、状态、版本变了才算变，抄送这�
 	assert.equal(ticketFingerprint(issue("1,2", "S50", "b@x.com")), base);
 	assert.notEqual(ticketFingerprint(issue("1,2,3")), base);
 	assert.notEqual(ticketFingerprint(issue("1,2", "S58")), base);
+});
+
+test("AB 实验结束就不用再 AB 巡检：实验中、发布成功都不算", () => {
+	assert.equal(abEnded("prodAB实验结束"), true);
+	assert.equal(abEnded("prodAB实验中"), false);
+	assert.equal(abEnded("prod发布成功"), false);
+	assert.equal(abEnded(""), false);
 });

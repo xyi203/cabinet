@@ -601,6 +601,9 @@ function StoryDrawer({
 													{t.patrol?.stopped && <span>已停止：{t.patrol.stopped}</span>}
 													{t.ended ? (
 														<span>工单已结束，不再巡检</span>
+													) : /实验结束/.test(t.status) && !t.full ? (
+														// 和后端 abEnded 一致：AB 停了没得比；巡检过的工单全量后会自动转全量后巡检
+														<span>AB 实验已结束，不用巡检</span>
 													) : (
 														<button
 															className="linkbtn"
