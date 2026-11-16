@@ -175,11 +175,24 @@ export function sessionKey(name: string, agent: AgentConfig, chatId: string, inf
 	return `${name}-${chatId}`;
 }
 
-/** CR 的冷启动上下文：MR 标题、描述和改动规模，diff 由 agent 自己按需拉（Inline & Spill） */
+/** GitLab 对没权限的项目一律回 404（不暴露项目在不在），有项目没权限是 403 */
+const NO_ACCESS = /\b(403|404)\b|Forbidden|Not Found/i;
+
+/**
+ * CR 的冷启动上下文：MR 标题、描述和改动规模，diff 由 agent 自己按需拉（Inline & Spill）。
+ * 没有代码权限时直接抛错走起草失败：agent 也拉不到 diff，硬跑只会产出一份「无法预审」的草稿；
+ * 失败会提醒 Yi，开通权限后点重试。其他错误（超时、网络）不拦，agent 自己还能再试
+ */
 export async function mrBrief(info: RouteInfo): Promise<string> {
 	try {
 		return (await exec(GLAB_BIN, ["mr", "view", info.mrIid!, "-R", glabRepo(info.mrProject!)], { timeout: 30 })).slice(0, 3000);
 	} catch (e) {
+		const msg = String((e as Error).message);
+		if (NO_ACCESS.test(msg))
+			throw new Error(
+				`没有代码权限：访问不到 ${info.mrProject}!${info.mrIid}（GitLab ${/403|Forbidden/i.test(msg) ? "403" : "404"}），开通这个仓库的权限后点重试`,
+				{ cause: e },
+			);
 		log("读取 MR 失败", info, e);
 		return "";
 	}
