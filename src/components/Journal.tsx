@@ -36,7 +36,7 @@ export function JournalPage() {
 	}
 	const isToday = date === today();
 	return (
-		<div className="flex flex-col gap-4">
+		<div className="flex flex-col gap-8">
 			<div className="flex flex-wrap items-center gap-2">
 				<button type="button" className="btn sm" onClick={() => setDate(shift(date, -1))}>
 					前一天
@@ -62,7 +62,7 @@ export function JournalPage() {
 			{!data && !error && <div className="text-[14px] text-muted">加载中…</div>}
 			{data && (
 				<div className="grid grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-2">
-					<Card className="p-4">
+					<Card>
 						<SectionTitle
 							extra={
 								<button type="button" disabled={busy} onClick={generate} className={`btn sm ${data.summary ? "" : "pri"}`}>
@@ -83,7 +83,7 @@ export function JournalPage() {
 							<div className="text-[14px] text-muted">还没有总结。</div>
 						)}
 					</Card>
-					<Card className="p-4">
+					<Card>
 						<SectionTitle>当天明细</SectionTitle>
 						<Markdown text={body(data.markdown)} />
 					</Card>

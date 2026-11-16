@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
+import { AgentsPage } from "../components/Agents";
 import { AudiencePage } from "../components/Audience";
-import { ChatPage } from "../components/ChatPage";
 import { DevDrawer } from "../components/DevDrawer";
 import { DispatchPage } from "../components/Dispatch";
 import { JournalPage } from "../components/Journal";
@@ -28,7 +28,7 @@ const TITLES = {
 	stories: "需求",
 	cron: "定时",
 	memory: "记忆",
-	chat: "对话",
+	agents: "智能体",
 	ops: "运行",
 	settings: "设置",
 } as const;
@@ -38,14 +38,15 @@ const ALIASES: Record<string, View> = {
 	home: "work",
 	todo: "work",
 	tasks: "work",
-	agents: "work",
 	drafts: "work",
 	failed: "ops",
 	dispatch: "ops",
 	stats: "ops",
 	journal: "ops",
 	schedules: "cron",
-	qa: "chat",
+	// 对话页已并进工作台：在工作台底部输入框说就行
+	qa: "work",
+	chat: "work",
 	prompts: "settings",
 	skills: "settings",
 	audience: "settings",
@@ -56,7 +57,7 @@ const HINTS: Record<View, string> = {
 	stories: "飞书项目里你负责的需求，从开发到发布",
 	cron: "到点让助手做的事",
 	memory: "助手记住的你的习惯和偏好",
-	chat: "直接和助手聊天",
+	agents: "有哪些助手、各自在做什么，模型、档位和提示词",
 	ops: "队列、失败、花费和每日小结",
 	settings: "消息来源、分派规则、提示词、联系人",
 };
@@ -65,7 +66,7 @@ export const Route = createFileRoute("/")({
 	component: Dashboard,
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { view?: View; story?: string; tab?: string; sched?: string; task?: string; dev?: string } => ({
+	): { view?: View; story?: string; tab?: string; sched?: string; task?: string; dev?: string; agent?: string } => ({
 		view: typeof search.view !== "string" ? undefined : search.view in TITLES ? (search.view as View) : ALIASES[search.view],
 		story: typeof search.story === "string" || typeof search.story === "number" ? String(search.story) : undefined,
 		tab: typeof search.tab === "string" ? search.tab : undefined,
@@ -73,6 +74,8 @@ export const Route = createFileRoute("/")({
 		// 任务详情抽屉：task 是看板上的一件事（tsk-xxx、apv:、q:、fail-、qa-、mem:），dev 是没挂在任何事上的 agent 任务
 		task: typeof search.task === "string" || typeof search.task === "number" ? String(search.task) : undefined,
 		dev: typeof search.dev === "string" || typeof search.dev === "number" ? String(search.dev) : undefined,
+		// 智能体页打开的那个助手（_config 是配置文件）
+		agent: typeof search.agent === "string" ? search.agent : undefined,
 	}),
 });
 
@@ -106,7 +109,7 @@ function Dashboard() {
 	const { data: state, error } = useQuery({ queryKey: ["state"], queryFn: fetchState, refetchInterval: connected ? 15_000 : 5_000 });
 	useLiveUpdates(useCallback((c: boolean) => setConnected(c), []));
 
-	const go = (v: View, extra: { story?: string; tab?: string; sched?: string } = {}) =>
+	const go = (v: View, extra: { story?: string; tab?: string; sched?: string; agent?: string } = {}) =>
 		void navigate({ to: "/", search: v === "work" ? {} : { view: v, ...extra } });
 	const tab = search.tab && (TAB_ALIASES[search.tab] ?? search.tab);
 	type Detail = { task?: string; dev?: string; story?: string; sched?: string };
@@ -171,7 +174,7 @@ function Dashboard() {
 					</div>
 				)}
 			</aside>
-			<main className={view === "chat" ? "full" : ""}>
+			<main>
 				{error && !state && <div className="issue">连不上 Cabinet 服务，正在重试。确认服务已经启动。</div>}
 				{state && !connected && <div className="issue">和 Cabinet 服务的连接断了，正在重连，页面上的内容可能不是最新的。</div>}
 				{state && !state.auth.authorized && <AuthBanner />}
@@ -224,13 +227,13 @@ function Dashboard() {
 						<MemoryBoard />
 					</>
 				)}
-				{state && view === "chat" && (
-					<>
-						<div className="phead">
-							<h1>对话</h1>
-						</div>
-						<ChatPage chats={state.chats ?? []} records={state.records.filter((r) => r.kind !== "draft")} now={state.now} />
-					</>
+				{state && view === "agents" && (
+					<AgentsPage
+						agents={state.agents}
+						now={state.now}
+						open={search.agent}
+						onOpen={(name) => go("agents", name ? { agent: name } : {})}
+					/>
 				)}
 				{state && view === "ops" && (
 					<Ops s={state} tab={tab} setTab={(t) => go("ops", { tab: t })} onOpenDev={openDev} onOpen={nav.onOpen} />
@@ -292,7 +295,7 @@ function Ops({
 				</div>
 			</div>
 			<Tabs tabs={OPS_TABS} value={cur} onChange={setTab} />
-			{cur === "队列" && <DispatchPage state={s} onOpenDev={onOpenDev} />}
+			{cur === "队列" && <DispatchPage onOpenDev={onOpenDev} />}
 			{cur === "失败" &&
 				(failed.length ? (
 					<div className="list">

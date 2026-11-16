@@ -95,7 +95,7 @@ body {
 	min-height: 100vh;
 }
 .app > aside {
-	background: var(--panel);
+	background: var(--bg);
 	border-right: 1px solid var(--line);
 	padding: 16px 10px;
 	position: sticky;
@@ -145,8 +145,8 @@ body {
 	background: var(--soft);
 }
 .nav.on {
-	background: var(--accent-soft);
-	color: var(--accent);
+	background: var(--soft);
+	color: var(--text);
 	font-weight: 600;
 }
 .badge {
@@ -165,6 +165,7 @@ body {
 .app > main {
 	padding: 16px 20px 40px;
 	min-width: 0;
+	background: var(--panel);
 }
 .top {
 	display: flex;
@@ -199,8 +200,8 @@ body {
 .panel {
 	background: var(--panel);
 	border: 1px solid var(--line);
-	border-radius: 10px;
-	padding: 14px;
+	border-radius: 12px;
+	padding: 16px;
 }
 .panel h3 {
 	margin: 0 0 10px;
@@ -245,7 +246,7 @@ body {
 .card {
 	background: var(--panel);
 	border: 1px solid var(--line);
-	border-radius: 10px;
+	border-radius: 12px;
 	padding: 12px 14px;
 	margin-bottom: 10px;
 }
@@ -379,16 +380,16 @@ blockquote {
 	flex-wrap: wrap;
 }
 .btn {
-	border: 1px solid var(--line);
-	background: var(--panel);
+	border: 1px solid transparent;
+	background: var(--soft);
 	color: var(--text);
-	border-radius: 6px;
+	border-radius: 8px;
 	padding: 7px 14px;
 	font: inherit;
 	cursor: pointer;
 }
 .btn:hover {
-	background: var(--soft);
+	background: var(--line);
 }
 .btn.primary,
 .btn.pri {
@@ -883,40 +884,12 @@ pre.diff {
 	gap: 8px;
 	flex-wrap: wrap;
 }
-.newtask {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	margin-bottom: 12px;
-}
-.newtask .row {
-	display: flex;
-	gap: 8px;
-	flex-wrap: wrap;
-	align-items: center;
-}
-.newtask select,
-.newtask input,
-.newtask textarea {
-	font: inherit;
-	color: var(--text);
-	background: var(--bg);
-	border: 1px solid var(--line);
-	border-radius: 6px;
-	padding: 6px 8px;
-}
-.newtask textarea {
-	min-height: 80px;
-	resize: vertical;
-	width: 100%;
-}
 .row-inline {
 	display: flex;
 	gap: 8px;
 	flex-wrap: wrap;
 }
-.row-inline select,
-.newtask select {
+.row-inline select {
 	max-width: 100%;
 }
 
@@ -1048,123 +1021,6 @@ dialog.confirm::backdrop {
 	justify-content: flex-end;
 	gap: 8px;
 	margin-top: 18px;
-}
-
-.chatpage {
-	display: grid;
-	grid-template-columns: 240px 1fr;
-	gap: 16px;
-	height: calc(100vh - 120px);
-	min-height: 420px;
-}
-.chatpage aside {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	min-height: 0;
-}
-.chatpage aside .new {
-	width: 100%;
-}
-.chatpage .sessions {
-	flex: 1;
-	overflow: auto;
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-}
-.chatpage .session {
-	padding: 8px 10px;
-	border-radius: 6px;
-	cursor: pointer;
-}
-.chatpage .session:hover {
-	background: var(--soft);
-}
-.chatpage .session.on {
-	background: var(--accent-soft);
-}
-.chatpage .session .t {
-	font-size: 14px;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.chatpage .session .m {
-	font-size: 12px;
-	color: var(--muted);
-	margin-top: 2px;
-}
-.chatpage .qa-records {
-	max-height: 40%;
-	overflow: auto;
-	font-size: 14px;
-}
-.chatpage .qa-records summary {
-	cursor: pointer;
-	color: var(--muted);
-	padding: 4px 0;
-}
-.chatpage main {
-	display: flex;
-	flex-direction: column;
-	min-height: 0;
-	background: var(--panel);
-	border: 1px solid var(--line);
-	border-radius: 10px;
-	overflow: hidden;
-}
-.chatpage .thread {
-	flex: 1;
-	overflow: auto;
-	padding: 16px;
-}
-.chatpage .thread .empty {
-	color: var(--muted);
-	text-align: center;
-	margin-top: 20vh;
-	line-height: 1.8;
-}
-.chatpage .composer {
-	border-top: 1px solid var(--line);
-	padding: 10px 12px;
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-}
-.chatpage .composer textarea {
-	width: 100%;
-	resize: none;
-	border: 1px solid var(--line);
-	border-radius: 6px;
-	padding: 8px 10px;
-	font: inherit;
-	background: var(--panel);
-	color: var(--text);
-	box-sizing: border-box;
-}
-.chatpage .composer .row {
-	display: flex;
-	justify-content: flex-end;
-	align-items: center;
-	gap: 8px;
-}
-.chatpage .composer .err {
-	color: var(--bad);
-	font-size: 12px;
-	margin-right: auto;
-}
-@media (max-width: 1024px) {
-	.chatpage {
-		grid-template-columns: 1fr;
-		height: auto;
-	}
-	.chatpage aside .sessions {
-		max-height: 30vh;
-	}
-	.chatpage main {
-		height: 70vh;
-	}
 }
 
 /* 需求任务抽屉：关联的任务、发布工单。一组是一个列表，行之间用分割线，不再一行一个框 */
@@ -1385,14 +1241,7 @@ code,
 .app > main {
 	padding: 22px 28px 60px;
 }
-.app > main.full {
-	height: 100vh;
-	height: 100dvh;
-	display: flex;
-	flex-direction: column;
-	padding-bottom: 16px;
-}
-main.full .phead {
+.phead {
 	flex: none;
 }
 main.full .chatpage {
@@ -1501,9 +1350,9 @@ main.full .chatpage {
 	flex: 1;
 }
 input.in {
-	border: 1px solid var(--line);
-	border-radius: 6px;
-	background: var(--panel);
+	border: 1px solid transparent;
+	border-radius: 8px;
+	background: var(--soft);
 	color: var(--text);
 	padding: 4px 10px;
 	font: inherit;
@@ -1517,7 +1366,7 @@ input.in.wide {
 .btn.sm {
 	padding: 2px 10px;
 	font-size: 14px;
-	border-radius: 6px;
+	border-radius: 8px;
 	white-space: nowrap;
 }
 .btn.ghost {
@@ -1575,11 +1424,10 @@ details.more[open] > summary h2::before {
 	border: 1px dashed var(--line);
 	border-radius: 10px;
 }
+/* 一组行：照设置页，不套外框，行与行之间一条细线 */
 .list {
-	background: var(--panel);
-	border: 1px solid var(--line);
-	border-radius: 10px;
-	overflow: hidden;
+	border-top: 1px solid var(--line);
+	border-bottom: 1px solid var(--line);
 }
 .trow {
 	display: grid;
@@ -1827,11 +1675,15 @@ button.story:hover {
 	grid-template-columns: 44px minmax(0, 1fr);
 	gap: 10px;
 }
+/* 时间和右边第一行对齐：发言人、系统行都是 12px，同字号同行高天然对齐；卡片第一行是标题，要让出卡片的边框和上内边距。
+ * 不用 align-items: baseline：卡片里有自动滚到底的执行记录，基线会跟着滚动把整张卡顶上去盖住上一行 */
 .ev > .tm {
 	font-variant-numeric: tabular-nums;
 	font-size: 12px;
 	color: var(--muted);
-	padding-top: 2px;
+}
+.ev > .tm:has(+ div > .out:first-child) {
+	padding-top: 11px;
 }
 .ev .who {
 	font-size: 12px;
@@ -1863,28 +1715,26 @@ button.story:hover {
 }
 .out {
 	border: 1px solid var(--line);
-	border-radius: 10px;
+	border-radius: 12px;
 	overflow: hidden;
 }
 .out.need {
 	border-color: var(--zhu);
 }
 .out .oh {
-	padding: 7px 12px;
+	padding: 10px 14px 0;
 	font-size: 12px;
 	font-weight: 600;
-	color: var(--text-2);
-	background: var(--soft);
+	color: var(--muted);
 	display: flex;
 	justify-content: space-between;
 	gap: 8px;
 }
 .out.need .oh {
-	background: var(--zhu-soft);
 	color: var(--zhu);
 }
 .out .ob {
-	padding: 10px 12px;
+	padding: 8px 14px 12px;
 	display: grid;
 	gap: 8px;
 }
@@ -1971,7 +1821,7 @@ pre.cmd {
 	display: grid;
 	grid-template-columns: 10px minmax(0, 1fr) auto;
 	gap: 12px;
-	padding: 11px 16px;
+	padding: 14px 4px;
 	border-top: 1px solid var(--line);
 	align-items: center;
 }

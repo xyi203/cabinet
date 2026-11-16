@@ -354,9 +354,32 @@ function agentStats(records: RecordRow[], today: string) {
 		const recs = records.filter((r) => r.agent === name && isToday(r.ts));
 		const own = tasks.filter((t) => t.agent === name && isToday(t.updated));
 		const cost = recs.reduce((c, r) => c + ((r.usage as any)?.cost ?? 0), 0) + own.reduce((c, t) => c + (t.usage?.cost ?? 0), 0);
+		// 最近活跃：最近一条运行记录或 agent 任务；records 只取了最近 1000 条，更早的不算
+		const last = Math.max(
+			0,
+			...records.filter((r) => r.agent === name).map((r) => r.ts),
+			...tasks.filter((t) => t.agent === name).map((t) => t.updated),
+		);
 		return {
 			name,
-			desc: a.desc ?? "",
+			// 智能体页展示配置用：提示词文件（config/ 下的相对路径）、档位、能用什么
+			prompt: raw.prompt ?? null,
+			runner: raw.runner ?? "pi",
+			tiers: Object.entries(raw.tiers ?? {}).map(([k, t]) => ({
+				name: k,
+				desc: t.desc ?? "",
+				model: t.model ?? raw.model ?? PI_MODEL,
+				thinking: t.thinking ?? raw.thinking ?? PI_THINKING,
+				prompt: t.prompt ?? null,
+				runner: t.runner ?? raw.runner ?? "pi",
+			})),
+			tools: raw.tools ?? null,
+			skills: raw.skills ?? null,
+			mcp: raw.mcp ?? null,
+			bash: raw.bash ?? null,
+			lastActive: last || null,
+			// 说明用助手自己的；model / thinking 是看板派活那一档的
+			desc: raw.desc ?? a.desc ?? "",
 			model: a.model ?? PI_MODEL,
 			thinking: a.thinking ?? PI_THINKING,
 			manual: Boolean(a.manual),

@@ -7,7 +7,6 @@ import { type State, type TaskView, createAgentTask, fetchDispatch, fetchSticker
 import { AGENT_NAME, ago, money, pillOf, titleOf, waitingOn } from "../lib/format";
 import { type Actions, type PickItem, type Target, Choices, actionsOf, draftOf, matchText, targetsOf, useRunner } from "./Choices";
 import { Docked, Embedded } from "./Drawer";
-import { NewTask } from "./NewTask";
 import { TaskPanel } from "./TaskPanel";
 import { toast } from "./Toast";
 
@@ -107,7 +106,6 @@ export function Workbench({
 		// 只在第一次进来时自动选；之后「＋ 新建」清空选中不能又被选回去
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
-	const [creating, setCreating] = useState(false);
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const nextWaiting = () => wait.find((t) => t.id !== cur?.id)?.id;
 	const next = () => onSelect(nextWaiting() ?? cur?.id);
@@ -148,16 +146,15 @@ export function Workbench({
 	const count = (k: Filter) => (k === "all" ? 0 : (sections.find(([x]) => x === k)?.[2].length ?? 0));
 	return (
 		<div className="-mx-7 -mt-[22px] -mb-[60px] grid h-screen grid-cols-[300px_minmax(0,1fr)] overflow-hidden">
-			<aside className="flex min-h-0 flex-col border-r border-line bg-panel">
+			<aside className="flex min-h-0 flex-col border-r border-line bg-bg">
 				<div className="flex items-center gap-2 px-3 pt-4 pb-1">
 					<h1 className="m-0 text-[16px] font-semibold">工作台</h1>
 					<span className="flex-1" />
 					<button
 						className="btn sm ghost"
-						title="选助手、仓库、模型派一件事；也可以直接在下面的输入框说"
+						title="在下面的输入框说一句，交给助手"
 						onClick={() => {
 							onSelect(undefined);
-							setCreating(true);
 							inputRef.current?.focus();
 						}}
 					>
@@ -209,7 +206,7 @@ export function Workbench({
 					})}
 				</div>
 			</aside>
-			<div className="flex min-h-0 flex-col bg-bg">
+			<div className="flex min-h-0 flex-col bg-panel">
 				<div className="min-h-0 flex-1 overflow-auto px-8 pt-6 pb-4">
 					{s.issues.length > 0 && (
 						<div className="issue">
@@ -233,26 +230,10 @@ export function Workbench({
 								</Docked.Provider>
 							</Embedded.Provider>
 						</div>
-					) : creating ? (
-						<div className="mx-auto max-w-[760px]">
-							<NewTask
-								agents={s.agents}
-								onCreated={() => {
-									setCreating(false);
-									toast("已交给助手，可以在「正在运行」看进度");
-								}}
-							/>
-						</div>
 					) : (
 						<div className="mx-auto mt-[20vh] max-w-[760px] text-center">
 							<div className="text-[20px] font-semibold">{open ? "这件事已经不在工作台里了" : "要助手做点什么？"}</div>
-							<div className="mt-1 text-[14px] text-muted">
-								在下面说一句，会新建一件事交给助手。要选开发助手、仓库或模型，点
-								<button className="link" onClick={() => setCreating(true)}>
-									详细设置
-								</button>
-								。
-							</div>
+							<div className="mt-1 text-[14px] text-muted">在下面说一句，会新建一件事交给助手。</div>
 						</div>
 					)}
 				</div>
@@ -280,7 +261,7 @@ function Item({ t, on, onClick }: { t: TaskView; on: boolean; onClick: () => voi
 			onClick={onClick}
 			title={t.label || undefined}
 			aria-current={on || undefined}
-			className={`flex w-full flex-col gap-0.5 rounded-[6px] border-0 px-2 py-1.5 text-left ${on ? "bg-accent-soft" : "bg-transparent hover:bg-soft"}`}
+			className={`flex w-full flex-col gap-0.5 rounded-[6px] border-0 px-2 py-1.5 text-left ${on ? "bg-soft" : "bg-transparent hover:bg-soft"}`}
 		>
 			<span className="flex w-full min-w-0 items-center gap-2">
 				<span className={`pill shrink-0 ${cls}`}>{label}</span>
@@ -318,7 +299,17 @@ function Dock({
 	const [closed, setClosed] = useState<string>();
 	const stamp = cur ? `${cur.id}:${cur.status}:${cur.need}:${cur.drafts.at(-1) ?? ""}:${cur.approvals.length}` : "";
 	const open = !!cur && closed !== stamp;
-	const card = open && actions.options.length > 0;
+	// 选项卡只给要你拍板的事（发送、审批、重试……）；进行中 / 排队的停止、标记完成，待看的「看完了」，
+	// 草稿的「已经在别处回过了」（side）都不是决定，放在输入框上
+	const decide = !!cur && waitingOn(cur) && cur.need !== "read";
+	const cardOptions = decide ? actions.options.filter((o) => !o.side) : [];
+	const card = open && cardOptions.length > 0;
+	const side = cur ? (decide ? actions.options.filter((o) => o.side) : actions.options) : [];
+	const stop = side.find((o) => o.key === "stop");
+	const links = side.filter((o) => o !== stop);
+	const runSide = async (o: (typeof side)[number]) => {
+		if ((await exec(() => o.run(""))) && o.advance) onAdvance();
+	};
 	const answering = open && (!!actions.typeIn || actions.slash.length > 0);
 	const assistant = s.agents.find((a) => a.name === "assistant")?.name ?? s.agents[0]?.name ?? "assistant";
 	const placeholder = answering
@@ -341,24 +332,28 @@ function Dock({
 		<div className="px-8 pb-6">
 			<div className="mx-auto flex max-w-[860px] flex-col gap-2">
 				{card && cur && (
-					<div className="relative rounded-[10px] border border-line bg-panel px-2 py-2 shadow-[0_4px_20px_var(--shade)]">
-						<button
-							className="absolute -top-2.5 -right-2.5 flex h-6 w-6 items-center justify-center rounded-full border border-line bg-soft text-[12px] text-text-2 hover:bg-panel"
-							aria-label="先不选，关掉"
-							title="先不选，关掉"
-							onClick={() => setClosed(stamp)}
-						>
-							✕
-						</button>
-						<div className="truncate px-2 pb-1 text-[12px] text-muted">{titleOf(cur)}</div>
-						<Choices key={stamp} actions={actions} onAdvance={onAdvance} />
+					<div className="rounded-[12px] border border-line bg-panel px-2 py-2 shadow-[0_2px_12px_var(--shade)]">
+						<div className="flex items-center gap-2 px-2 pb-1">
+							<span className="flex-1 truncate text-[12px] text-muted">{titleOf(cur)}</span>
+							<button
+								className="border-0 bg-transparent px-1 text-[12px] text-muted hover:text-text"
+								aria-label="先不选，关掉"
+								title="先不选，关掉"
+								onClick={() => setClosed(stamp)}
+							>
+								✕
+							</button>
+						</div>
+						<Choices key={stamp} actions={{ ...actions, options: cardOptions }} onAdvance={onAdvance} />
 					</div>
 				)}
-				<div className="flex items-end gap-2 rounded-[10px] border border-line bg-panel px-3 py-2 focus-within:border-accent">
+				<div className="flex items-end gap-2 rounded-[14px] border border-line bg-panel py-1.5 pr-1.5 pl-4 transition-colors focus-within:border-text-2">
 					<textarea
 						ref={inputRef}
 						rows={1}
-						className="block max-h-40 min-h-[24px] flex-1 resize-none border-0 bg-transparent py-1 font-[inherit] text-[14px] text-text outline-none"
+						// 全局 textarea:focus-visible 的描边不在 layer 里，压过 utility，得用 ! ；外框已经表示焦点，不再叠一层
+						className="block max-h-40 min-h-8 flex-1 resize-none border-0 bg-transparent py-1.5 font-[inherit] text-[14px] leading-5 text-text outline-none focus-visible:outline-none!"
+						title={answering ? "回车发出就是回答这件事；Esc 回到选项，Tab 下一件" : "回车交给助手；Tab 下一件等你的事，j / k 上下切换"}
 						placeholder={placeholder}
 						value={text}
 						disabled={busy}
@@ -380,18 +375,52 @@ function Dock({
 							if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur();
 						}}
 					/>
-					<button className="btn sm pri" disabled={busy || !text.trim()} onClick={() => void submit()} aria-label="发出">
-						↑
-					</button>
+					{/* 照 Claude：有字才出回车键；在跑且没打字时是停止键；都不是就什么也不放 */}
+					{text.trim() ? (
+						<button
+							className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] border-0 bg-transparent text-text-2 hover:bg-soft hover:text-text disabled:opacity-50"
+							disabled={busy}
+							onClick={() => void submit()}
+							aria-label="发出"
+							title="发出（回车）"
+						>
+							<svg
+								width="18"
+								height="18"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="1.8"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								aria-hidden
+							>
+								<path d="M20 5v6a4 4 0 0 1-4 4H5" />
+								<path d="m9 10-5 5 5 5" />
+							</svg>
+						</button>
+					) : stop ? (
+						<button
+							className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] border-0 bg-transparent text-text-2 hover:bg-soft hover:text-text disabled:opacity-50"
+							disabled={busy}
+							onClick={() => void runSide(stop)}
+							aria-label="停止"
+							title="停止"
+						>
+							<span className="block h-3 w-3 rounded-[3px] bg-current" />
+						</button>
+					) : null}
 				</div>
-				<div className="px-1 text-[12px] text-muted">
-					{hint ??
-						(answering
-							? "回车发出就是回答这件事；Esc 回到选项，Tab 下一件"
-							: card
-								? "数字键选上面的选项；回车把这句话交给助手，Tab 下一件"
-								: "回车交给助手，Tab 跳到下一件等你的事，j / k 上下切换")}
-				</div>
+				{(hint || links.length > 0) && (
+					<div className="flex items-center gap-3 px-2 text-[12px] text-muted">
+						<span className="flex-1">{hint}</span>
+						{links.map((o) => (
+							<button key={o.key} className="link text-[12px]" disabled={busy} onClick={() => void runSide(o)}>
+								{o.label}
+							</button>
+						))}
+					</div>
+				)}
 			</div>
 		</div>
 	);

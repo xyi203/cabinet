@@ -4,7 +4,7 @@ import { type PromptFile, fetchPrompt, fetchPromptHistory, fetchPromptVersion, f
 import { AGENT_NAME, time, when } from "../lib/format";
 import { confirmDialog } from "./Confirm";
 import { toast } from "./Toast";
-import { Card, Segmented } from "./ui";
+import { Segmented } from "./ui";
 
 type Line = { t: " " | "+" | "-"; s: string };
 
@@ -82,7 +82,8 @@ function label(f: PromptFile): [string, string] {
 
 type Tab = "edit" | "diff" | "history";
 
-function Editor({ file }: { file: PromptFile }) {
+/** 一个配置 / 提示词文件的编辑器：编辑、看改动、历史版本；智能体页也用它 */
+export function PromptEditor({ file }: { file: PromptFile }) {
 	const qc = useQueryClient();
 	const { data } = useQuery({ queryKey: ["prompt", file.path], queryFn: () => fetchPrompt(file.path) });
 	const { data: history } = useQuery({ queryKey: ["prompt-history", file.path], queryFn: () => fetchPromptHistory(file.path) });
@@ -150,7 +151,7 @@ function Editor({ file }: { file: PromptFile }) {
 	}
 
 	return (
-		<Card className="flex min-w-0 flex-1 flex-col p-4">
+		<div className="flex min-w-0 flex-1 flex-col">
 			<div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
 				<h2 className="m-0 text-[14px] font-semibold text-text">{name}</h2>
 				<code className="break-all text-muted">{file.path}</code>
@@ -206,7 +207,7 @@ function Editor({ file }: { file: PromptFile }) {
 								}
 							}}
 							// JSON 是配置，用等宽；提示词是自然语言，用正文字体
-							className={`h-[62vh] w-full resize-y rounded-md border bg-bg p-3 text-text ${err ? "border-bad" : "border-line"} ${
+							className={`h-[62vh] w-full resize-y rounded-[10px] border bg-bg p-3 text-text ${err ? "border-bad" : "border-transparent"} ${
 								file.json ? "code leading-5 [tab-size:2]" : "text-[14px] leading-[1.7] [font-family:inherit]"
 							}`}
 						/>
@@ -251,21 +252,20 @@ function Editor({ file }: { file: PromptFile }) {
 					</div>
 				)}
 			</div>
-		</Card>
+		</div>
 	);
 }
 
-/** 提示词：给助手的规则和配置，在这里改、看历史、恢复旧版本；改完下一次运行就生效，改动留在工作区由你提交 */
+/** 提示词：所有助手共用的规则（各助手自己的在智能体页），在这里改、看历史、恢复旧版本；改完下一次运行就生效，改动留在工作区由你提交 */
 export function PromptsPage() {
-	const { data: files, error } = useQuery({ queryKey: ["prompts"], queryFn: fetchPrompts });
+	const { data: all, error } = useQuery({ queryKey: ["prompts"], queryFn: fetchPrompts });
+	// 各助手的提示词和 agents.json 在智能体页改
+	const files = all?.filter((f) => f.path !== "config/agents.json" && !f.path.startsWith("config/agents/"));
 	const [sel, setSel] = useState<string | null>(null);
 	const file = files?.find((f) => f.path === sel) ?? files?.[0];
 	if (error && !files) return <div className="text-[14px] text-bad">读取失败：{(error as Error).message}</div>;
 	if (!files) return <div className="py-10 text-center text-[14px] text-muted">加载中…</div>;
-	const groups: Array<[string, PromptFile[]]> = [
-		["通用", files.filter((f) => !f.path.startsWith("config/agents/"))],
-		["各助手", files.filter((f) => f.path.startsWith("config/agents/"))],
-	];
+	const groups: Array<[string, PromptFile[]]> = [["通用", files]];
 	return (
 		<div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:gap-4">
 			{/* 窄屏放不下侧栏，换成下拉选择 */}
@@ -285,7 +285,7 @@ export function PromptsPage() {
 					</optgroup>
 				))}
 			</select>
-			<Card className="hidden w-64 shrink-0 p-2 lg:block">
+			<nav className="hidden w-60 shrink-0 lg:block">
 				{groups.map(([g, fs]) => (
 					<div key={g} className="mt-2 first:mt-0">
 						<div className="px-3 pt-1 pb-1 text-[12px] text-muted">{g}</div>
@@ -298,10 +298,10 @@ export function PromptsPage() {
 									type="button"
 									aria-current={on}
 									onClick={() => setSel(f.path)}
-									className={`block w-full cursor-pointer rounded-md border-0 px-3 py-2 text-left ${on ? "bg-accent-soft" : "bg-transparent hover:bg-soft"}`}
+									className={`block w-full cursor-pointer rounded-[8px] border-0 px-3 py-2 text-left ${on ? "bg-soft" : "bg-transparent hover:bg-soft"}`}
 								>
 									<div className="flex items-baseline gap-2">
-										<span className={`text-[14px] font-semibold ${on ? "text-accent" : "text-text"}`}>{n}</span>
+										<span className={`text-[14px] ${on ? "font-semibold" : ""} text-text`}>{n}</span>
 										{f.dirty && (
 											<span className="ml-auto text-[12px] text-muted" title="已保存的改动还没提交到 git">
 												未提交
@@ -314,8 +314,8 @@ export function PromptsPage() {
 						})}
 					</div>
 				))}
-			</Card>
-			{file && <Editor key={file.path} file={file} />}
+			</nav>
+			{file && <PromptEditor key={file.path} file={file} />}
 		</div>
 	);
 }

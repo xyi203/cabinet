@@ -25,14 +25,20 @@ export const pct = (x: number) => `${Math.round(x * 100)}%`;
 /** 耗时：不到 10 秒带一位小数，不到一分钟按秒，之后同 span */
 export const dur = (sec: number) => (sec < 10 ? `${Math.max(0, sec).toFixed(1)} 秒` : sec < 60 ? `${Math.round(sec)} 秒` : span(sec));
 
+/** 一块内容：照设置页，不套边框，靠标题和间距分组 */
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-	return <div className={`rounded-[10px] border border-line bg-panel ${className}`}>{children}</div>;
+	return <section className={`min-w-0 ${className}`}>{children}</section>;
+}
+
+/** 指标格：浅灰底块，不描边 */
+function Tile({ children }: { children: ReactNode }) {
+	return <div className="rounded-[12px] bg-bg px-4 py-3">{children}</div>;
 }
 
 export function SectionTitle({ children, extra }: { children: ReactNode; extra?: ReactNode }) {
 	return (
-		<div className="mb-2 flex items-center gap-2">
-			<h2 className="m-0 text-[14px] font-semibold text-text">{children}</h2>
+		<div className="mb-1 flex items-center gap-2">
+			<h2 className="m-0 text-[16px] font-semibold text-text">{children}</h2>
 			<div className="ml-auto text-[12px] text-muted">{extra}</div>
 		</div>
 	);
@@ -41,13 +47,13 @@ export function SectionTitle({ children, extra }: { children: ReactNode; extra?:
 /** 指标卡：标签、数值、补充说明 */
 export function StatTile({ label, value, sub, title }: { label: string; value: ReactNode; sub?: ReactNode; title?: string }) {
 	return (
-		<Card className="px-4 py-3">
+		<Tile>
 			<div className="text-[12px] text-muted" title={title}>
 				{label}
 			</div>
 			<div className="mt-1 text-[20px] leading-tight font-semibold text-text tabular-nums">{value}</div>
 			{sub != null && <div className="mt-1 text-[12px] text-muted">{sub}</div>}
-		</Card>
+		</Tile>
 	);
 }
 
@@ -61,15 +67,15 @@ function severity(u: number) {
 export function QuotaMeter({ label, w, now, stale }: { label: string; w?: QuotaWindow; now: number; stale?: string }) {
 	if (!w)
 		return (
-			<Card className="px-4 py-3">
+			<Tile>
 				<div className="text-[12px] text-muted">{label}</div>
 				<div className="mt-1 text-[20px] leading-tight font-semibold text-muted">—</div>
 				<div className="mt-1 text-[12px] text-muted">暂时查不到</div>
-			</Card>
+			</Tile>
 		);
 	const s = severity(w.utilization);
 	return (
-		<Card className="px-4 py-3">
+		<Tile>
 			<div className="flex items-center text-[12px] text-muted">
 				{label}
 				{stale && (
@@ -90,7 +96,7 @@ export function QuotaMeter({ label, w, now, stale }: { label: string; w?: QuotaW
 				<div className={`h-full rounded-full ${s.fill}`} style={{ width: `${Math.min(100, w.utilization * 100)}%` }} />
 			</div>
 			<div className="mt-1.5 text-[12px] text-muted">{w.resetsAt ? `${span(w.resetsAt - now)} 后重置` : "重置时间未知"}</div>
-		</Card>
+		</Tile>
 	);
 }
 
@@ -105,14 +111,17 @@ export function Segmented<T extends string>({
 	onChange: (v: T) => void;
 }) {
 	return (
-		<div className="inline-flex rounded-lg border border-line bg-panel p-0.5">
+		<div className="inline-flex rounded-[10px] bg-soft p-0.5">
 			{options.map((o) => (
 				<button
 					key={o.value}
 					type="button"
 					onClick={() => onChange(o.value)}
-					className={`cursor-pointer rounded-md border-0 px-3 py-1 text-[14px] ${
-						o.value === value ? "bg-accent-soft font-semibold text-accent" : "bg-transparent text-muted hover:text-text"
+					// 照 Claude 的分段控件：灰色底槽，选中的那段白底
+					className={`cursor-pointer rounded-[8px] border-0 px-3 py-1 text-[14px] ${
+						o.value === value
+							? "bg-panel font-semibold text-text shadow-[0_1px_2px_var(--shade)]"
+							: "bg-transparent text-text-2 hover:text-text"
 					}`}
 				>
 					{o.label}

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type DispatchSuspect, type State, fetchDispatch, post } from "../lib/api";
-import { AGENT_NAME, STATUS, money, when } from "../lib/format";
+import { type DispatchSuspect, fetchDispatch, post } from "../lib/api";
+import { AGENT_NAME, STATUS, when } from "../lib/format";
 import { confirmDialog } from "./Confirm";
 import { TIER_NAME } from "./Stats";
 import { toast } from "./Toast";
@@ -8,14 +8,11 @@ import { Card, SectionTitle, StatTile, dur, span } from "./ui";
 
 const CHANNEL: Record<string, string> = { lark: "飞书", meego: "飞书项目", bot: "机器人", board: "看板", alert: "告警", cron: "定时" };
 const OUTCOME: Record<string, string> = { ...STATUS, done: "完成", pushed: "已推送", rerouted: "改派", none: "不处理" };
-const THINKING: Record<string, string> = { low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高" };
 /** 分派依据：去掉「分诊 answer：」这类内部前缀（类型已经单独显示），兜底换成人话 */
 const reason = (rule: string) => (rule === "兜底" ? "没有匹配的规则，交给默认助手" : rule.replace(/^分诊 \w+：/, ""));
-/** 助手说明里开头的「（手动指派）」括号去掉：说明本身已经讲清楚了 */
-const desc = (s: string) => s.replace(/^（[^）]*）/, "");
 
 /** 队列：现在谁在运行、谁在排队、需要留意的问题，以及最近每条消息分派给了谁、多久处理完 */
-export function DispatchPage({ state, onOpenDev }: { state: State; onOpenDev: (id: string) => void }) {
+export function DispatchPage({ onOpenDev }: { onOpenDev: (id: string) => void }) {
 	const qc = useQueryClient();
 	const { data: d, error } = useQuery({ queryKey: ["dispatch"], queryFn: fetchDispatch, refetchInterval: 5_000 });
 	async function act(url: string, body: unknown, done: string) {
@@ -51,7 +48,7 @@ export function DispatchPage({ state, onOpenDev }: { state: State; onOpenDev: (i
 	const busy = cap - d.queue.free;
 	const row = "flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line py-2.5 first:border-t-0";
 	return (
-		<div className="flex flex-col gap-4">
+		<div className="flex flex-col gap-8">
 			<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
 				<StatTile label="同时运行" value={`${busy} / ${cap}`} sub={d.queue.free > 0 ? `还能再开 ${d.queue.free} 个` : "已满，新的要排队"} />
 				<StatTile label="排队" value={d.queue.waiting} sub={d.queue.waiting ? "在等前面的运行完" : "不用等"} />
@@ -59,7 +56,7 @@ export function DispatchPage({ state, onOpenDev }: { state: State; onOpenDev: (i
 				<StatTile label="需要留意" value={d.suspects.length} sub={d.suspects.length ? "见下方" : "一切正常"} />
 			</div>
 			{d.suspects.length > 0 && (
-				<Card className="p-4">
+				<Card>
 					<SectionTitle>需要留意</SectionTitle>
 					<div className="flex flex-col">
 						{d.suspects.map((s) => (
@@ -79,8 +76,8 @@ export function DispatchPage({ state, onOpenDev }: { state: State; onOpenDev: (i
 					</div>
 				</Card>
 			)}
-			<div className="grid gap-4 lg:grid-cols-2">
-				<Card className="p-4">
+			<div className="grid gap-8 lg:grid-cols-2">
+				<Card>
 					<SectionTitle extra={d.running.length ? `${d.running.length} 个` : undefined}>正在运行</SectionTitle>
 					{d.running.length ? (
 						d.running.map((r) => (
@@ -100,7 +97,7 @@ export function DispatchPage({ state, onOpenDev }: { state: State; onOpenDev: (i
 						<div className="text-[14px] text-muted">没有正在运行的。</div>
 					)}
 				</Card>
-				<Card className="p-4">
+				<Card>
 					<SectionTitle extra={d.inflight.length ? `${d.inflight.length} 条` : undefined}>待起草</SectionTitle>
 					{d.inflight.length ? (
 						d.inflight.map((i) => (
@@ -127,33 +124,7 @@ export function DispatchPage({ state, onOpenDev }: { state: State; onOpenDev: (i
 					)}
 				</Card>
 			</div>
-			<Card className="p-4">
-				<SectionTitle>助手</SectionTitle>
-				<div className="grid md:grid-cols-3 md:gap-x-6">
-					{state.agents.map((a) => (
-						<div key={a.name} className="flex flex-col gap-1 border-t border-line py-3 first:border-t-0 md:border-t-0 md:py-0">
-							<div className="flex items-center gap-2">
-								<span className="text-[14px] font-semibold text-text">{AGENT_NAME[a.name] ?? a.name}</span>
-								<span className={`ml-auto text-[12px] ${a.running.length ? "text-ok" : "text-muted"}`}>
-									{a.running.length ? `${a.running.length} 个在运行` : "空闲"}
-								</span>
-							</div>
-							<div className="text-[12px] text-text-2">{desc(a.desc)}</div>
-							<div className="flex flex-wrap gap-x-3 text-[12px] text-muted">
-								<span>{a.model.split("/").pop()}</span>
-								{a.thinking && <span>思考强度：{THINKING[a.thinking] ?? a.thinking}</span>}
-								<span>{a.readOnly ? "只读" : "能改代码"}</span>
-							</div>
-							<div className="flex flex-wrap gap-x-3 text-[12px] text-muted tabular-nums">
-								<span>今天运行 {a.runs} 次</span>
-								{a.failed > 0 && <span className="text-bad">失败 {a.failed} 次</span>}
-								<span>花费 {money(a.cost)}</span>
-							</div>
-						</div>
-					))}
-				</div>
-			</Card>
-			<Card className="p-4">
+			<Card>
 				<SectionTitle extra={`最近 ${d.routes.length} 条`}>最近分派</SectionTitle>
 				<div className="text-[12px]">
 					{/* 不够宽时一条占三行（时间来源 + 结果 / 内容 / 分派给）；够宽时一行四列 */}

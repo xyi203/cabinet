@@ -26,6 +26,8 @@ export interface Option {
 	neg?: boolean;
 	/** 办完这件事，跳到下一件 */
 	advance?: boolean;
+	/** 不算选项卡里的决定（如「已经在别处回过了」）：放在输入框下的小链接里 */
+	side?: boolean;
 	/** 选了以后就地出一排可选的（表情、表情包），选中的 key 和类型交给 run */
 	pick?: PickItem[];
 	/** 选项右边的附加控件（发到哪），点它不会触发选项本身 */
@@ -107,9 +109,10 @@ export function actionsOf(t: TaskView | undefined, c: Ctx): Actions {
 	const draft = draftOf(t, s);
 	const dev = devOf(t, s);
 	const devRunning = dev && (dev.status === "running" || dev.status === "pushing");
+	// 进行中 / 排队的事不等你拍板：它的选项不进选项卡，停止在输入框的按钮上，其余是输入框下的小链接（Workbench Dock），标签要短
 	const done: Option = {
 		key: "done",
-		label: "完成（已经在别处处理了）",
+		label: "标记完成",
 		advance: true,
 		run: () => post(`/api/tasks/${enc(t.id)}/done`).then(() => "好的，算你已处理"),
 	};
@@ -169,7 +172,8 @@ export function actionsOf(t: TaskView | undefined, c: Ctx): Actions {
 			},
 			{
 				key: "complete",
-				label: "完成（已经在别处回过了）",
+				label: "已经在别处回过了",
+				side: true,
 				advance: true,
 				run: () => post(`/api/drafts/${d.id}/complete`).then(() => "已完成"),
 			},
@@ -267,7 +271,9 @@ export function actionsOf(t: TaskView | undefined, c: Ctx): Actions {
 		};
 	if (dev && t.need === "read" && t.status === "in_review")
 		return {
-			options: [{ key: "close", label: "完成", advance: true, run: () => post(`/api/dev/${dev.id}/close`).then(() => "已完成") }],
+			options: [
+				{ key: "close", label: "看完了，标记完成", advance: true, run: () => post(`/api/dev/${dev.id}/close`).then(() => "已完成") },
+			],
 			typeIn: talk,
 			slash: [],
 		};
@@ -289,7 +295,7 @@ export function actionsOf(t: TaskView | undefined, c: Ctx): Actions {
 				...(t.id.startsWith("q:") && t.hold
 					? [{ key: "now", label: "不等了，现在起草", run: () => post("/api/poll", { id: t.id.slice(2) }).then(() => "开始起草") }]
 					: []),
-				{ ...done, label: "完成（不用做了）", neg: true },
+				{ ...done, label: "不用做了" },
 			],
 			slash: [],
 		};

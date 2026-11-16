@@ -3,7 +3,7 @@ import { useState } from "react";
 import { type Audience, type AudienceData, type AudienceLevel, fetchAudience, post } from "../lib/api";
 import { confirmDialog } from "./Confirm";
 import { toast } from "./Toast";
-import { Card, Segmented, SectionTitle } from "./ui";
+import { Segmented, SectionTitle } from "./ui";
 
 const input = "rounded-md border bg-panel px-2.5 py-1.5 text-[14px] text-text [font-family:inherit]";
 /** 和后端 saveAudience 的校验一致：飞书用户 ou_、群 oc_ */
@@ -43,7 +43,7 @@ function Entry({ a, levels }: { a: Audience; levels: AudienceData["levels"] }) {
 		setBusy(false);
 	};
 	return (
-		<div className="border-t border-line px-4 py-3 first:border-t-0">
+		<div className="border-t border-line px-1 py-3.5 first:border-t-0">
 			<div className="flex flex-wrap items-center gap-2">
 				<Kind kind={a.kind} />
 				<input
@@ -116,16 +116,16 @@ export function AudiencePage() {
 		<div className="flex flex-col gap-3">
 			<p className="m-0 text-[12px] text-muted">给常联系的人或群设定口径，起草回复时会照着写。</p>
 			<div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-				<Card>
-					<div className="px-4 pt-3 pb-1">
-						<SectionTitle extra={data.items.length ? `${data.items.length} 个` : undefined}>已设定</SectionTitle>
+				<section>
+					<SectionTitle extra={data.items.length ? `${data.items.length} 个` : undefined}>已设定</SectionTitle>
+					<div className="border-y border-line">
+						{data.items.map((a) => (
+							<Entry key={`${a.id}-${a.updated}`} a={a} levels={data.levels} />
+						))}
+						{!data.items.length && <div className="py-8 text-center text-[14px] text-muted">还没有设定，可以从最近联系你的人里添加</div>}
 					</div>
-					{data.items.map((a) => (
-						<Entry key={`${a.id}-${a.updated}`} a={a} levels={data.levels} />
-					))}
-					{!data.items.length && <div className="py-8 text-center text-[14px] text-muted">还没有设定，可以从最近联系你的人里添加</div>}
-				</Card>
-				<Card className="p-4">
+				</section>
+				<section>
 					<SectionTitle>最近联系你的</SectionTitle>
 					<div className="flex flex-col">
 						{data.candidates.map((c) => (
@@ -173,7 +173,7 @@ export function AudiencePage() {
 						</div>
 						{id && !idOk && <div className="mt-1 text-[12px] text-bad">用户 ID 以 ou_ 开头，群 ID 以 oc_ 开头</div>}
 					</form>
-				</Card>
+				</section>
 			</div>
 		</div>
 	);

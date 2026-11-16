@@ -24,7 +24,7 @@ const EVIDENCE: Record<string, string> = { yi: "你说", tool: "查到", board: 
 /** 和后端 MAX_CONTENT 一致 */
 const MAX = 300;
 
-const field = "rounded-md border border-line bg-panel px-2.5 py-1.5 text-[14px] text-text [font:inherit]";
+const field = "rounded-[8px] border border-transparent bg-soft px-2.5 py-1.5 text-[14px] text-text [font:inherit]";
 const tag = "rounded px-1.5 text-[12px] leading-[18px]";
 
 const live = (m: Memory) => m.state !== "forgotten" && m.state !== "superseded";
@@ -209,7 +209,7 @@ function MemoryRow({
 	const v = score && verdict(m, score);
 	const scope = scopeText(m);
 	return (
-		<div className="flex flex-col gap-1.5 border-t border-line px-4 py-3 first:border-t-0">
+		<div className="flex flex-col gap-1.5 border-t border-line px-1 py-3.5 first:border-t-0">
 			{editing ? (
 				<EditForm m={m} onDone={() => setEditing(false)} />
 			) : (
@@ -248,15 +248,15 @@ function MemoryRow({
 					</span>
 				</div>
 				{!editing && (
-					<div className="flex shrink-0 gap-2">
+					<div className="flex shrink-0 gap-1">
 						{live(m) ? (
 							<>
 								{(m.state === "candidate" || !m.confirmed) && (
-									<button className="btn sm" disabled={busy} onClick={() => act("confirm", "已确认")}>
+									<button className="btn ghost sm text-accent!" disabled={busy} onClick={() => act("confirm", "已确认")}>
 										确认
 									</button>
 								)}
-								<button className="btn sm" disabled={busy} onClick={() => setEditing(true)}>
+								<button className="btn ghost sm" disabled={busy} onClick={() => setEditing(true)}>
 									编辑
 								</button>
 								<button className="btn ghost sm" disabled={busy} onClick={() => act("forget", "已忘掉，可以在「不再使用」里恢复")}>
@@ -264,7 +264,7 @@ function MemoryRow({
 								</button>
 							</>
 						) : (
-							<button className="btn sm" disabled={busy} onClick={() => act("restore", "已恢复")}>
+							<button className="btn ghost sm text-accent!" disabled={busy} onClick={() => act("restore", "已恢复")}>
 								恢复
 							</button>
 						)}
@@ -298,9 +298,9 @@ function ConflictGroup({ items, now }: { items: Memory[]; now: number }) {
 	}
 	const name = `conflict-${items[0].id}`;
 	return (
-		<div className="overflow-hidden rounded-[10px] border border-line bg-panel">
+		<div className="border-y border-line">
 			{items.map((m) => (
-				<div key={m.id} className="flex flex-col gap-1.5 border-t border-line px-4 py-3 first:border-t-0">
+				<div key={m.id} className="flex flex-col gap-1.5 border-t border-line px-1 py-3.5 first:border-t-0">
 					<label className="flex cursor-pointer items-start gap-3">
 						<input
 							type="radio"
@@ -328,7 +328,7 @@ function ConflictGroup({ items, now }: { items: Memory[]; now: number }) {
 					<Evidence m={m} now={now} className="pl-7" />
 				</div>
 			))}
-			<div className="flex flex-col gap-2 border-t border-line px-4 py-3">
+			<div className="flex flex-col gap-2 border-t border-line px-1 py-3.5">
 				<div className="flex items-center gap-2 text-[12px] text-text-2">
 					最终写成
 					<button
@@ -398,7 +398,7 @@ function NewMemory({ onClose }: { onClose: () => void }) {
 		onClose();
 	}
 	return (
-		<div className="flex flex-col gap-2 rounded-[10px] border border-line bg-panel px-4 py-3">
+		<div className="flex flex-col gap-2 rounded-[12px] bg-bg px-4 py-3">
 			<TextBox
 				id="mem-new"
 				value={content}
@@ -446,7 +446,7 @@ function List({
 }) {
 	if (!items.length) return <div className="px-0.5 text-[14px] text-muted">{empty}</div>;
 	return (
-		<div className="overflow-hidden rounded-[10px] border border-line bg-panel">
+		<div className="border-y border-line">
 			{items.map((m) => (
 				<MemoryRow key={`${m.id}v${m.revision}`} m={m} all={all} now={now} showUse={showUse} />
 			))}
@@ -583,7 +583,7 @@ function TrialList({ scores, all, now }: { scores: ArmScore[]; all: Map<number, 
 	const used = rows.filter((s) => verdict(all.get(s.id)!, s)[1]);
 	const rest = rows.filter((s) => !verdict(all.get(s.id)!, s)[1]);
 	const list = (xs: ArmScore[]) => (
-		<div className="overflow-hidden rounded-[10px] border border-line bg-panel">
+		<div className="border-y border-line">
 			{xs.map((s) => (
 				<MemoryRow key={s.id} m={all.get(s.id)!} all={all} now={now} score={s} showUse />
 			))}

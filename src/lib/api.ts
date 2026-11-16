@@ -55,6 +55,16 @@ export interface AgentStat {
 	runs: number;
 	failed: number;
 	cost: number;
+	/** config/ 下的提示词文件，如 agents/assistant.md */
+	prompt: string | null;
+	runner: string;
+	tiers: Array<{ name: string; desc: string; model: string; thinking: string; prompt: string | null; runner: string }>;
+	tools: string[] | null;
+	/** "*" = 全部 */
+	skills: string[] | "*" | null;
+	mcp: string[] | "*" | null;
+	bash: string[] | "*" | null;
+	lastActive: number | null;
 }
 
 export interface DevTask {

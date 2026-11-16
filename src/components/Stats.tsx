@@ -156,7 +156,7 @@ function GroupTable({
 	const max = Math.max(...rows.map((r) => r.cost), 0);
 	const grid = "grid grid-cols-[minmax(0,1fr)_auto_minmax(96px,1fr)_auto] items-center gap-x-3";
 	return (
-		<Card className="p-4">
+		<Card>
 			<SectionTitle>{title}</SectionTitle>
 			{rows.length ? (
 				<div className="text-[14px]">
@@ -208,7 +208,7 @@ export function StatsPage() {
 	const settled = drafts.filter((d) => !PENDING.has(d.status)).reduce((n, d) => n + d.count, 0);
 	const hourly = range === "today";
 	return (
-		<div className="flex flex-col gap-4">
+		<div className="flex flex-col gap-8">
 			<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
 				<Segmented value={range} options={RANGES} onChange={setRange} />
 				<span className="text-[12px] text-muted">花费按 API 价格折算；实际用的是订阅额度，不另收费</span>
@@ -236,7 +236,7 @@ export function StatsPage() {
 							sub={s.total.runs ? `${compact(s.total.tokens / s.total.runs)} tokens` : "没有运行"}
 						/>
 					</div>
-					<Card className="p-4">
+					<Card>
 						<SectionTitle extra={hourly ? "按小时" : "按天"}>花费</SectionTitle>
 						{s.total.runs ? (
 							<>
@@ -278,7 +278,7 @@ export function StatsPage() {
 						<GroupTable title="按类型" col="类型" rows={s.byTier} name={(n) => TIER_NAME[n] ?? n} />
 						<GroupTable title="按模型" col="模型" rows={s.byModel} name={(n) => n.split("/").pop() ?? n} />
 					</div>
-					<Card className="p-4">
+					<Card>
 						<SectionTitle
 							extra={
 								draftTotal ? (

@@ -4,7 +4,7 @@ import { type SkillView, fetchSkillDoc, fetchSkills, post } from "../lib/api";
 import { AGENT_NAME } from "../lib/format";
 import { Markdown, splitFrontmatter } from "./Markdown";
 import { toast } from "./Toast";
-import { Card, Segmented } from "./ui";
+import { Segmented } from "./ui";
 
 type Filter = "all" | "visible" | "hidden" | "rules" | "broken";
 
@@ -83,7 +83,7 @@ function Row({ s, everyone }: { s: SkillView; everyone: number }) {
 				? `仅${s.agents.map((a) => AGENT_NAME[a] ?? a).join("、")}可用`
 				: "没有助手能用";
 	return (
-		<div className="border-t border-line px-4 py-3 first:border-t-0">
+		<div className="border-t border-line px-1 py-3.5 first:border-t-0">
 			<div className="flex items-start gap-3">
 				<div className="min-w-0 flex-1">
 					<div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -157,16 +157,16 @@ export function SkillsPage() {
 					onChange={(e) => setQ(e.target.value)}
 					placeholder="搜索技能"
 					aria-label="搜索技能"
-					className="w-full rounded-md border border-line bg-panel px-2.5 py-1.5 text-[14px] text-text [font-family:inherit] sm:w-56"
+					className="w-full rounded-[8px] border border-transparent bg-soft px-2.5 py-1.5 text-[14px] text-text [font-family:inherit] sm:w-56"
 				/>
 			</div>
 			{filter === "rules" && <p className="m-0 text-[12px] text-muted">命令规则在「提示词」的「命令规则」里修改。</p>}
-			<Card>
+			<div className="border-y border-line">
 				{rows.map((s) => (
 					<Row key={s.name} s={s} everyone={everyone} />
 				))}
 				{!rows.length && <div className="py-8 text-center text-[14px] text-muted">没有符合条件的技能</div>}
-			</Card>
+			</div>
 		</div>
 	);
 }

@@ -57,10 +57,11 @@ export function ruleText(rule: string) {
 		.trim();
 }
 
-function Ev({ at, children }: { at: number; children: ReactNode }) {
+/** 时间线一行：左边时间，右边内容；没有发生时间的（约好的复查）时间列留空，内容照样在右栏 */
+function Ev({ at, children }: { at?: number; children: ReactNode }) {
 	return (
 		<div className="ev">
-			<div className="tm num">{hm(at)}</div>
+			<div className="tm num">{at ? hm(at) : ""}</div>
 			<div>{children}</div>
 		</div>
 	);
@@ -300,7 +301,11 @@ export function TaskPanel({
 						</div>
 					</Ev>
 				)}
-				{!!t.followups?.length && <Followups t={t} />}
+				{!!t.followups?.length && (
+					<Ev>
+						<Followups t={t} />
+					</Ev>
+				)}
 				{t.need === "retry" && !liveDev && (
 					<Ev at={t.updated}>
 						<div className="out need">

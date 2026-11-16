@@ -4,7 +4,6 @@ import { type ReactNode, useState } from "react";
 import { type RouteRules, fetchRoutes, saveRoutes } from "../lib/api";
 import { confirmDialog } from "./Confirm";
 import { toast } from "./Toast";
-import { Card } from "./ui";
 
 /**
  * 可调的数值项。后端一律按秒（巡检是 0–1 的比例）存，界面按量级换成天、小时、分钟、秒或百分比，
@@ -105,7 +104,7 @@ function Section({ title, desc, children }: { title: string; desc?: string; chil
 		<section className="mt-6 first:mt-0">
 			<h2 className="m-0 text-[14px] font-semibold text-text">{title}</h2>
 			{desc && <p className="m-0 mt-0.5 text-[12px] text-muted">{desc}</p>}
-			<Card className="mt-2">{children}</Card>
+			<div className="mt-2 border-y border-line">{children}</div>
 		</section>
 	);
 }
@@ -114,7 +113,7 @@ function Section({ title, desc, children }: { title: string; desc?: string; chil
 function Row({ id, label, desc, wide, children }: { id?: string; label: string; desc?: string; wide?: boolean; children?: ReactNode }) {
 	return (
 		<div
-			className={`flex flex-col gap-2 border-t border-line px-4 py-3 first:border-t-0 ${wide ? "" : "sm:flex-row sm:items-center sm:gap-6"}`}
+			className={`flex flex-col gap-2 border-t border-line px-1 py-3.5 first:border-t-0 ${wide ? "" : "sm:flex-row sm:items-center sm:gap-6"}`}
 		>
 			<div className="min-w-0 flex-1">
 				<label htmlFor={id} className="block text-[14px] text-text">
@@ -245,7 +244,7 @@ export function RouteRulesPage() {
 			</Section>
 
 			{/* 有改动时贴在窗口底部，长页面不用滚到底找保存 */}
-			<div className={`${dirty ? "sticky bottom-0" : ""} mt-6 flex flex-wrap items-center gap-2 border-t border-line bg-bg py-3`}>
+			<div className={`${dirty ? "sticky bottom-0" : ""} mt-6 flex flex-wrap items-center gap-2 border-t border-line bg-panel py-3`}>
 				<button type="button" className="btn primary" disabled={!dirty || invalid || busy} onClick={save}>
 					保存
 				</button>
