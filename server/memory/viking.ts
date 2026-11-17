@@ -5,24 +5,36 @@
 import { MEMORY } from "../config.ts";
 import { markDown, markOk } from "./health.ts";
 
+/** 服务答了但不是 2xx（如目录不存在的 404）：服务本身是好的，不算连不上 */
+export class VikingError extends Error {
+	status: number;
+	constructor(message: string, status: number) {
+		super(message);
+		this.status = status;
+	}
+}
+
 async function call<T>(method: string, path: string, body?: unknown, timeout = 30_000): Promise<T> {
+	let res: Response;
+	let text: string;
 	try {
-		const res = await fetch(`${MEMORY.vikingUrl.replace(/\/$/, "")}/api/v1${path}`, {
+		res = await fetch(`${MEMORY.vikingUrl.replace(/\/$/, "")}/api/v1${path}`, {
 			method,
 			headers: body === undefined ? undefined : { "content-type": "application/json" },
 			body: body === undefined ? undefined : JSON.stringify(body),
 			signal: AbortSignal.timeout(timeout),
 		});
-		const text = await res.text();
-		if (!res.ok) throw new Error(`OpenViking ${method} ${path} ${res.status}：${text.slice(0, 200)}`);
-		markOk("openviking");
-		const json = text ? JSON.parse(text) : {};
-		if (json.status && json.status !== "ok") throw new Error(`OpenViking ${method} ${path}：${text.slice(0, 200)}`);
-		return json.result as T;
+		text = await res.text();
 	} catch (e) {
 		markDown("openviking", String((e as Error).message));
 		throw e;
 	}
+	if (res.status >= 500) markDown("openviking", `${method} ${path} ${res.status}`);
+	else markOk("openviking");
+	if (!res.ok) throw new VikingError(`OpenViking ${method} ${path} ${res.status}：${text.slice(0, 200)}`, res.status);
+	const json = text ? JSON.parse(text) : {};
+	if (json.status && json.status !== "ok") throw new VikingError(`OpenViking ${method} ${path}：${text.slice(0, 200)}`, res.status);
+	return json.result as T;
 }
 
 export interface Note {
@@ -69,7 +81,13 @@ export async function listNotes(): Promise<NoteFile[]> {
 	const root = MEMORY.vikingRoot.replace(/\/?$/, "/");
 	const out: NoteFile[] = [];
 	for (const type of SUBTREES) {
-		const tree = await call<Array<Record<string, any>> | null>("GET", `/fs/tree?uri=${encodeURIComponent(`${root}${type}/`)}`);
+		// 还没写过这一类时目录不存在（404），当成空的
+		const tree = await call<Array<Record<string, any>> | null>("GET", `/fs/tree?uri=${encodeURIComponent(`${root}${type}/`)}`).catch(
+			(e) => {
+				if (e instanceof VikingError && e.status === 404) return null;
+				throw e;
+			},
+		);
 		const files = (tree ?? []).filter(
 			(f) => !f.isDir && String(f.rel_path).endsWith(".md") && !String(f.rel_path).split("/").at(-1)!.startsWith("."),
 		);

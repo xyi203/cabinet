@@ -8,21 +8,25 @@ import { markDown, markOk } from "./health.ts";
 const base = () => `${MEMORY.hindsightUrl.replace(/\/$/, "")}/v1/default/banks/${encodeURIComponent(MEMORY.bank)}`;
 
 async function call<T>(method: string, path: string, body?: unknown, timeout = 30_000): Promise<T> {
+	let res: Response;
+	let text: string;
 	try {
-		const res = await fetch(base() + path, {
+		res = await fetch(base() + path, {
 			method,
 			headers: body === undefined ? undefined : { "content-type": "application/json" },
 			body: body === undefined ? undefined : JSON.stringify(body),
 			signal: AbortSignal.timeout(timeout),
 		});
-		if (!res.ok) throw new Error(`Hindsight ${method} ${path} ${res.status}：${(await res.text()).slice(0, 200)}`);
-		markOk("hindsight");
-		const text = await res.text();
-		return (text ? JSON.parse(text) : undefined) as T;
+		text = await res.text();
 	} catch (e) {
 		markDown("hindsight", String((e as Error).message));
 		throw e;
 	}
+	// 4xx 是请求的问题，服务本身是好的；只有连不上和 5xx 算挂了
+	if (res.status >= 500) markDown("hindsight", `${method} ${path} ${res.status}`);
+	else markOk("hindsight");
+	if (!res.ok) throw new Error(`Hindsight ${method} ${path} ${res.status}：${text.slice(0, 200)}`);
+	return (text ? JSON.parse(text) : undefined) as T;
 }
 
 const RETAIN_MISSION = `材料来自 Yi（向懿，后端开发）的飞书助理 cabinet：一条需要 Yi 回复的消息、助理的草稿、Yi 的修改与处理结果，或者一次问答里的工具调用结果；也可能是 Yi 亲口让助理记住的一句话。

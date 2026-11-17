@@ -59,6 +59,18 @@ const server = createServer((req, res) => {
 						: [],
 				},
 			});
+		if (p.startsWith("/api/v1/fs/tree"))
+			return p.includes("preferences")
+				? json({
+						status: "ok",
+						result: [
+							{ uri: "viking://u/preferences/yi", isDir: true, rel_path: "yi" },
+							{ uri: "viking://u/preferences/yi/沟通.md", isDir: false, rel_path: "yi/沟通.md", modTime: "2026-11-17T00:00:00Z" },
+							{ uri: "viking://u/preferences/yi/.overview.md", isDir: false, rel_path: "yi/.overview.md" },
+						],
+					})
+				: json({ status: "error", error: { code: "NOT_FOUND" } }, 404);
+		if (p.startsWith("/api/v1/content/read")) return json({ status: "ok", result: "- 先结论后依据" });
 		if (p.startsWith("/api/v1/sessions") && req.method === "DELETE") return json({ status: "error" }, 404);
 		return json({ status: "ok", result: {} });
 	});
@@ -84,6 +96,7 @@ const { recall, render, recallBlock } = await import("../server/memory/recall.ts
 const extract = await import("../server/memory/extract.ts");
 const { classifyStatement, rememberFromYi } = await import("../server/memory/remember.ts");
 const { memoryDown } = await import("../server/memory/health.ts");
+const { listNotes } = await import("../server/memory/viking.ts");
 
 const take = () => reqs.splice(0);
 const pref = { kind: "preference" as const, application: "reference" as const, appliesWhen: "" };
@@ -279,4 +292,13 @@ test("凭证、空话、约定没写条件都拦在外面，不往外写", async
 	await assert.rejects(() => store.editConvention("d1", { appliesWhen: " " }), store.MemoryError);
 	assert.deepEqual(take(), []);
 	assert.equal(store.redact("key: glpat-abcdefghijklmnopqrst 完"), "key: 〔已打码〕 完");
+});
+
+test("看板列偏好文件：目录不存在（404）当成空的，也不算 OpenViking 挂了", async () => {
+	const notes = await listNotes();
+	assert.deepEqual(
+		notes.map((n) => [n.type, n.path, n.text]),
+		[["preferences", "yi/沟通.md", "- 先结论后依据"]],
+	);
+	assert.ok(!memoryDown().some((d) => d.service === "openviking"));
 });
