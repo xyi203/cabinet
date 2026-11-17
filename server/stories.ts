@@ -143,6 +143,11 @@ export interface TicketInfo {
 
 const ENDED_RE = /终止|关闭|取消|作废|驳回/;
 /**
+ * 进了「prod 部署」节点但还没真正部署上：「全量流程判断中」「prod发布确认」要等 Yi 确认，失败的（prod发布失败、prodAPI测试失败）
+ * 已回退、还会再提。11-16 三张单都在「全量流程判断中」就转了全量后巡检，比实际全量早约一小时，四轮里三轮落在全量之前
+ */
+const NOT_DEPLOYED_RE = /判断|确认|失败/;
+/**
  * AB 实验结束了（状态如「prodAB实验结束」），还没全量：AB 巡检比的是 a / b 两组，实验停了就没得比，不用再巡检。
  * 工单本身没结束，之后走到 prod 部署照样转全量后巡检
  */
@@ -162,8 +167,9 @@ export function parseTicketInfo(key: string, text: string): TicketInfo {
 		key,
 		title: String(info.summary ?? ""),
 		status,
-		ended: (lastStage > 0 && Number(info.stage) >= lastStage) || ENDED_RE.test(status),
-		full: fullStage != null && Number(info.stage) >= Number(fullStage) && !ENDED_RE.test(status),
+		// 发布失败也会停在最后一步（GD-45436 在 stage 5「prod发布失败」后重提成功），不算结束，否则不再刷新、接不上全量后巡检
+		ended: (lastStage > 0 && Number(info.stage) >= lastStage && !/失败/.test(status)) || ENDED_RE.test(status),
+		full: fullStage != null && Number(info.stage) >= Number(fullStage) && !ENDED_RE.test(status) && !NOT_DEPLOYED_RE.test(status),
 		storyIds: param("feishuStoryIds")
 			.split(/[,\s]+/)
 			.filter(Boolean),

@@ -79,6 +79,13 @@ test("工单详情取标题、状态、飞书工单 ID，走到最后一步或�
 	assert.equal(parseTicketInfo("GD-1", info({ stage: 4, status: "prod部署中", ids: "" })).full, true);
 	assert.equal(parseTicketInfo("GD-1", info({ stage: 5, status: "prod发布成功", ids: "" })).full, true);
 	assert.equal(parseTicketInfo("GD-1", info({ stage: 4, status: "已终止", ids: "" })).full, false);
+	// 进了 prod 部署节点、还在等确认或失败了：没部署上，不算全量；失败停在最后一步也不算结束
+	for (const status of ["全量流程判断中", "prod发布确认", "prod发布失败", "prodAPI测试失败"])
+		assert.equal(parseTicketInfo("GD-1", info({ stage: 4, status, ids: "" })).full, false, status);
+	assert.equal(parseTicketInfo("GD-1", info({ stage: 4, status: "prod发布中", ids: "" })).full, true);
+	const failed = parseTicketInfo("GD-1", info({ stage: 5, status: "prod发布失败", ids: "" }));
+	assert.equal(failed.full, false);
+	assert.equal(failed.ended, false);
 	assert.throws(() => parseTicketInfo("GD-2", "{}"));
 });
 
