@@ -15,7 +15,6 @@ import { listStories } from "./stories.ts";
 import { TASK_TIER, loadAgents, withTier } from "./agent/router.ts";
 import { recentRecords } from "./records.ts";
 import { conversationLog, running } from "./agent/driver.ts";
-import { listMemories } from "./memory/store.ts";
 import { now } from "./util.ts";
 import { watchdogIssues } from "./watchdog.ts";
 import { quotaNow } from "./quota.ts";
@@ -30,7 +29,7 @@ export type TaskEvent =
 export interface TaskView {
 	id: string;
 	title: string;
-	/** lark meego bot board alert cron memory */
+	/** lark meego bot board alert cron */
 	source: string;
 	/** 谁、在哪 */
 	label: string;
@@ -59,7 +58,6 @@ export interface TaskView {
 	devTasks: string[];
 	approvals: string[];
 	/** 记忆冲突：两条记忆的 id */
-	memories?: number[];
 	events: TaskEvent[];
 	/** agent 约好、还没到期的复查 */
 	followups?: Array<{ key: string; at: number; about: string }>;
@@ -107,7 +105,7 @@ export function taskViews(records: RecordRow[]): TaskView[] {
 		for (const x of trs) covered.add(x.id.slice(x.id.indexOf(":") + 1));
 		views.push(view(row, o, trs, records));
 	}
-	const out = [...views, ...queued(t), ...unrouted(records, covered, t), ...conflicts()];
+	const out = [...views, ...queued(t), ...unrouted(records, covered, t)];
 	return [...out, ...looseApprovals(out)].toSorted((a, b) => b.updated - a.updated);
 }
 
@@ -297,34 +295,6 @@ function unrouted(records: RecordRow[], covered: Set<string>, t: number): TaskVi
 			devTasks: [],
 			approvals: [],
 			events: [{ k: "msg", at: r.ts, who: r.label ?? "", owner: false, text: r.question ?? "" }],
-		});
-	}
-	return out;
-}
-
-/** 有冲突的记忆：两条一组，等 Yi 在记忆页裁定 */
-function conflicts(): TaskView[] {
-	const ms = listMemories(["contested"]);
-	const seen = new Set<number>();
-	const out: TaskView[] = [];
-	for (const m of ms) {
-		if (seen.has(m.id)) continue;
-		const group = [m, ...ms.filter((x) => x.id !== m.id && (m.conflicts.includes(x.id) || x.conflicts.includes(m.id)))];
-		for (const x of group) seen.add(x.id);
-		out.push({
-			id: `mem:${m.id}`,
-			title: `记忆冲突：${group.map((x) => `「${x.content.slice(0, 30)}」`).join(" / ")}`,
-			source: "memory",
-			label: "记忆",
-			status: "blocked",
-			need: "decide",
-			created: m.updated,
-			updated: m.updated,
-			memories: group.map((x) => x.id),
-			drafts: [],
-			devTasks: [],
-			approvals: [],
-			events: [],
 		});
 	}
 	return out;

@@ -85,7 +85,7 @@ export const liveDraft = (t: TaskView, s: State): Draft | undefined => {
 };
 
 /** 工作台每行的主操作：一两个按钮，就地办完；要看内容的给「打开」 */
-export function RowActions({ t, s, onOpen, onMemory }: { t: TaskView; s: State; onOpen: () => void; onMemory: () => void }) {
+export function RowActions({ t, s, onOpen }: { t: TaskView; s: State; onOpen: () => void }) {
 	const { busy, act } = useAct();
 	const draft = liveDraft(t, s);
 	const dev = t.devTasks.length ? s.devTasks.find((d) => d.id === t.devTasks.at(-1)) : undefined;
@@ -124,7 +124,6 @@ export function RowActions({ t, s, onOpen, onMemory }: { t: TaskView; s: State; 
 				{btn("完成", () => act(`/api/dev/${dev.id}/close`, {}, "已完成"), "ghost")}
 			</>
 		);
-	else if (t.need === "decide" && t.memories) body = btn("去记忆页处理", onMemory, "pri");
 	else if (t.need === "retry" && t.status === "blocked")
 		body = t.retryId ? (
 			<>

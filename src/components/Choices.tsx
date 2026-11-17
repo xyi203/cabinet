@@ -92,7 +92,6 @@ export interface Ctx {
 	to: Target;
 	setTo: (t: Target) => void;
 	picks: PickItem[];
-	onMemory: () => void;
 }
 
 /** 这件事现在挂着的草稿（最新一版） */
@@ -232,8 +231,6 @@ export function actionsOf(t: TaskView | undefined, c: Ctx): Actions {
 			slash: [],
 		};
 	}
-	if (t.need === "decide" && t.memories)
-		return { options: [{ key: "memory", label: "去记忆页处理", run: async () => (c.onMemory(), "") }], slash: [] };
 	if (t.need === "retry" && t.status === "blocked") {
 		if (t.retryId)
 			return {

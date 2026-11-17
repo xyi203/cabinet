@@ -10,8 +10,24 @@ const dir = mkdtempSync(path.join(tmpdir(), "cabinet-agent-"));
 process.env.DATA_DIR = path.join(dir, "data");
 process.env.DEFAULT_CWD = path.join(dir, "work");
 process.env.PI_FALLBACK_MODEL = "";
-// 测试不依赖本机的 Ollama：只用关键词
-process.env.EMBED_URL = "";
+// 测试不碰本机的 Hindsight / OpenViking：一个假的只回约定，其余回空
+const { createServer } = await import("node:http");
+const fake = createServer((req, res) => {
+	res.setHeader("content-type", "application/json");
+	if (req.url?.includes("/directives"))
+		return res.end(
+			JSON.stringify({
+				items: [
+					{ id: "d1", name: "有人问上线或排期时间时", content: "回 PM 的排期问题不要直接承诺日期", tags: ["personal"], is_active: true },
+				],
+			}),
+		);
+	if (req.url?.includes("/memories/recall")) return res.end(JSON.stringify({ results: [] }));
+	res.end(JSON.stringify({ status: "ok", result: { memories: [] } }));
+}).listen(0, "127.0.0.1");
+await new Promise((r) => fake.once("listening", r));
+fake.unref();
+process.env.HINDSIGHT_URL = process.env.OPENVIKING_URL = `http://127.0.0.1:${(fake.address() as { port: number }).port}`;
 const work = process.env.DEFAULT_CWD;
 await import("node:fs").then((fs) => fs.mkdirSync(work, { recursive: true }));
 writeFileSync(path.join(work, "a.txt"), "hello");
@@ -71,14 +87,6 @@ test("重启后从 Turso 读回对话", async () => {
 });
 
 test("记忆：约定拼进这一轮的输入，agent 能用 memory 工具查", async () => {
-	const { rememberFromYi } = await import("../server/memory/store.ts");
-	rememberFromYi(
-		"回 PM 的排期问题不要直接承诺日期",
-		{ kind: "preference", application: "convention", appliesWhen: "有人问上线或排期时间时" },
-		{ kind: "yi", ref: "om_m", quote: "以后排期别直接承诺", at: 1 },
-		"test",
-		true,
-	);
 	let input = "";
 	faux.setResponses([
 		(ctx) => {

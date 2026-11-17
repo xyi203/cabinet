@@ -16,7 +16,6 @@ const NEED_ORDER: Record<string, number> = { approve: 0, send: 1, decide: 2, ret
 export interface Nav {
 	onOpen: (id: string) => void;
 	onStory: (id: string) => void;
-	onMemory: () => void;
 	onCron: (scheduleId?: string) => void;
 }
 
@@ -141,7 +140,6 @@ export function Workbench({
 		to: (cur && targets[cur.id]) ?? (draft && targetsOf(draft)[0]?.key) ?? "reply",
 		setTo: (to) => cur && setTargets((m) => ({ ...m, [cur.id]: to })),
 		picks,
-		onMemory: nav.onMemory,
 	});
 	const count = (k: Filter) => (k === "all" ? 0 : (sections.find(([x]) => x === k)?.[2].length ?? 0));
 	return (
@@ -218,15 +216,7 @@ export function Workbench({
 						<div className="dock mx-auto max-w-[860px]">
 							<Embedded.Provider value>
 								<Docked.Provider value={docked}>
-									<TaskPanel
-										key={cur.id}
-										t={cur}
-										s={s}
-										onClose={() => onSelect(undefined)}
-										onStory={nav.onStory}
-										onCron={nav.onCron}
-										onMemory={nav.onMemory}
-									/>
+									<TaskPanel key={cur.id} t={cur} s={s} onClose={() => onSelect(undefined)} onStory={nav.onStory} onCron={nav.onCron} />
 								</Docked.Provider>
 							</Embedded.Provider>
 						</div>

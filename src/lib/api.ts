@@ -205,7 +205,6 @@ export interface TaskView {
 	drafts: string[];
 	devTasks: string[];
 	approvals: string[];
-	memories?: number[];
 	events: TaskEvent[];
 	/** agent 约好、还没到期的复查（server/followups.ts） */
 	followups?: Array<{ key: string; at: number; about: string }>;
@@ -314,58 +313,67 @@ export interface Evidence {
 	at: number;
 }
 
-export interface Memory {
-	id: number;
-	revision: number;
+/** 约定：存成 Hindsight 的 directive，条件成立时每次都带 */
+export interface Convention {
+	id: string;
 	content: string;
-	kind: "preference" | "fact" | "experience";
-	application: "convention" | "reference";
 	appliesWhen: string;
 	scope: string;
 	scopeName: string;
-	provenance: "user_statement" | "tool_observation" | "model_inference";
-	confirmed: boolean;
-	state: "candidate" | "active" | "contested" | "superseded" | "forgotten";
-	evidence: Evidence[];
-	conflicts: number[];
-	supersededBy: number | null;
-	source: string;
-	injected: number;
-	lastInjected: number | null;
-	created: number;
-	updated: number;
-}
-
-export interface ArmScore {
-	id: number;
-	keyword?: number;
-	vector?: number;
-	passed: "keyword" | "vector" | "both" | null;
+	active: boolean;
+	updated?: string;
 }
 
 export interface MemoryState {
-	items: Memory[];
-	vectors: { model: string; total: number; pending: number; retryIn?: number };
+	conventions: Convention[];
+	/** 读约定失败（Hindsight 连不上）时的原因 */
+	error?: string;
+	down: Array<{ service: string; since: number; error: string }>;
+	/** 还没沉淀完的草稿与问答 */
+	pending: number;
+	bank: string;
+	hindsightUrl: string;
+	vikingRoot: string;
 }
 
 export interface Classification {
-	kind: Memory["kind"];
-	application: Memory["application"];
+	kind: "preference" | "fact" | "experience";
+	application: "convention" | "reference";
 	appliesWhen: string;
 }
 
+export interface Fact {
+	id: string;
+	text: string;
+	type: string;
+	tags: string[];
+	at?: string;
+}
+
+export interface Note {
+	uri: string;
+	type: string;
+	text: string;
+	score: number;
+}
+
+export interface Recalled {
+	conventions: Convention[];
+	facts: Fact[];
+	notes: Note[];
+	degraded: string[];
+	conventionsOverBudget: number;
+	/** 注入时的样子 */
+	block: string;
+}
+
 export const fetchMemory = () => getJson<MemoryState>("/api/memory");
-export const searchMemory = (q: string) =>
-	getJson<{ ids: number[]; scores: ArmScore[]; degraded?: string }>(`/api/memory/search?${new URLSearchParams({ q })}`);
-export const addMemory = (input: Classification & { content: string }) => post("/api/memory", input);
-export const memoryAction = (
-	m: Memory,
-	action: "confirm" | "forget" | "restore" | "classify" | "edit",
-	extra: Partial<Classification> & { content?: string } = {},
-) => post(`/api/memory/${m.id}/${action}`, { revision: m.revision, ...extra });
-/** 裁定一组冲突：最终文字落在 keep 那条上，其余转为已取代 */
-export const resolveMemories = (keep: number, items: Memory[], content: string) =>
-	post("/api/memory/resolve", { keep, content, items: items.map((m) => ({ id: m.id, revision: m.revision })) });
+export const searchMemory = (q: string) => getJson<Recalled>(`/api/memory/search?${new URLSearchParams({ q })}`);
+export const addMemory = (input: Classification & { content: string }) =>
+	post<{ item: { where: "convention" | "hindsight" | "openviking" } }>("/api/memory", input);
+export const editConvention = (id: string, patch: { content?: string; appliesWhen?: string; active?: boolean }) =>
+	post(`/api/memory/conventions/${id}/edit`, patch);
+export const deleteConvention = (id: string) => post(`/api/memory/conventions/${id}/delete`, {});
 export const fetchLog = (t: Pick<Task, "session" | "start" | "end">) =>
 	getJson<{ steps: Step[] }>(
 		`/api/log?${new URLSearchParams({ session: t.session ?? "", start: String(t.start ?? ""), end: String(t.end ?? "") })}`,

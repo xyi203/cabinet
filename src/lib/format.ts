@@ -143,7 +143,6 @@ export const SOURCE: Record<string, string> = {
 	board: "你派的",
 	alert: "告警",
 	cron: "定时",
-	memory: "记忆",
 };
 /** 工作台筛选：来源分组 */
 export const SOURCE_FILTER: Array<[string, string[]]> = [
@@ -153,7 +152,6 @@ export const SOURCE_FILTER: Array<[string, string[]]> = [
 	["告警", ["alert"]],
 	["定时", ["cron"]],
 	["你派的", ["board"]],
-	["记忆", ["memory"]],
 ];
 /**
  * 列表里的标题：去掉和来源重复的「定时 · 」前缀（来源一栏已经写了定时），

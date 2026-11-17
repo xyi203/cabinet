@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { resumePendingAlerts, stopAlerts } from "./alerts.ts";
 import { startApprovals } from "./approvals.ts";
 import { startServer } from "./api.ts";
-import { DRAFT_ENABLED, PATHS, PI_MODEL, missingConfig } from "./config.ts";
+import { DRAFT_ENABLED, MEMORY, PATHS, PI_MODEL, missingConfig } from "./config.ts";
 import { closeHarness, harness, pruneRuns } from "./agent/driver.ts";
 import { scheduleCleanup } from "./cleanup.ts";
 import { db } from "./db/index.ts";
@@ -12,8 +12,7 @@ import { startListeners } from "./channels/index.ts";
 import { markHandled, pollForever, stopPolling } from "./poller.ts";
 import { resumePendingQa } from "./qa.ts";
 import { resumePendingMemory } from "./memory/extract.ts";
-import { importLegacyMemory } from "./memory/remember.ts";
-import { scheduleVectors } from "./memory/store.ts";
+import { ensureBank } from "./memory/hindsight.ts";
 import { log, markStopping } from "./util.ts";
 import { startSchedules, stopSchedules } from "./schedules.ts";
 import { startStories } from "./stories.ts";
@@ -35,14 +34,13 @@ db();
 backfillTasks();
 // 上线前起草过的群消息也开始盯话题（只跑一次）
 backfillTopics();
-importLegacyMemory();
 // 审批处理要在 durable 恢复运行之前挂上：接回的运行也可能调写操作
 startApprovals();
 // 先打开 durable：上次没跑完的 agent 运行在这里恢复
 await harness();
 pruneRuns();
-// 记忆向量在后台补齐（Ollama 没起来时先只用关键词，退避重试）；上次没做完的提取接着做
-scheduleVectors();
+// 记忆 bank 的 mission 以代码为准（Hindsight 没起来不拦启动，召回和沉淀各自跳过、重试）；上次没做完的沉淀接着做
+if (MEMORY.enabled) ensureBank().catch((e) => log("Hindsight bank 初始化失败", String((e as Error).message).slice(0, 200)));
 resumePendingMemory();
 scheduleCleanup();
 

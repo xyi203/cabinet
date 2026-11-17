@@ -139,7 +139,6 @@ export function TaskPanel({
 	onClose,
 	onStory,
 	onCron,
-	onMemory,
 	onBack,
 	backLabel = "返回需求",
 }: {
@@ -148,7 +147,6 @@ export function TaskPanel({
 	onClose: () => void;
 	onStory: (id: string) => void;
 	onCron: (scheduleId?: string) => void;
-	onMemory: () => void;
 	onBack?: () => void;
 	backLabel?: string;
 }) {
@@ -268,25 +266,6 @@ export function TaskPanel({
 						{it.node}
 					</Ev>
 				))}
-				{t.memories && (
-					<Ev at={t.updated}>
-						<div className="out need">
-							<div className="oh">
-								<span>需要你决定</span>
-							</div>
-							<div className="ob">
-								<div>{t.title}</div>
-								{!docked && (
-									<div className="oa">
-										<button className="btn pri sm" onClick={onMemory}>
-											去记忆页处理
-										</button>
-									</div>
-								)}
-							</div>
-						</div>
-					</Ev>
-				)}
 				{/* 正在跑的这次（起草、复审、追问）：草稿还没出来、或者嵌着的草稿是上一版时，从这里看当前的执行记录。agent 任务在下面嵌着的任务里看 */}
 				{t.runId && !(liveDev && (liveDev.status === "running" || liveDev.status === "pushing")) && (
 					<Ev at={t.liveSince ?? t.updated}>
@@ -314,13 +293,13 @@ export function TaskPanel({
 							</div>
 							<div className="ob">
 								<div className="err">{t.error || "这次处理失败了"}</div>
-								{!docked && <RowActions t={t} s={s} onOpen={() => {}} onMemory={onMemory} />}
+								{!docked && <RowActions t={t} s={s} onOpen={() => {}} />}
 							</div>
 						</div>
 					</Ev>
 				)}
 				{!docked && (t.id.startsWith("q:") || ((t.status === "todo" || t.status === "in_progress") && !liveDraft && !liveDev)) && (
-					<RowActions t={t} s={s} onOpen={() => {}} onMemory={onMemory} />
+					<RowActions t={t} s={s} onOpen={() => {}} />
 				)}
 			</div>
 			<Embedded.Provider value>

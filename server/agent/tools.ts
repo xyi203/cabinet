@@ -7,7 +7,8 @@ import path from "node:path";
 import { SHOW_UI_HELP } from "../a2ui/catalog.ts";
 import { buildSurface, setPendingUi } from "../a2ui/surface.ts";
 import { LOOKUP_HELP, lookup } from "../lookup.ts";
-import { render, search } from "../memory/recall.ts";
+import { reflect } from "../memory/hindsight.ts";
+import { recall, render } from "../memory/recall.ts";
 
 const MAX_OUTPUT = 50_000;
 const cwdOf = (api: { env?: { cwd?: string } | undefined }) => (api.env as any)?.cwd ?? process.cwd();
@@ -71,16 +72,20 @@ export const lsTool = defineTool({
 	},
 });
 
-// 注入的记忆不够用、或者想找以前的排查经验时，agent 自己查。结果是已有记忆，提取时不当新证据（见 memory/extract.ts）
+// 注入的记忆不够用、或者想找以前的排查经验时，agent 自己查。结果是已有记忆，沉淀时不当新证据（见 memory/extract.ts）
 export const memoryTool = defineTool({
 	name: "memory",
 	description:
-		"查 Yi 的长期记忆（约定与历史线索）：注入的记忆不够用、或者想找以前的排查经验时，用关键词或一句话查。约定在条件成立时照做；线索先核实再用。",
-	parameters: obj({ query: str() }),
+		"查 Yi 的长期记忆（约定、Yi 的偏好与相关的人、以前的排查经验与事实）：注入的记忆不够用、或者想找以前的经验时，用一句话查。" +
+		"deep=true 时让记忆库综合推理后回答（慢，几十秒），适合「上次这类问题最后怎么定的、为什么」。约定在条件成立时照做；线索先核实再用。",
+	parameters: obj({ query: str(), deep: opt(bool()) }),
 	execute: async (args) => {
-		const { items, degraded } = await search(args.query, { anyScope: true, topK: 10 });
-		const block = render({ conventions: [], references: items });
-		return text(`〔记忆查询结果：已有记忆，不是新证据${degraded ? `；向量检索不可用，只用了关键词` : ""}〕\n${block || "没有相关记忆"}`);
+		if (args.deep)
+			return text(`〔记忆库综合回答：依据已有记忆，不是新证据，易变的事实先核实〕\n${(await reflect(args.query, [])) || "没有相关记忆"}`);
+		const r = await recall(args.query, "any");
+		const block = render(r);
+		const note = r.degraded.length ? `；部分来源不可用：${r.degraded.join("；")}` : "";
+		return text(`〔记忆查询结果：已有记忆，不是新证据${note}〕\n${block || "没有相关记忆"}`);
 	},
 });
 

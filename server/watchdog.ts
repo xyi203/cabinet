@@ -8,6 +8,7 @@ import { batchesSnapshot } from "./alerts.ts";
 import { devTasksList } from "./dev.ts";
 import { inflight } from "./drafts/store.ts";
 import { sendCardToUserAsBot, userAuthStatus } from "./lark/bot.ts";
+import { memoryDown } from "./memory/health.ts";
 import { lastPoll } from "./poller.ts";
 import { recentRecords } from "./records.ts";
 import { opsLink } from "./boardlink.ts";
@@ -32,6 +33,8 @@ export interface Snapshot {
 	inflight: Array<{ id: string; since: number; label: string }>;
 	failures: Array<{ ts: number }>;
 	alertBatches: Array<{ chatId: string; name: string; first: number }>;
+	/** 记忆服务最近一次调用失败、到现在还没成功过的 */
+	memoryDown: Array<{ service: string; since: number; error: string }>;
 }
 
 const MIN = 60;
@@ -86,6 +89,13 @@ export function checkHealth(s: Snapshot): Issue[] {
 				title: "告警迟迟没有分析",
 				detail: `「${b.name}」的告警已经攒了 ${span(s.now - b.first)}，还没交给助手分析。`,
 			});
+	for (const m of s.memoryDown)
+		if (s.now - m.since > 15 * MIN)
+			issues.push({
+				key: `memory-down:${m.service}`,
+				title: `${m.service === "hindsight" ? "Hindsight" : "OpenViking"} 连不上`,
+				detail: `已经 ${span(s.now - m.since)} 调不通，这段时间起草不带${m.service === "hindsight" ? "经验与约定" : "你的偏好"}，沉淀在重试。最近的错误：${m.error}`,
+			});
 	const failed = s.failures.filter((f) => s.now - f.ts < 3600).length;
 	if (failed >= 5)
 		issues.push({
@@ -107,6 +117,7 @@ function snapshot(): Snapshot {
 		inflight: [...inflight].map(([id, d]) => ({ id, since: d.since, label: d.label })),
 		failures: recentRecords(200).filter((r) => r.status === "failed"),
 		alertBatches: batchesSnapshot(),
+		memoryDown: memoryDown(),
 	};
 }
 

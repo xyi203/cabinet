@@ -126,7 +126,6 @@ function Dashboard() {
 			setStoryReopen((n) => n + 1);
 			go("stories", { story: id });
 		},
-		onMemory: () => go("memory"),
 		/** 去定时页；带 id 时直接打开那个定时任务的执行记录 */
 		onCron: (id?: string) => go("cron", id ? { sched: id } : {}),
 	};
@@ -249,7 +248,6 @@ function Dashboard() {
 					onClose={closeDetail}
 					onStory={nav.onStory}
 					onCron={nav.onCron}
-					onMemory={nav.onMemory}
 					onBack={back}
 					backLabel={backLabel}
 				/>
@@ -315,7 +313,7 @@ function Ops({
 										{t.error && <span className="bad clamp">{t.error}</span>}
 									</div>
 								</div>
-								<RowActions t={t} s={s} onOpen={() => onOpen(t.id)} onMemory={() => {}} />
+								<RowActions t={t} s={s} onOpen={() => onOpen(t.id)} />
 							</div>
 						))}
 					</div>

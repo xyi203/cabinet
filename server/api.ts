@@ -8,7 +8,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { type LiveEvent, bus, changed } from "./bus.ts";
-import { COMMON_EMOJI, DEV_ORIGIN, OAUTH_REDIRECT, PATHS, PORT } from "./config.ts";
+import { COMMON_EMOJI, DEV_ORIGIN, MEMORY, OAUTH_REDIRECT, PATHS, PORT } from "./config.ts";
 import { applyDraftAction } from "./drafts/actions.ts";
 import { ApprovalError, decideApproval } from "./approvals.ts";
 import { lineage, recentLineage } from "./pipeline.ts";
@@ -48,20 +48,11 @@ import { markDone } from "./done.ts";
 import { cancelFollowup } from "./followups.ts";
 import { RULE_DEFAULTS, RuleError, routeRules, saveRouteRules } from "./rules.ts";
 import { dashboardState, sessionLog } from "./tasks.ts";
-import { search } from "./memory/recall.ts";
-import {
-	type Classification,
-	MemoryError,
-	classifyMemory,
-	confirmMemory,
-	editMemory,
-	forgetMemory,
-	listMemories,
-	rememberFromYi,
-	resolveMemories,
-	restoreMemory,
-	vectorStatus,
-} from "./memory/store.ts";
+import { listKv } from "./db/index.ts";
+import { memoryDown } from "./memory/health.ts";
+import { recall, render } from "./memory/recall.ts";
+import { rememberFromYi } from "./memory/remember.ts";
+import { type Classification, MemoryError, editConvention, listConventions, removeConvention } from "./memory/store.ts";
 import { log, now } from "./util.ts";
 
 const TOKEN = randomBytes(24).toString("base64url");
@@ -109,33 +100,20 @@ const classification = (body: any): Classification => ({
 	appliesWhen: String(body.appliesWhen ?? ""),
 });
 
-/** 记忆的写操作：Yi 在看板上新增、确认、遗忘、恢复、改分类。都带预期 revision，防止对着旧版本操作 */
-function memoryAction(p: string, body: any) {
-	if (p === "/api/memory") {
-		const content = String(body.content ?? "");
-		return rememberFromYi(
-			content,
-			classification(body),
-			{ kind: "board", ref: "board", quote: content.slice(0, 200), at: now() },
-			"board",
-			true,
-		);
-	}
-	if (p === "/api/memory/resolve")
-		return resolveMemories(
-			Number(body.keep),
-			(Array.isArray(body.items) ? body.items : []).map((x: any) => ({ id: Number(x.id), revision: Number(x.revision) })),
-			String(body.content ?? ""),
-		);
-	const m = /^\/api\/memory\/(\d+)\/(confirm|forget|restore|classify|edit)$/.exec(p);
+/** 记忆的写操作：Yi 在看板上手写一条（按分类去约定 / OpenViking / Hindsight），改、停用、删除约定 */
+async function memoryAction(p: string, body: any) {
+	if (p === "/api/memory") return rememberFromYi(String(body.content ?? ""), classification(body), `board:${Date.now()}`);
+	const m = /^\/api\/memory\/conventions\/([\w-]+)\/(edit|delete)$/.exec(p);
 	if (!m) return undefined;
-	const id = Number(m[1]);
-	const revision = Number(body.revision);
-	if (m[2] === "confirm") return confirmMemory(id, revision);
-	if (m[2] === "forget") return forgetMemory(id, revision);
-	if (m[2] === "restore") return restoreMemory(id, revision);
-	if (m[2] === "edit") return editMemory(id, revision, String(body.content ?? ""));
-	return classifyMemory(id, revision, classification(body));
+	if (m[2] === "delete") {
+		await removeConvention(m[1]);
+		return { deleted: m[1] };
+	}
+	return editConvention(m[1], {
+		content: body.content === undefined ? undefined : String(body.content),
+		appliesWhen: body.appliesWhen === undefined ? undefined : String(body.appliesWhen),
+		active: body.active === undefined ? undefined : Boolean(body.active),
+	});
 }
 
 function sse(req: IncomingMessage, res: ServerResponse) {
@@ -229,12 +207,28 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			const ext = path.extname(name).slice(1).toLowerCase();
 			return send(res, 200, readFileSync(path.join(PATHS.stickers, name)), `image/${ext === "jpg" ? "jpeg" : ext}`);
 		}
-		if (p === "/api/memory") return send(res, 200, { items: listMemories(), vectors: vectorStatus() });
+		if (p === "/api/memory") {
+			let conventions: Awaited<ReturnType<typeof listConventions>> = [];
+			let error: string | undefined;
+			try {
+				conventions = await listConventions();
+			} catch (e) {
+				error = String((e as Error).message).slice(0, 200);
+			}
+			return send(res, 200, {
+				conventions,
+				error,
+				down: memoryDown(),
+				pending: listKv("pending:memory:").length,
+				bank: MEMORY.bank,
+				hindsightUrl: MEMORY.hindsightUrl,
+				vikingRoot: MEMORY.vikingRoot,
+			});
+		}
 		if (p === "/api/memory/search") {
-			// 看板搜索不限作用域，带两臂分数，校准门槛用
-			const q = url.searchParams.get("q") ?? "";
-			const r = await search(q, { anyScope: true, states: ["active", "candidate", "contested"] });
-			return send(res, 200, { ids: r.items.map((m) => m.id), scores: r.scores, degraded: r.degraded });
+			// 试召回：不限作用域，给出各路结果和注入时的样子
+			const r = await recall(url.searchParams.get("q") ?? "", "any");
+			return send(res, 200, { ...r, block: render(r) });
 		}
 		return send(res, 404, { error: "not found" });
 	}
@@ -296,11 +290,12 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 	}
 	if (p.startsWith("/api/memory")) {
 		try {
-			const item = memoryAction(p, body);
+			const item = await memoryAction(p, body);
 			return item ? send(res, 200, { ok: true, item }) : send(res, 404, { error: "not found" });
 		} catch (e) {
 			if (e instanceof MemoryError) return send(res, 409, { error: e.message });
-			throw e;
+			// Hindsight / OpenViking 不可用：原因照实回给看板
+			return send(res, 502, { error: String((e as Error).message).slice(0, 200) });
 		}
 	}
 	// 定时任务：新建 / 修改、立即运行、结束、删除

@@ -1,21 +1,22 @@
 // 「记住 xxx」：正文就是 Yi 的原话，不经模型改写；模型只帮着分类（种类、是不是长期约定、什么时候适用）。
 // 约定同样要过 basis 校验：表达长期意图的原话片段必须逐字出现在 Yi 这句话里，否则记成线索。
-import { existsSync, readFileSync } from "node:fs";
-import { MEMORY, PATHS } from "../config.ts";
+// 分完类按去处写：约定 → Hindsight directive；偏好 → OpenViking（Yi 的画像）；事实与经验 → Hindsight retain
+import { MEMORY } from "../config.ts";
 import { complete } from "../agent/models.ts";
-import { getKv, setKv } from "../db/index.ts";
-import type { Evidence } from "../db/schema.ts";
+import { changed } from "../bus.ts";
 import { log } from "../util.ts";
+import { retain } from "./hindsight.ts";
 import {
 	type Classification,
 	type Kind,
 	KINDS,
-	type Memory,
 	MemoryError,
+	addConvention,
 	checkClassification,
 	normalize,
-	rememberFromYi,
+	rejectContent,
 } from "./store.ts";
+import { commit } from "./viking.ts";
 
 const SYSTEM = `Yi 让助理记住一句话。只做分类，不改写原话。只输出一行 JSON：
 {"kind":"preference|fact|experience","application":"convention|reference","applies_when":"","basis":""}
@@ -69,40 +70,56 @@ export async function classifyStatement(text: string, candidates?: ScopeCandidat
 	}
 }
 
-/**
- * 旧版 data/memory/MEMORY.md 导入一次：都是 Yi 用「记住」写进去的，记成已确认的线索。
- * 不自动推成约定，要当约定用的在看板上改分类。文件本身不动。
- */
-export function importLegacyMemory() {
-	if (getKv("memory:imported", false) || !existsSync(PATHS.memory)) return;
-	let n = 0;
-	for (const raw of readFileSync(PATHS.memory, "utf8").split("\n")) {
-		const line = raw.replace(/^\s*[-*]\s*/, "").trim();
-		if (!line || line.startsWith("#")) continue;
-		const meta = /（(\d{4}-\d{2}-\d{2})，来源 ([\w-]+)）$/.exec(line);
-		const content = meta ? line.slice(0, meta.index).trim() : line;
-		const at = meta ? Date.parse(meta[1]) / 1000 : Date.now() / 1000;
-		try {
-			rememberFromYi(
-				content,
-				{ kind: "fact", application: "reference", appliesWhen: "" },
-				{ kind: "yi", ref: meta?.[2] ?? "MEMORY.md", quote: content.slice(0, 200), at },
-				"import",
-				true,
-			);
-			n++;
-		} catch (e) {
-			if (!(e instanceof MemoryError)) throw e;
-			log("旧记忆跳过", e.message, content.slice(0, 80));
-		}
+export interface Remembered {
+	where: "convention" | "hindsight" | "openviking";
+	content: string;
+	classification: Classification;
+	/** 约定的 directive id；其余是写进去时用的来源 id */
+	ref: string;
+}
+
+/** Yi 亲口记一条（飞书里「记住 xxx」、看板手写）。source 用来去重：同一个来源重试时整篇替换 */
+export async function rememberFromYi(text: string, c: Classification, source: string, at = Date.now() / 1000): Promise<Remembered> {
+	const content = normalize(text);
+	const bad = rejectContent(content) ?? checkClassification(c);
+	if (bad) throw new MemoryError(bad);
+	const scope = c.scope ?? "personal";
+	if (c.application === "convention") {
+		const conv = await addConvention(content, c.appliesWhen, scope, c.scopeName ?? "");
+		return { where: "convention", content, classification: c, ref: conv.id };
 	}
-	setKv("memory:imported", true);
-	log(`已导入旧记忆 ${n} 条`);
+	if (c.kind === "preference") {
+		const about =
+			scope === "personal"
+				? ""
+				: `（只在${scope.startsWith("chat:") ? `「${c.scopeName}」这个会话里` : `和 ${c.scopeName} 打交道时`}适用）`;
+		await commit(source, [
+			{ role: "assistant", content: "〔cabinet 飞书助理〕Yi 让助理记住下面这句话，这是 Yi 的原话。", at },
+			{ role: "user", content: `记住：${content}${about}`, at },
+		]);
+		changed();
+		return { where: "openviking", content, classification: c, ref: source };
+	}
+	await retain(
+		[
+			{
+				content: `Yi 亲口让助理记住：${content}`,
+				context: "Yi 的原话，已确认",
+				documentId: source,
+				at,
+				// 限定了人或会话的只打那一个 tag：召回时 personal 处处都在，带上它就等于不限
+				tags: [scope],
+				metadata: { source, kind: c.kind },
+			},
+		],
+		false,
+	);
+	changed();
+	return { where: "hindsight", content, classification: c, ref: source };
 }
 
 /** 飞书里 Yi 说「记住 xxx」 */
-export async function rememberStatement(text: string, messageId: string, candidates?: ScopeCandidates): Promise<Memory> {
+export async function rememberStatement(text: string, messageId: string, candidates?: ScopeCandidates): Promise<Remembered> {
 	const c = await classifyStatement(text, candidates);
-	const evidence: Evidence = { kind: "yi", ref: messageId, quote: text.slice(0, 200), at: Date.now() / 1000 };
-	return rememberFromYi(text, c, evidence, "remember", true);
+	return rememberFromYi(text, c, `remember:${messageId}`);
 }

@@ -117,22 +117,17 @@ export const SKILLS_DIR = expand(env("SKILLS_DIR", "~/.agents/skills"));
 // MCP server 定义，沿用 pi 的 mcp.json；agent 在 agents.json 的 mcp 里选用（server/agent/mcp.ts）
 export const MCP_CONFIG = expand(env("MCP_CONFIG", "~/.pi/agent/mcp.json"));
 
-// 长期记忆：约定每次都带，线索按关键词 + 向量召回、过门槛才带；草稿反馈和工具结果自动提取
+// 长期记忆：经验、事实与约定在 Hindsight 的独立 bank（约定是 directive），Yi 本人的偏好与画像在 OpenViking（和 Claude Code 共用）
 export const MEMORY = {
 	enabled: env("MEMORY_ENABLED", "1") === "1",
-	/** 提取与「记住」分类用的模型 */
+	/** 「记住」分类用的模型 */
 	model: env("MEMORY_MODEL", PI_MODEL),
-	/** Ollama 的 /api/embed；留空则只用关键词 */
-	embedUrl: env("EMBED_URL", "http://127.0.0.1:11434"),
-	embedModel: env("EMBED_MODEL", "qwen3-embedding:4b"),
-	/** 只加在查询上；换前缀或模型要重新校准下面三个门槛 */
-	queryPrefix: env("EMBED_QUERY_PREFIX", "Instruct: Given a chat message, retrieve memories relevant to replying to it\nQuery: "),
-	/** 向量臂：余弦过它就留下（0 = 不启用） */
-	minSimilarity: Number(env("MEMORY_MIN_SIMILARITY", "0.58")),
-	/** 关键词臂：命中 token 的归一 IDF 之和过它就留下 */
-	minKeyword: Number(env("MEMORY_MIN_KEYWORD", "1.0")),
-	/** 只过关键词门槛的，向量跑了且余弦低于它就不算过（挡常用词凑分的误召回） */
-	minKeywordCosine: Number(env("MEMORY_MIN_KEYWORD_COSINE", "0.45")),
+	hindsightUrl: env("HINDSIGHT_URL", "http://127.0.0.1:8888"),
+	/** 不和 hindsight-coding-agents 给仓库建的 coding-agent::cabinet 混用：那个记的是代码，这个记的是 Yi 的事 */
+	bank: env("HINDSIGHT_BANK", "cabinet"),
+	vikingUrl: env("OPENVIKING_URL", "http://127.0.0.1:1933"),
+	/** 召回只看这棵树下的偏好、人物与事件 */
+	vikingRoot: env("OPENVIKING_MEMORY_ROOT", "viking://user/default/memories/"),
 	topK: Number(env("MEMORY_TOP_K", "8")),
 	tokens: Number(env("MEMORY_TOKENS", "1500")),
 	conventionTokens: Number(env("MEMORY_CONVENTION_TOKENS", "800")),
@@ -143,7 +138,7 @@ export const PATHS = {
 	/** pi-durable 的对话存储（会话、模型轮次、工具调用） */
 	agentDb: path.join(DATA_DIR, "agents.sqlite"),
 	sessions: path.join(DATA_DIR, "sessions"),
-	/** 旧版记忆文件，启动时导入一次 */
+	/** 旧版记忆文件，scripts/import-legacy.ts 拷进来，scripts/migrate-memory.ts 迁走 */
 	memory: path.join(DATA_DIR, "memory", "MEMORY.md"),
 	stickers: path.join(DATA_DIR, "stickers"),
 	/** 消息里的截图：起草时下载到这里，把路径给 agent 用 read 查看 */
