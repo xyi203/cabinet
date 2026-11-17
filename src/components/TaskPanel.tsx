@@ -74,7 +74,7 @@ function skipText(rule: string) {
  * 没起草的消息转成任务：说一句要做什么（不说也行）就交给助手去查，这件事的消息原文和 ID 自动带上；
  * 改代码、指定仓库或模型这些少用的收在「更多选项」里
  */
-function QuickDispatch({ t, docked }: { t: TaskView; docked: boolean }) {
+function QuickDispatch({ t }: { t: TaskView }) {
 	const qc = useQueryClient();
 	const [text, setText] = useState("");
 	const [more, setMore] = useState(false);
@@ -95,13 +95,6 @@ function QuickDispatch({ t, docked }: { t: TaskView; docked: boolean }) {
 		}
 	}
 	if (more) return <DispatchForm task={{ id: t.id, request: requestOf(t) }} onDone={() => setMore(false)} />;
-	// 停在工作台右边时，底部输入框说一句就是转成任务（Workbench Dock），这里只留少用的完整表单入口
-	if (docked)
-		return (
-			<button className="link text-[12px]" onClick={() => setMore(true)}>
-				改代码、选仓库或模型
-			</button>
-		);
 	return (
 		<div className="out">
 			<div className="ob">
@@ -391,9 +384,10 @@ export function TaskPanel({
 						<Followups t={t} />
 					</Ev>
 				)}
-				{bare && (
+				{/* 停在工作台右边时，底部输入框说一句就是转成任务（Workbench Dock），时间线里不再放 */}
+				{bare && !docked && (
 					<Ev>
-						<QuickDispatch t={t} docked={docked} />
+						<QuickDispatch t={t} />
 					</Ev>
 				)}
 				{t.need === "retry" && !liveDev && (
