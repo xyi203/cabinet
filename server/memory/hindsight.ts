@@ -142,11 +142,14 @@ export interface ListedMemory extends Fact {
 /** 看板列表：按时间倒序分页，q 是正文子串过滤（Hindsight 那边不走索引，量小无妨） */
 export async function listMemories(opts: {
 	q?: string;
+	/** world / experience / observation；不给就全部 */
+	type?: string;
 	offset?: number;
 	limit?: number;
 }): Promise<{ items: ListedMemory[]; total: number }> {
 	const params = new URLSearchParams({ limit: String(opts.limit ?? 50), offset: String(opts.offset ?? 0) });
 	if (opts.q) params.set("q", opts.q);
+	if (opts.type) params.set("type", opts.type);
 	const r = await call<{ items: Array<Record<string, any>>; total: number }>("GET", `/memories/list?${params}`);
 	return {
 		total: r.total ?? 0,

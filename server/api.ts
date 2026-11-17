@@ -231,8 +231,18 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		if (p === "/api/memory/facts" || p === "/api/memory/notes") {
 			try {
 				if (p === "/api/memory/notes") return send(res, 200, { items: await listNotes() });
-				const q = url.searchParams.get("q") ?? "";
-				return send(res, 200, await listMemories({ q, offset: Number(url.searchParams.get("offset") ?? 0) }));
+				const sp = url.searchParams;
+				const type = sp.get("type") ?? "";
+				return send(
+					res,
+					200,
+					await listMemories({
+						q: sp.get("q") ?? "",
+						type: ["world", "experience", "observation"].includes(type) ? type : undefined,
+						offset: Math.max(0, Number(sp.get("offset")) || 0),
+						limit: Math.min(100, Math.max(1, Number(sp.get("limit")) || 50)),
+					}),
+				);
 			} catch (e) {
 				return send(res, 502, { error: String((e as Error).message).slice(0, 200) });
 			}

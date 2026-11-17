@@ -379,8 +379,10 @@ export interface NoteFile {
 	updated: string;
 }
 
-export const fetchFacts = (q: string, offset: number) =>
-	getJson<{ items: ListedFact[]; total: number }>(`/api/memory/facts?${new URLSearchParams({ q, offset: String(offset) })}`);
+export const fetchFacts = (p: { q: string; type: string; offset: number; limit: number }) =>
+	getJson<{ items: ListedFact[]; total: number }>(
+		`/api/memory/facts?${new URLSearchParams({ q: p.q, type: p.type, offset: String(p.offset), limit: String(p.limit) })}`,
+	);
 export const fetchNotes = () => getJson<{ items: NoteFile[] }>("/api/memory/notes");
 export const fetchMemory = () => getJson<MemoryState>("/api/memory");
 export const searchMemory = (q: string) => getJson<Recalled>(`/api/memory/search?${new URLSearchParams({ q })}`);

@@ -1,7 +1,9 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { createColumnHelper, useTable } from "@tanstack/react-table";
 import { type ReactNode, useState } from "react";
 import {
 	type Classification,
+	type ListedFact,
 	type Convention,
 	type Recalled,
 	addMemory,
@@ -13,6 +15,7 @@ import {
 	searchMemory,
 } from "../lib/api";
 import { time } from "../lib/format";
+import { DataTable, Pagination, type PaginationState, pageFeatures } from "./DataTable";
 import { toast } from "./Toast";
 import { Segmented } from "./ui";
 
@@ -305,66 +308,95 @@ function Notes() {
 	);
 }
 
-/** Hindsight 里的经验与事实：按时间倒序分页，可按正文过滤 */
+const factHelper = createColumnHelper<typeof pageFeatures, ListedFact>();
+// 列定义放模块级：每次渲染都新建会让表重算行模型
+const factColumns = factHelper.columns([
+	factHelper.accessor("text", {
+		header: "内容",
+		cell: (c) => <div className="leading-[22px] break-words whitespace-pre-wrap">{c.getValue()}</div>,
+	}),
+	factHelper.accessor("type", {
+		header: "类型",
+		cell: (c) => <span className={`${tag} bg-soft text-text-2`}>{TYPE[c.getValue()] ?? c.getValue()}</span>,
+	}),
+	factHelper.accessor("tags", {
+		header: "范围",
+		cell: (c) => <span className="text-[12px] text-text-2">{factScope(c.getValue()) || "通用"}</span>,
+	}),
+	factHelper.accessor("at", {
+		header: "时间",
+		cell: (c) => <span className="text-[12px] text-muted tabular-nums">{c.getValue()?.slice(0, 10) ?? ""}</span>,
+	}),
+]);
+const FACT_COLS = { type: "w-[64px]", tags: "w-[80px] hidden md:table-cell", at: "w-[92px] hidden sm:table-cell" };
+const noFacts: ListedFact[] = [];
+
+/** Hindsight 里的经验与事实：服务端分页，可按正文与类型过滤 */
 function Facts() {
 	const [q, setQ] = useState("");
 	const [filter, setFilter] = useState("");
-	const [page, setPage] = useState(0);
-	const { data, error } = useQuery({
-		queryKey: ["memory", "facts", filter, page],
-		queryFn: () => fetchFacts(filter, page * 50),
+	const [type, setType] = useState("");
+	const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 20 });
+	const { data, error, isFetching } = useQuery({
+		queryKey: ["memory", "facts", filter, type, pagination],
+		queryFn: () => fetchFacts({ q: filter, type, offset: pagination.pageIndex * pagination.pageSize, limit: pagination.pageSize }),
 		placeholderData: keepPreviousData,
 	});
-	const pages = data ? Math.max(1, Math.ceil(data.total / 50)) : 1;
+	const table = useTable({
+		features: pageFeatures,
+		columns: factColumns,
+		data: data?.items ?? noFacts,
+		getRowId: (f) => f.id,
+		rowCount: data?.total ?? 0,
+		manualPagination: true,
+		state: { pagination },
+		onPaginationChange: setPagination,
+	});
+	// 换条件回到第一页
+	const reset = () => setPagination((p) => ({ ...p, pageIndex: 0 }));
 	return (
 		<Section name="经验与事实" count={data?.total} hint="Hindsight 从草稿、问答里抽出来的，「归纳」是它合并多条后的结论">
-			<input
-				className={`${field} w-full lg:max-w-[420px]`}
-				aria-label="按内容过滤"
-				value={q}
-				onChange={(e) => setQ(e.target.value)}
-				onKeyDown={(e) => {
-					if (e.key === "Enter") {
-						setFilter(q.trim());
-						setPage(0);
-					}
-				}}
-				placeholder="按内容过滤，回车"
-			/>
-			{error ? (
+			<div className="flex flex-wrap items-center gap-2">
+				<Segmented
+					value={type}
+					options={[
+						{ value: "", label: "全部" },
+						{ value: "world", label: "事实" },
+						{ value: "experience", label: "经历" },
+						{ value: "observation", label: "归纳" },
+					]}
+					onChange={(t) => {
+						setType(t);
+						reset();
+					}}
+				/>
+				<input
+					className={`${field} w-full lg:max-w-[360px] lg:flex-1`}
+					aria-label="按内容过滤"
+					value={q}
+					onChange={(e) => {
+						setQ(e.target.value);
+						if (!e.target.value.trim() && filter) {
+							setFilter("");
+							reset();
+						}
+					}}
+					onKeyDown={(e) => {
+						if (e.key === "Enter") {
+							setFilter(q.trim());
+							reset();
+						}
+					}}
+					placeholder="按内容过滤，回车"
+				/>
+			</div>
+			{error && !data ? (
 				<div className="px-0.5 text-[14px] text-bad">读取失败：{(error as Error).message}</div>
-			) : !data ? (
-				<div className="px-0.5 text-[14px] text-muted">加载中…</div>
-			) : data.items.length ? (
-				<>
-					<div className="border-y border-line">
-						{data.items.map((f) => (
-							<div key={f.id} className="flex flex-col gap-1 border-t border-line px-1 py-3 first:border-t-0">
-								<div className="text-[14px] leading-[22px] break-words whitespace-pre-wrap text-text">{f.text}</div>
-								<div className="flex flex-wrap gap-x-3 text-[12px] text-muted">
-									<span>{TYPE[f.type] ?? f.type}</span>
-									{factScope(f.tags) && <span className="text-text-2">{factScope(f.tags)}</span>}
-									{f.at && <span className="tabular-nums">{f.at.slice(0, 10)}</span>}
-								</div>
-							</div>
-						))}
-					</div>
-					{pages > 1 && (
-						<div className="flex items-center gap-2 text-[12px] text-muted">
-							<button className="btn ghost sm" disabled={page === 0} onClick={() => setPage(page - 1)}>
-								上一页
-							</button>
-							<span className="tabular-nums">
-								{page + 1} / {pages}
-							</span>
-							<button className="btn ghost sm" disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>
-								下一页
-							</button>
-						</div>
-					)}
-				</>
 			) : (
-				<div className="px-0.5 text-[14px] text-muted">{filter ? "没有匹配的。" : "还没有。"}</div>
+				<>
+					<DataTable table={table} colClass={FACT_COLS} loading={isFetching} empty={filter || type ? "没有匹配的。" : "还没有。"} />
+					<Pagination table={table} />
+				</>
 			)}
 		</Section>
 	);
