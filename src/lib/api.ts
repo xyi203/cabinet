@@ -431,6 +431,10 @@ export const createAgentTask = (input: {
 	thinking?: string;
 	/** 对话页的聊天 */
 	chat?: boolean;
+	/** 挂到这件事上（没起草的消息转成任务） */
+	task?: string;
+	instructions?: string;
+	title?: string;
 }) => post<{ task: DevTask }>("/api/agent-tasks", input).then((d) => d.task);
 
 export interface ModelOption {

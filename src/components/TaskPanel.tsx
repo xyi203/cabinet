@@ -1,8 +1,9 @@
 // 任务详情：一件事的来龙去脉排成一条时间线（docs/router-worker.md §5.2）——进来的消息、路由判定、每版草稿、审批、agent 任务、结果。
 // 当前那份产出（待确认的草稿、agent 任务）嵌在时间线末尾，直接复用原来的草稿抽屉和任务抽屉：改稿、发送、对话、看改动、推送都在那里
 import { type ReactNode, useContext, useState } from "react";
-import type { Draft, State, Task, TaskEvent, TaskView } from "../lib/api";
-import { AGENT_NAME, SOURCE, STATUS, describeDraft, hm, isLive, time, titleOf } from "../lib/format";
+import { useQueryClient } from "@tanstack/react-query";
+import { type Draft, type State, type Task, type TaskEvent, type TaskView, createAgentTask } from "../lib/api";
+import { AGENT_NAME, SOURCE, STATUS, describeDraft, hm, isBare, isLive, requestOf, time, titleOf } from "../lib/format";
 import { ApprovalActions, RowActions, useAct } from "./Actions";
 import { DevDrawer, DispatchForm } from "./DevDrawer";
 import { Conclusion } from "./AgentUi";
@@ -68,12 +69,57 @@ function skipText(rule: string) {
 	return `没有起草：${r.replace(/Yi/g, "你")}`;
 }
 
-/** 转成任务时交给助手的内容：这件事里的消息原文，带上消息 ID，助手能用 lookup 查前后文 */
-function requestOf(t: TaskView) {
-	const msgs = t.events.filter((e): e is Extract<TaskEvent, { k: "msg" }> => e.k === "msg");
-	const lines = msgs.map((m) => `${m.owner ? "我" : m.who || "对方"}：${m.text}`);
-	const ids = msgs.map((m) => m.mid).filter(Boolean);
-	return `${lines.join("\n")}${ids.length ? `\n\n（这几条消息的 ID：${ids.map((x) => `${t.source}:${x}`).join("、")}）` : ""}`;
+/**
+ * 没起草的消息转成任务：说一句要做什么（不说也行）就交给助手去查，这件事的消息原文和 ID 自动带上；
+ * 改代码、指定仓库或模型这些少用的收在「更多选项」里
+ */
+function QuickDispatch({ t }: { t: TaskView }) {
+	const qc = useQueryClient();
+	const [text, setText] = useState("");
+	const [more, setMore] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const [msg, setMsg] = useState<{ text: string; bad?: boolean }>();
+	async function submit() {
+		setBusy(true);
+		try {
+			const ask = text.trim();
+			await createAgentTask({ agent: "assistant", request: requestOf(t), instructions: ask, title: ask || t.title, task: t.id });
+			setText("");
+			setMsg({ text: "已交给助手，查完会出现在「等你处理」" });
+			qc.invalidateQueries({ queryKey: ["state"] });
+		} catch (e) {
+			setMsg({ text: (e as Error).message, bad: true });
+		} finally {
+			setBusy(false);
+		}
+	}
+	if (more) return <DispatchForm task={{ id: t.id, request: requestOf(t) }} onDone={() => setMore(false)} />;
+	return (
+		<div className="out">
+			<div className="ob">
+				<textarea
+					value={text}
+					disabled={busy}
+					placeholder="想让助手做什么？不填就按这几条消息去查，例如：看看评论数据里能不能区分真实用户的合身反馈"
+					aria-label="转成任务：想让助手做什么"
+					style={{ minHeight: 64 }}
+					onChange={(e) => setText(e.target.value)}
+					onKeyDown={(e) => {
+						if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !busy) void submit();
+					}}
+				/>
+				<div className="row-inline">
+					<button className="btn primary" disabled={busy} onClick={submit}>
+						交给助手
+					</button>
+					<button className="link text-[12px]" onClick={() => setMore(true)}>
+						改代码、选仓库或模型
+					</button>
+				</div>
+				{msg && <div className={msg.bad ? "err" : "meta"}>{msg.text}</div>}
+			</div>
+		</div>
+	);
 }
 
 /** 时间线一行：左边时间，右边内容；没有发生时间的（约好的复查）时间列留空，内容照样在右栏 */
@@ -225,8 +271,7 @@ export function TaskPanel({
 	const liveDev = lastDev && (!lastDraft || lastDev.created >= lastDraft.created) ? lastDev : undefined;
 	const liveDraft = !liveDev && lastDraft && (isLive(lastDraft) || lastDraft.status === "revising") ? lastDraft : undefined;
 	// 没起草也没派过活的消息（你已亲自回复、回过表情）：事情可能还要接着做，能直接转成任务
-	const bare = !drafts.length && !devs.length && (t.source === "lark" || t.source === "meego");
-	const [dispatching, setDispatching] = useState(false);
+	const bare = isBare(t);
 	// 派活的原文就是 agent 任务的「任务」，下面嵌着的任务里已经有了，时间线上不再重复
 	const items: Item[] = t.events
 		.map((e, i) => ({ e, i }))
@@ -340,13 +385,7 @@ export function TaskPanel({
 				)}
 				{bare && (
 					<Ev>
-						{dispatching ? (
-							<DispatchForm task={{ id: t.id, request: requestOf(t) }} onDone={() => setDispatching(false)} />
-						) : (
-							<button className="link" onClick={() => setDispatching(true)}>
-								转成任务
-							</button>
-						)}
+						<QuickDispatch t={t} />
 					</Ev>
 				)}
 				{t.need === "retry" && !liveDev && (

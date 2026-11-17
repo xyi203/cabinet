@@ -4,7 +4,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type State, type TaskView, createAgentTask, fetchDispatch, fetchStickers, pollNow } from "../lib/api";
-import { AGENT_NAME, ago, money, pillOf, titleOf, waitingOn } from "../lib/format";
+import { AGENT_NAME, ago, isBare, money, pillOf, requestOf, titleOf, waitingOn } from "../lib/format";
 import { type Actions, type PickItem, type Target, Choices, actionsOf, draftOf, matchText, targetsOf, useRunner } from "./Choices";
 import { Docked, Embedded } from "./Drawer";
 import { TaskPanel } from "./TaskPanel";
@@ -302,9 +302,13 @@ function Dock({
 	};
 	const answering = open && (!!actions.typeIn || actions.slash.length > 0);
 	const assistant = s.agents.find((a) => a.name === "assistant")?.name ?? s.agents[0]?.name ?? "assistant";
+	// 选中的是没起草的消息（你已亲自回复过）：说一句就把这件事转成任务，消息原文自动带上
+	const follow = !answering && cur && isBare(cur) ? cur : undefined;
 	const placeholder = answering
 		? `${actions.typeIn?.hint.replace(/^或者/, "") ?? ""}${actions.slash.length ? "；/改写 让助手重写" : ""}`
-		: `派一件事给${AGENT_NAME[assistant] ?? "助手"}`;
+		: follow
+			? `说一句要${AGENT_NAME[assistant] ?? "助手"}接着做什么，会带上这几条消息`
+			: `派一件事给${AGENT_NAME[assistant] ?? "助手"}`;
 	const submit = async () => {
 		const v = text.trim();
 		if (!v || busy) return;
@@ -316,7 +320,10 @@ function Dock({
 			if (r.advance) onAdvance();
 			return;
 		}
-		if (await exec(() => createAgentTask({ agent: assistant, request: v }).then(() => "已交给助手，在「正在运行」看进度"))) setText("");
+		const input = follow
+			? { agent: assistant, request: requestOf(follow), instructions: v, title: v, task: follow.id }
+			: { agent: assistant, request: v };
+		if (await exec(() => createAgentTask(input).then(() => "已交给助手，在「正在运行」看进度"))) setText("");
 	};
 	return (
 		<div className="px-8 pb-6">

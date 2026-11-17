@@ -460,6 +460,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 						branch: body.branch ? String(body.branch) : undefined,
 						chat: Boolean(body.chat),
 						taskId: body.task ? String(body.task) : undefined,
+						title: body.title ? String(body.title) : undefined,
 						instructions: body.instructions ? String(body.instructions) : undefined,
 						...modelChoice(body),
 					}),

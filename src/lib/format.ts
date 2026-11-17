@@ -1,3 +1,4 @@
+import type { TaskEvent, TaskView } from "./api";
 export const STATUS: Record<string, string> = {
 	pending: "待发送",
 	noreply: "建议不回复",
@@ -170,4 +171,16 @@ export function pillOf(t: { status: string; need: string | null; hold?: number; 
 	if (t.status === "todo") return t.hold ? ["等你聊完", "p-hold"] : ["排队中", "p-q"];
 	if (t.status === "cancelled") return [t.result ?? "已取消", "p-off"];
 	return ["已完成", "p-done"];
+}
+
+/** 没起草也没派过活的飞书 / 飞书项目消息（你已亲自回复、回过表情）：事情可能还要接着做，能直接转成任务 */
+export const isBare = (t: Pick<TaskView, "drafts" | "devTasks" | "source">) =>
+	!t.drafts.length && !t.devTasks.length && (t.source === "lark" || t.source === "meego");
+
+/** 转成任务时交给助手的内容：这件事里的消息原文，带上消息 ID，助手能用 lookup 查前后文 */
+export function requestOf(t: Pick<TaskView, "events" | "source">) {
+	const msgs = t.events.filter((e): e is Extract<TaskEvent, { k: "msg" }> => e.k === "msg");
+	const lines = msgs.map((m) => `${m.owner ? "我" : m.who || "对方"}：${m.text}`);
+	const ids = msgs.map((m) => m.mid).filter(Boolean);
+	return `${lines.join("\n")}${ids.length ? `\n\n（这几条消息的 ID：${ids.map((x) => `${t.source}:${x}`).join("、")}）` : ""}`;
 }
