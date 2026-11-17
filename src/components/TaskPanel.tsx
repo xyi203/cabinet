@@ -66,14 +66,15 @@ function skipText(rule: string) {
 	if (r === "Yi 已亲自回复") return "你已亲自回复，没有起草";
 	if (r === "Yi 已回表情") return "你回过表情，没有起草";
 	if (r.startsWith("对方又接着发了")) return "对方又接着发了，和后面的消息一起处理";
-	return `没有起草：${r.replace(/Yi/g, "你")}`;
+	if (r === "Yi 标记不用起草") return "你标了不用起草";
+	return `没有起草：${r.replace(/Yi\s*/g, "你")}`;
 }
 
 /**
  * 没起草的消息转成任务：说一句要做什么（不说也行）就交给助手去查，这件事的消息原文和 ID 自动带上；
  * 改代码、指定仓库或模型这些少用的收在「更多选项」里
  */
-function QuickDispatch({ t }: { t: TaskView }) {
+function QuickDispatch({ t, docked }: { t: TaskView; docked: boolean }) {
 	const qc = useQueryClient();
 	const [text, setText] = useState("");
 	const [more, setMore] = useState(false);
@@ -94,6 +95,13 @@ function QuickDispatch({ t }: { t: TaskView }) {
 		}
 	}
 	if (more) return <DispatchForm task={{ id: t.id, request: requestOf(t) }} onDone={() => setMore(false)} />;
+	// 停在工作台右边时，底部输入框说一句就是转成任务（Workbench Dock），这里只留少用的完整表单入口
+	if (docked)
+		return (
+			<button className="link text-[12px]" onClick={() => setMore(true)}>
+				改代码、选仓库或模型
+			</button>
+		);
 	return (
 		<div className="out">
 			<div className="ob">
@@ -385,7 +393,7 @@ export function TaskPanel({
 				)}
 				{bare && (
 					<Ev>
-						<QuickDispatch t={t} />
+						<QuickDispatch t={t} docked={docked} />
 					</Ev>
 				)}
 				{t.need === "retry" && !liveDev && (
