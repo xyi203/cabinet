@@ -6,6 +6,7 @@ import { DispatchForm } from "./DevDrawer";
 import { Docked, Drawer, Embedded, type Msg, MsgLine } from "./Drawer";
 import { Markdown } from "./Markdown";
 import { MsgText } from "./MsgText";
+import { Fold, MrComments, ledgerTitle } from "./MrComments";
 import { StepLog } from "./StepLog";
 import { confirmDialog } from "./Confirm";
 import { dur } from "./ui";
@@ -253,6 +254,11 @@ function MrPanel({ d }: { d: Draft }) {
 					<div className="label">评审报告（只有你能看到）</div>
 					<Markdown text={d.report} />
 				</>
+			)}
+			{mr?.ledger && (
+				<Fold summary={ledgerTitle(mr.ledger)} open={!mr.done.includes("note")}>
+					<MrComments ledger={mr.ledger} />
+				</Fold>
 			)}
 			{mr && (
 				<>

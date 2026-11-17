@@ -13,13 +13,17 @@ import { taskOfAction } from "../taskstore.ts";
  * 草稿转任务挂回那条草稿所在的那件事；对话页的聊天不算一件事
  */
 export function routeBoard(id: string, agent: string, request: string, input: DispatchInput): number {
-	const task = { title: input.title, noTask: input.chat, taskId: input.draftId ? taskOfAction(input.draftId) : undefined };
+	const task = {
+		title: input.title,
+		noTask: input.chat,
+		taskId: input.taskId ?? (input.draftId ? taskOfAction(input.draftId) : undefined),
+	};
 	if (input.triggers?.length)
 		return decide(input.triggers, { agent, rule: input.rule ?? "派活", actionKind: "dev", actionId: id, ...task });
 	const tid = receive({ channel: "board", externalId: id, thread: `board:${id}`, actorId: OWNER_OPEN_ID, owner: true, text: request });
 	return decide([tid], {
 		agent,
-		rule: input.draftId ? `草稿转任务（${input.draftId}）` : "看板派活",
+		rule: input.draftId ? `草稿转任务（${input.draftId}）` : input.taskId ? "转成任务" : "看板派活",
 		actionKind: "dev",
 		actionId: id,
 		...task,

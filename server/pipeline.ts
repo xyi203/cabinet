@@ -90,6 +90,8 @@ export interface RouteInput {
 	title?: string;
 	/** 不算一件事：对话页的聊天 */
 	noTask?: boolean;
+	/** 不处理（none）也挂成一件事（taskstore.ts AssignInput.keep） */
+	keep?: boolean;
 }
 
 /** 记下一次分派，把这批 trigger 标成已分派（不处理的标成跳过），返回 route id */

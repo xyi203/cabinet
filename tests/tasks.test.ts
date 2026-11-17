@@ -233,3 +233,36 @@ test("起草失败：失败记录不在最近的流水里（几天前失败的�
 	assert.equal(v.retryId, "fail-m30");
 	assert.equal(v.error, "pi 失败 model_error");
 });
+
+test("Yi 已亲自回复、没起草的消息也挂成一件事，直接算完成；转成任务挂回这件事，状态跟着 agent 任务走", async () => {
+	const { routeBoard } = await import("../server/router/board.ts");
+	const s1 = decide([msg("m40", "lark:oc_40", "前因", "lark", "ou_jw")], {
+		rule: "跳过：对方又接着发了，合到后面那条一起起草",
+		actionKind: "none",
+		keep: true,
+	});
+	const s2 = decide([msg("m41", "lark:oc_40", "我的需求是…", "lark", "ou_jw")], {
+		rule: "跳过：Yi 已亲自回复",
+		actionKind: "none",
+		keep: true,
+	});
+	const id = taskOf(s2)!;
+	assert.ok(id, "跳过的也有一件事");
+	assert.equal(taskOf(s1), id, "同一个人连着发的几条在同一件事里");
+	assert.equal(refreshTask(id)?.status, "done");
+	const conv = routeBoard("dv40", "assistant", "我的需求是…", { agent: "assistant", request: "我的需求是…", taskId: id } as any);
+	assert.equal(taskOf(conv), id);
+	devFor(conv, "dv40", "running");
+	assert.equal(refreshTask(id)?.status, "in_progress", "转成任务后重新打开");
+});
+
+test("改动前跳过的飞书消息补挂一次成已完成的事；定时任务的跳过不补", async () => {
+	const { backfillSkipped } = await import("../server/taskstore.ts");
+	const old = decide([msg("m50", "lark:oc_50", "旧的跳过", "lark", "ou_jw")], { rule: "跳过：Yi 已亲自回复", actionKind: "none" });
+	const cron = decide([msg("s5:1", "cron:s5", "巡检", "cron")], { rule: "跳过：上一次（dv1）还在跑", actionKind: "none" });
+	assert.equal(taskOf(old), null);
+	backfillSkipped();
+	assert.ok(taskOf(old));
+	assert.equal(refreshTask(taskOf(old)!)?.status, "done");
+	assert.equal(taskOf(cron), null);
+});

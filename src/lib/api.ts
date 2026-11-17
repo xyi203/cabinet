@@ -27,8 +27,17 @@ export interface Draft {
 	report: string;
 	status: string;
 	created: number;
-	/** MR 预审的草稿：对应的 MR 和已经做过的动作 */
-	mr?: { project: string; iid: string; url: string; done: Array<"approve" | "note"> };
+	/** MR 预审的草稿：对应的 MR、已经做过的动作和评论台账 */
+	mr?: { project: string; iid: string; url: string; done: Array<"approve" | "note">; ledger?: MrLedger };
+}
+
+/** 评论台账（server/drafts/mr.ts）：要发到 MR 的行内评论和总结评论 */
+export interface MrLedger {
+	head_sha: string;
+	level?: string;
+	inline: Array<{ old_path: string; new_path: string; new_line?: number; old_line?: number; body: string }>;
+	threads?: Array<{ discussion_id: string; action: "resolve" | "reply"; body?: string }>;
+	summary: string;
 }
 
 export interface RecordRow {

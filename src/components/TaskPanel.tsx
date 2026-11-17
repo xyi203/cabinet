@@ -1,13 +1,15 @@
 // 任务详情：一件事的来龙去脉排成一条时间线（docs/router-worker.md §5.2）——进来的消息、路由判定、每版草稿、审批、agent 任务、结果。
 // 当前那份产出（待确认的草稿、agent 任务）嵌在时间线末尾，直接复用原来的草稿抽屉和任务抽屉：改稿、发送、对话、看改动、推送都在那里
-import { type ReactNode, useContext } from "react";
+import { type ReactNode, useContext, useState } from "react";
 import type { Draft, State, Task, TaskEvent, TaskView } from "../lib/api";
 import { AGENT_NAME, SOURCE, STATUS, describeDraft, hm, isLive, time, titleOf } from "../lib/format";
 import { ApprovalActions, RowActions, useAct } from "./Actions";
-import { DevDrawer } from "./DevDrawer";
+import { DevDrawer, DispatchForm } from "./DevDrawer";
 import { Conclusion } from "./AgentUi";
 import { Docked, Drawer, Embedded } from "./Drawer";
 import { DraftDrawer } from "./Drawers";
+import { Markdown } from "./Markdown";
+import { Fold, MrComments, ledgerTitle } from "./MrComments";
 import { MsgText } from "./MsgText";
 import { StepLog } from "./StepLog";
 import { Pill, StoryTag, workerName } from "./Workbench";
@@ -57,6 +59,23 @@ export function ruleText(rule: string) {
 		.trim();
 }
 
+/** 没起草的原因（make.ts staleReason）换成对 Yi 说的话 */
+function skipText(rule: string) {
+	const r = rule.replace(/^跳过：/, "").trim();
+	if (r === "Yi 已亲自回复") return "你已亲自回复，没有起草";
+	if (r === "Yi 已回表情") return "你回过表情，没有起草";
+	if (r.startsWith("对方又接着发了")) return "对方又接着发了，和后面的消息一起处理";
+	return `没有起草：${r.replace(/Yi/g, "你")}`;
+}
+
+/** 转成任务时交给助手的内容：这件事里的消息原文，带上消息 ID，助手能用 lookup 查前后文 */
+function requestOf(t: TaskView) {
+	const msgs = t.events.filter((e): e is Extract<TaskEvent, { k: "msg" }> => e.k === "msg");
+	const lines = msgs.map((m) => `${m.owner ? "我" : m.who || "对方"}：${m.text}`);
+	const ids = msgs.map((m) => m.mid).filter(Boolean);
+	return `${lines.join("\n")}${ids.length ? `\n\n（这几条消息的 ID：${ids.map((x) => `${t.source}:${x}`).join("、")}）` : ""}`;
+}
+
 /** 时间线一行：左边时间，右边内容；没有发生时间的（约好的复查）时间列留空，内容照样在右栏 */
 function Ev({ at, children }: { at?: number; children: ReactNode }) {
 	return (
@@ -79,6 +98,7 @@ function eventNode(e: TaskEvent): ReactNode {
 				</div>
 			</>
 		);
+	if (e.k === "route" && e.kind === "none") return <div className="sys dim">{skipText(e.rule)}</div>;
 	if (e.k === "route")
 		return (
 			<div className="sys">
@@ -133,6 +153,51 @@ function logOf(d: Draft, t: TaskView): Task {
 	};
 }
 
+/**
+ * 时间线上已经处理完的一版草稿。MR 预审的评审报告、评论台账在草稿发出、被替换后照样留着，
+ * 这里一并列出来，再加上这一版是怎么审 / 怎么起草的，事后能对照着看
+ */
+function DraftRecord({ d, t }: { d: Draft; t: TaskView }) {
+	const mr = d.mr;
+	const ledger = mr?.ledger;
+	const review = Boolean(d.report || mr);
+	return (
+		<div className="out">
+			<div className="oh">
+				<span>{review ? "代码评审" : "草稿"}</span>
+				<span>{STATUS[d.status] ?? d.status}</span>
+			</div>
+			<div className="ob">
+				{d.kind === "text" ? <Markdown text={d.draft} /> : <div className="quote">{describeDraft(d)}</div>}
+				{d.note && <div className="meta">{d.note}</div>}
+				{mr && (
+					<div className="meta">
+						<a href={mr.url} target="_blank" rel="noreferrer">
+							{mr.project}!{mr.iid}
+						</a>
+						{ledger && ` · 审的是 ${ledger.head_sha.slice(0, 8)}`}
+						{` · ${mr.done.includes("approve") ? "已在 GitLab 批准" : "没在 cabinet 里批准"}`}
+						{` · ${mr.done.includes("note") ? "评审意见已发到 MR" : "评审意见没发到 MR"}`}
+					</div>
+				)}
+				{d.report && (
+					<Fold summary="评审报告" open>
+						<Markdown text={d.report} />
+					</Fold>
+				)}
+				{ledger && (
+					<Fold summary={ledgerTitle(ledger)}>
+						<MrComments ledger={ledger} />
+					</Fold>
+				)}
+				<Fold summary={review ? "评审过程" : "AI 是怎么起草的"}>
+					<StepLog task={logOf(d, t)} />
+				</Fold>
+			</div>
+		</div>
+	);
+}
+
 export function TaskPanel({
 	t,
 	s,
@@ -159,6 +224,9 @@ export function TaskPanel({
 	// 嵌在末尾的那份：最近一次产出是 agent 任务就是它，否则是最新一版草稿
 	const liveDev = lastDev && (!lastDraft || lastDev.created >= lastDraft.created) ? lastDev : undefined;
 	const liveDraft = !liveDev && lastDraft && (isLive(lastDraft) || lastDraft.status === "revising") ? lastDraft : undefined;
+	// 没起草也没派过活的消息（你已亲自回复、回过表情）：事情可能还要接着做，能直接转成任务
+	const bare = !drafts.length && !devs.length && (t.source === "lark" || t.source === "meego");
+	const [dispatching, setDispatching] = useState(false);
 	// 派活的原文就是 agent 任务的「任务」，下面嵌着的任务里已经有了，时间线上不再重复
 	const items: Item[] = t.events
 		.map((e, i) => ({ e, i }))
@@ -166,22 +234,7 @@ export function TaskPanel({
 		.map(({ e, i }) => ({ at: e.at, key: `e${i}`, node: eventNode(e) }));
 	for (const d of drafts) {
 		if (d === liveDraft) continue;
-		items.push({
-			at: d.created,
-			key: d.id,
-			node: (
-				<div className="out">
-					<div className="oh">
-						<span>草稿</span>
-						<span>{STATUS[d.status] ?? d.status}</span>
-					</div>
-					<div className="ob">
-						<div className="quote">{describeDraft(d)}</div>
-						{d.note && <div className="meta">{d.note}</div>}
-					</div>
-				</div>
-			),
-		});
+		items.push({ at: d.created, key: d.id, node: <DraftRecord d={d} t={t} /> });
 	}
 	for (const d of devs)
 		if (d !== liveDev)
@@ -283,6 +336,17 @@ export function TaskPanel({
 				{!!t.followups?.length && (
 					<Ev>
 						<Followups t={t} />
+					</Ev>
+				)}
+				{bare && (
+					<Ev>
+						{dispatching ? (
+							<DispatchForm task={{ id: t.id, request: requestOf(t) }} onDone={() => setDispatching(false)} />
+						) : (
+							<button className="link" onClick={() => setDispatching(true)}>
+								转成任务
+							</button>
+						)}
 					</Ev>
 				)}
 				{t.need === "retry" && !liveDev && (

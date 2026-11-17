@@ -94,6 +94,8 @@ export interface DispatchInput {
 	agent?: string;
 	/** 没有草稿时的任务内容 */
 	request?: string;
+	/** 挂到这件事上：没有草稿的事（Yi 已亲自回复）在看板上转成任务 */
+	taskId?: string;
 	repo?: string;
 	branch?: string;
 	instructions?: string;

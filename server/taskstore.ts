@@ -30,6 +30,8 @@ export interface AssignInput {
 	title?: string;
 	/** 不建任务：对话页的聊天 */
 	noTask?: boolean;
+	/** 不处理（none）也挂成一件事：起草前发现 Yi 已亲自回复这类，看板上照样能翻到、能转成任务 */
+	keep?: boolean;
 }
 
 /** 这次分派属于哪件事；remember、不处理、对话页聊天返回 null */
@@ -40,7 +42,7 @@ export function assignTask(triggerIds: string[], r: AssignInput, at = now()): st
 		const id = r.actionId ? taskOfAction(r.actionId) : null;
 		return id ? touch(id, at) : null;
 	}
-	if (!["draft", "qa", "dev"].includes(r.actionKind)) return null;
+	if (!["draft", "qa", "dev"].includes(r.actionKind) && !(r.keep && r.actionKind === "none")) return null;
 	const trs = triggerIds.length ? db().select().from(schema.triggers).where(inArray(schema.triggers.id, triggerIds)).all() : [];
 	const first = trs.toSorted((a, b) => a.at - b.at)[0];
 	if (!first) return null;
@@ -210,7 +212,11 @@ export function deriveStatus(o: Outputs): { status: TaskStatus; need: Need | nul
 	// 最近一次产出动作的分派说了算：追问、改写、草稿转任务都会挂上新的分派
 	const acting = o.routes.filter((r) => ["draft", "qa", "dev"].includes(r.actionKind)).toSorted((a, b) => b.at - a.at);
 	const latest = acting[0];
-	if (!latest) return { status: "todo", need: null };
+	// 只挂着跳过的消息（Yi 已亲自回复、回过表情）：这件事 Yi 自己处理了，算完成
+	if (!latest)
+		return o.routes.length && o.routes.every((r) => r.actionKind === "none")
+			? { status: "done", need: null }
+			: { status: "todo", need: null };
 	if (latest.actionKind === "dev") {
 		// 告警续批、回复任务通知是 command，指向同一个 agent 任务：取最近更新的那个
 		const dev = o.devs.toSorted((a, b) => b.updated - a.updated)[0];
@@ -353,6 +359,32 @@ export function backfillTasks(days = 7) {
 	for (const id of ids) refreshTask(id, outs.get(id));
 	setKv("tasks:backfilled", true);
 	log(`任务回填：${rows.length} 次分派，挂上 ${n} 次，共 ${ids.length} 件`);
+}
+
+/**
+ * 跳过起草的消息改成也挂一件事之前（11-17），最近一天跳过的飞书 / 飞书项目消息没有事，看板上翻不到、转不了任务：补挂一次。
+ * 只补起草那边的跳过（定时任务的跳过是 cron trigger，不补）
+ */
+export function backfillSkipped(days = 1) {
+	if (getKv<boolean>("tasks:backfilled-skipped", false)) return;
+	const rows = db()
+		.select()
+		.from(schema.routes)
+		.where(and(isNull(schema.routes.taskId), eq(schema.routes.actionKind, "none"), gte(schema.routes.at, now() - days * 86400)))
+		.orderBy(schema.routes.at)
+		.all()
+		.filter((r) => r.rule.startsWith("跳过：") && r.triggers.length && r.triggers.every((t) => /^(lark|meego):/.test(t)));
+	const ids = new Set<string>();
+	for (const r of rows) {
+		const taskId = assignTask(r.triggers, { actionKind: "none", keep: true }, r.at);
+		if (!taskId) continue;
+		db().update(schema.routes).set({ taskId }).where(eq(schema.routes.id, r.id)).run();
+		ids.add(taskId);
+	}
+	const outs = outputsOf([...ids]);
+	for (const id of ids) refreshTask(id, outs.get(id));
+	setKv("tasks:backfilled-skipped", true);
+	log(`跳过的消息补挂：${rows.length} 次分派，共 ${ids.size} 件`);
 }
 
 /** 回填时 agent 任务的标题比 trigger 正文好认 */

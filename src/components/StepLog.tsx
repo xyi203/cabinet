@@ -3,6 +3,7 @@ import { type Step, type Task, fetchLog } from "../lib/api";
 import { useLiveSteps } from "../lib/live";
 import { dur } from "./ui";
 import { Markdown } from "./Markdown";
+import { Fold, MrComments, ledgerTitle, splitLedger } from "./MrComments";
 
 /**
  * 执行日志：运行中的任务用 SSE 推来的实时步骤，结束的从会话记录里取。
@@ -35,16 +36,24 @@ export function StepLog({ task }: { task?: Task }) {
 
 function StepItem({ s, t0, live }: { s: Step; t0: number; live: boolean }) {
 	const a = s.args ?? {};
-	if (s.kind === "text")
+	if (s.kind === "text") {
+		// MR 预审的最终回答带着评论台账 JSON：拆出来按评论列，不直接露 JSON
+		const { body, ledger } = splitLedger(s.text ?? "");
 		return (
 			<div className="step">
 				<div className="h">
 					<span className="num">{Math.round(s.t - t0)} 秒</span>
 					<b>回答</b>
 				</div>
-				<Markdown text={s.text ?? ""} className="say" />
+				<Markdown text={body} className="say" />
+				{ledger && (
+					<Fold summary={ledgerTitle(ledger)}>
+						<MrComments ledger={ledger} />
+					</Fold>
+				)}
 			</div>
 		);
+	}
 	return (
 		<div className={`step${s.error ? " err" : ""}${live ? " live" : ""}`}>
 			<div className="h">

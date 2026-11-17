@@ -35,7 +35,10 @@ const STATUS: Record<string, string> = {
  * 草稿抽屉里的「转成任务」：查询交给助手，在仓库目录里只读地查，不建分支；
  * 要改代码才交给 dev，在独立 worktree 的新分支上实现
  */
-export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => void }) {
+/**
+ * 转成任务：从草稿转（draft），或者从没有草稿的一件事转（task：Yi 已亲自回复、没起草的消息，request 是那几条消息）
+ */
+export function DispatchForm({ draft, task, onDone }: { draft?: Draft; task?: { id: string; request: string }; onDone: () => void }) {
 	const qc = useQueryClient();
 	const state = qc.getQueryData<State>(["state"]);
 	const [agent, setAgent] = useState<"assistant" | "dev">("assistant");
@@ -54,7 +57,8 @@ export function DispatchForm({ draft, onDone }: { draft: Draft; onDone: () => vo
 	async function submit() {
 		setBusy(true);
 		try {
-			await post(`/api/drafts/${draft.id}/dispatch`, {
+			await post(draft ? `/api/drafts/${draft.id}/dispatch` : "/api/agent-tasks", {
+				...(draft ? {} : { task: task?.id, request: task?.request }),
 				agent,
 				repo: repo || (dev ? repos?.[0] : ""),
 				branch: dev ? branch : "",

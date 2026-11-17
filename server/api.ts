@@ -459,6 +459,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 						repo: body.repo ? String(body.repo) : undefined,
 						branch: body.branch ? String(body.branch) : undefined,
 						chat: Boolean(body.chat),
+						taskId: body.task ? String(body.task) : undefined,
+						instructions: body.instructions ? String(body.instructions) : undefined,
 						...modelChoice(body),
 					}),
 				});

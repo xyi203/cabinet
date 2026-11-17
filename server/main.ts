@@ -16,7 +16,7 @@ import { ensureBank } from "./memory/hindsight.ts";
 import { log, markStopping } from "./util.ts";
 import { startSchedules, stopSchedules } from "./schedules.ts";
 import { startStories } from "./stories.ts";
-import { backfillTasks } from "./taskstore.ts";
+import { backfillSkipped, backfillTasks } from "./taskstore.ts";
 import { startQuota, stopQuota } from "./quota.ts";
 import { startWatchdog, stopWatchdog } from "./watchdog.ts";
 import { startMrWatch, stopMrWatch } from "./mrwatch.ts";
@@ -32,6 +32,7 @@ for (const d of [PATHS.sessions, PATHS.stickers, PATHS.images]) mkdirSync(d, { r
 db();
 // 任务表上线前的分派补挂到任务上（只跑一次）
 backfillTasks();
+backfillSkipped();
 // 上线前起草过的群消息也开始盯话题（只跑一次）
 backfillTopics();
 // 审批处理要在 durable 恢复运行之前挂上：接回的运行也可能调写操作

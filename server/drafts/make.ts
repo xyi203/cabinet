@@ -366,7 +366,8 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				question: source.text,
 				reason: stale,
 			});
-			decide(triggerIds, { rule: `跳过：${stale}`, actionKind: "none" });
+			// 照样挂成一件（直接算完成）：Yi 自己回了一句，事情可能还要接着做，看板上要能翻到、转成任务
+			decide(triggerIds, { rule: `跳过：${stale}`, actionKind: "none", keep: true });
 			return;
 		}
 		try {
