@@ -50,6 +50,8 @@ import { RULE_DEFAULTS, RuleError, routeRules, saveRouteRules } from "./rules.ts
 import { dashboardState, sessionLog } from "./tasks.ts";
 import { listKv } from "./db/index.ts";
 import { memoryDown } from "./memory/health.ts";
+import { listMemories } from "./memory/hindsight.ts";
+import { listNotes } from "./memory/viking.ts";
 import { recall, render } from "./memory/recall.ts";
 import { rememberFromYi } from "./memory/remember.ts";
 import { type Classification, MemoryError, editConvention, listConventions, removeConvention } from "./memory/store.ts";
@@ -224,6 +226,16 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 				hindsightUrl: MEMORY.hindsightUrl,
 				vikingRoot: MEMORY.vikingRoot,
 			});
+		}
+		// 两边的明细列表；读失败照实回原因
+		if (p === "/api/memory/facts" || p === "/api/memory/notes") {
+			try {
+				if (p === "/api/memory/notes") return send(res, 200, { items: await listNotes() });
+				const q = url.searchParams.get("q") ?? "";
+				return send(res, 200, await listMemories({ q, offset: Number(url.searchParams.get("offset") ?? 0) }));
+			} catch (e) {
+				return send(res, 502, { error: String((e as Error).message).slice(0, 200) });
+			}
 		}
 		if (p === "/api/memory/search") {
 			// 试召回：不限作用域，给出各路结果和注入时的样子

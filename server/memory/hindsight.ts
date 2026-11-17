@@ -131,4 +131,30 @@ export const updateDirective = (id: string, patch: Partial<Pick<Directive, "name
 
 export const deleteDirective = (id: string) => call<void>("DELETE", `/directives/${encodeURIComponent(id)}`);
 
+export interface ListedMemory extends Fact {
+	documentId?: string;
+}
+
+/** 看板列表：按时间倒序分页，q 是正文子串过滤（Hindsight 那边不走索引，量小无妨） */
+export async function listMemories(opts: {
+	q?: string;
+	offset?: number;
+	limit?: number;
+}): Promise<{ items: ListedMemory[]; total: number }> {
+	const params = new URLSearchParams({ limit: String(opts.limit ?? 50), offset: String(opts.offset ?? 0) });
+	if (opts.q) params.set("q", opts.q);
+	const r = await call<{ items: Array<Record<string, any>>; total: number }>("GET", `/memories/list?${params}`);
+	return {
+		total: r.total ?? 0,
+		items: (r.items ?? []).map((x) => ({
+			id: String(x.id),
+			text: String(x.text ?? ""),
+			type: String(x.fact_type ?? ""),
+			tags: Array.isArray(x.tags) ? x.tags : [],
+			at: x.occurred_start ?? x.mentioned_at ?? x.date ?? undefined,
+			documentId: x.document_id ?? undefined,
+		})),
+	};
+}
+
 export const bankStats = () => call<Record<string, unknown>>("GET", "/stats", undefined, 10_000);

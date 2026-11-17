@@ -55,6 +55,32 @@ export async function find(query: string, limit: number): Promise<Note[]> {
 		.slice(0, limit);
 }
 
+export interface NoteFile {
+	uri: string;
+	type: string;
+	/** 子树里的相对路径，如 yi/沟通风格偏好.md */
+	path: string;
+	text: string;
+	updated: string;
+}
+
+/** 看板列表：两棵子树下的全部叶子文件和正文。文件少（偏好按主题归并），逐个读 */
+export async function listNotes(): Promise<NoteFile[]> {
+	const root = MEMORY.vikingRoot.replace(/\/?$/, "/");
+	const out: NoteFile[] = [];
+	for (const type of SUBTREES) {
+		const tree = await call<Array<Record<string, any>> | null>("GET", `/fs/tree?uri=${encodeURIComponent(`${root}${type}/`)}`);
+		const files = (tree ?? []).filter(
+			(f) => !f.isDir && String(f.rel_path).endsWith(".md") && !String(f.rel_path).split("/").at(-1)!.startsWith("."),
+		);
+		for (const f of files.slice(0, 50)) {
+			const text = await call<string>("GET", `/content/read?uri=${encodeURIComponent(f.uri)}`);
+			out.push({ uri: String(f.uri), type, path: String(f.rel_path), text: String(text ?? ""), updated: String(f.modTime ?? "") });
+		}
+	}
+	return out;
+}
+
 const clip = (s: string) => (s.length > MAX_NOTE ? `${s.slice(0, MAX_NOTE)}…` : s);
 
 export interface VikingMessage {

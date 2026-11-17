@@ -367,6 +367,21 @@ export interface Recalled {
 	block: string;
 }
 
+export interface ListedFact extends Fact {
+	documentId?: string;
+}
+
+export interface NoteFile {
+	uri: string;
+	type: string;
+	path: string;
+	text: string;
+	updated: string;
+}
+
+export const fetchFacts = (q: string, offset: number) =>
+	getJson<{ items: ListedFact[]; total: number }>(`/api/memory/facts?${new URLSearchParams({ q, offset: String(offset) })}`);
+export const fetchNotes = () => getJson<{ items: NoteFile[] }>("/api/memory/notes");
 export const fetchMemory = () => getJson<MemoryState>("/api/memory");
 export const searchMemory = (q: string) => getJson<Recalled>(`/api/memory/search?${new URLSearchParams({ q })}`);
 export const addMemory = (input: Classification & { content: string }) =>

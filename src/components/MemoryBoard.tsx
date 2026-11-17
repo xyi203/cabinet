@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import {
 	type Classification,
@@ -7,7 +7,9 @@ import {
 	addMemory,
 	deleteConvention,
 	editConvention,
+	fetchFacts,
 	fetchMemory,
+	fetchNotes,
 	searchMemory,
 } from "../lib/api";
 import { time } from "../lib/format";
@@ -15,7 +17,7 @@ import { toast } from "./Toast";
 import { Segmented } from "./ui";
 
 // 记忆存在外面：约定与经验在 Hindsight，你的偏好与画像在 OpenViking（Claude Code 也在用）。
-// 这一页管约定、手写一条、试召回；经验和偏好的明细到各自的界面里看
+// 这一页管约定、手写一条、试召回，并列出两边存着的明细（只读）
 const KIND: Record<Classification["kind"], string> = { preference: "偏好", fact: "事实", experience: "经验" };
 const WHERE = { convention: "约定", hindsight: "Hindsight", openviking: "你的偏好（OpenViking）" };
 const SERVICE: Record<string, string> = { hindsight: "Hindsight", openviking: "OpenViking" };
@@ -271,6 +273,103 @@ function Trial({ r }: { r: Recalled }) {
 	);
 }
 
+const factScope = (tags: string[]) =>
+	tags.includes("personal") || !tags.length ? "" : tags.some((t) => t.startsWith("chat:")) ? "仅某个群" : "仅某个人";
+
+/** OpenViking 的偏好与人物：一个主题一个文件，正文是 markdown 列表 */
+function Notes() {
+	const { data, error } = useQuery({ queryKey: ["memory", "notes"], queryFn: fetchNotes });
+	return (
+		<Section name="你的偏好与打过交道的人" count={data?.items.length} hint="OpenViking，按主题归并，Claude Code 也在用">
+			{error ? (
+				<div className="px-0.5 text-[14px] text-bad">读取失败：{(error as Error).message}</div>
+			) : !data ? (
+				<div className="px-0.5 text-[14px] text-muted">加载中…</div>
+			) : data.items.length ? (
+				<div className="border-y border-line">
+					{data.items.map((n) => (
+						<div key={n.uri} className="flex flex-col gap-1 border-t border-line px-1 py-3 first:border-t-0">
+							<div className="text-[12px] font-semibold text-text-2">{n.path.replace(/\.md$/, "")}</div>
+							<div className="text-[14px] leading-[22px] break-words whitespace-pre-wrap text-text">{n.text.trim()}</div>
+							<div className="text-[12px] text-muted">
+								{NOTE[n.type] ?? n.type}
+								{n.updated && ` · ${n.updated.slice(0, 10)}`}
+							</div>
+						</div>
+					))}
+				</div>
+			) : (
+				<div className="px-0.5 text-[14px] text-muted">还没有。</div>
+			)}
+		</Section>
+	);
+}
+
+/** Hindsight 里的经验与事实：按时间倒序分页，可按正文过滤 */
+function Facts() {
+	const [q, setQ] = useState("");
+	const [filter, setFilter] = useState("");
+	const [page, setPage] = useState(0);
+	const { data, error } = useQuery({
+		queryKey: ["memory", "facts", filter, page],
+		queryFn: () => fetchFacts(filter, page * 50),
+		placeholderData: keepPreviousData,
+	});
+	const pages = data ? Math.max(1, Math.ceil(data.total / 50)) : 1;
+	return (
+		<Section name="经验与事实" count={data?.total} hint="Hindsight 从草稿、问答里抽出来的，「归纳」是它合并多条后的结论">
+			<input
+				className={`${field} w-full lg:max-w-[420px]`}
+				aria-label="按内容过滤"
+				value={q}
+				onChange={(e) => setQ(e.target.value)}
+				onKeyDown={(e) => {
+					if (e.key === "Enter") {
+						setFilter(q.trim());
+						setPage(0);
+					}
+				}}
+				placeholder="按内容过滤，回车"
+			/>
+			{error ? (
+				<div className="px-0.5 text-[14px] text-bad">读取失败：{(error as Error).message}</div>
+			) : !data ? (
+				<div className="px-0.5 text-[14px] text-muted">加载中…</div>
+			) : data.items.length ? (
+				<>
+					<div className="border-y border-line">
+						{data.items.map((f) => (
+							<div key={f.id} className="flex flex-col gap-1 border-t border-line px-1 py-3 first:border-t-0">
+								<div className="text-[14px] leading-[22px] break-words whitespace-pre-wrap text-text">{f.text}</div>
+								<div className="flex flex-wrap gap-x-3 text-[12px] text-muted">
+									<span>{TYPE[f.type] ?? f.type}</span>
+									{factScope(f.tags) && <span className="text-text-2">{factScope(f.tags)}</span>}
+									{f.at && <span className="tabular-nums">{f.at.slice(0, 10)}</span>}
+								</div>
+							</div>
+						))}
+					</div>
+					{pages > 1 && (
+						<div className="flex items-center gap-2 text-[12px] text-muted">
+							<button className="btn ghost sm" disabled={page === 0} onClick={() => setPage(page - 1)}>
+								上一页
+							</button>
+							<span className="tabular-nums">
+								{page + 1} / {pages}
+							</span>
+							<button className="btn ghost sm" disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>
+								下一页
+							</button>
+						</div>
+					)}
+				</>
+			) : (
+				<div className="px-0.5 text-[14px] text-muted">{filter ? "没有匹配的。" : "还没有。"}</div>
+			)}
+		</Section>
+	);
+}
+
 export function MemoryBoard() {
 	const { data, error } = useQuery({ queryKey: ["memory"], queryFn: fetchMemory });
 	const [q, setQ] = useState("");
@@ -348,6 +447,8 @@ export function MemoryBoard() {
 					<div className="px-0.5 text-[14px] text-muted">还没有约定。在飞书里对助手说「以后……」「记住……」，或者点「记一条」。</div>
 				)}
 			</Section>
+			<Notes />
+			<Facts />
 		</div>
 	);
 }
