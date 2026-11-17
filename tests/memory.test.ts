@@ -292,6 +292,10 @@ test("凭证、空话、约定没写条件都拦在外面，不往外写", async
 	await assert.rejects(() => store.editConvention("d1", { appliesWhen: " " }), store.MemoryError);
 	assert.deepEqual(take(), []);
 	assert.equal(store.redact("key: glpat-abcdefghijklmnopqrst 完"), "key: 〔已打码〕 完");
+	// 飞书图片、消息 id 不是凭证
+	const img = "[图片 img_v3_0217h_78865c1a-2b3c-4d5e-8f90-a1b2c3d4e5f6g]";
+	assert.equal(store.redact(img), img);
+	assert.equal(store.redact("x Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7cDe0fGh y"), "x 〔已打码〕 y");
 });
 
 test("看板列偏好文件：目录不存在（404）当成空的，也不算 OpenViking 挂了", async () => {

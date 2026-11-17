@@ -13,9 +13,10 @@ export class MemoryError extends Error {}
 
 export const normalize = (s: string) => s.replace(/\s+/g, " ").trim();
 
-// 不记凭证：常见 key 前缀、私钥头、key=value 形式的口令，以及不带分隔的长随机串
+// 不记凭证：常见 key 前缀、私钥头、key=value 形式的口令，以及不带分隔的长随机串。
+// 飞书的资源 id（图片 img_、文件 file_、消息 om_ 等）也是长串，但不是凭证，不能打码
 const SECRET =
-	/(sk-[\w-]{16,}|gh[pousr]_\w{20,}|glpat-[\w-]{16,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*KEY|(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*\S{6,}|\b[A-Za-z0-9+_-]{40,}\b)/i;
+	/(sk-[\w-]{16,}|gh[pousr]_\w{20,}|glpat-[\w-]{16,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*KEY|(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*\S{6,}|\b(?!(?:img|file|om|oc|ou|on|omt)_)[A-Za-z0-9+_-]{40,}\b)/i;
 
 /** 内容闸：不空、不超长、不像凭证。返回拒绝原因 */
 export function rejectContent(content: string): string | undefined {
