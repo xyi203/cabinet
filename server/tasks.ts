@@ -13,7 +13,7 @@ import { draftMrs } from "./drafts/mr.ts";
 import { NO_CHANGE, PATROL_OK, devTasksList } from "./dev.ts";
 import { listStories } from "./stories.ts";
 import { TASK_TIER, loadAgents, withTier } from "./agent/router.ts";
-import { recentRecords } from "./records.ts";
+import { latestRecord, recentRecords } from "./records.ts";
 import { conversationLog, running } from "./agent/driver.ts";
 import { now } from "./util.ts";
 import { watchdogIssues } from "./watchdog.ts";
@@ -103,7 +103,7 @@ export function taskViews(records: RecordRow[]): TaskView[] {
 			.filter((x) => x != null)
 			.toSorted((a, b) => a.at - b.at);
 		for (const x of trs) covered.add(x.id.slice(x.id.indexOf(":") + 1));
-		views.push(view(row, o, trs, records));
+		views.push(view(row, o, trs));
 	}
 	const out = [...views, ...queued(t), ...unrouted(records, covered, t)];
 	return [...out, ...looseApprovals(out)].toSorted((a, b) => b.updated - a.updated);
@@ -130,12 +130,7 @@ function looseApprovals(views: TaskView[]): TaskView[] {
 		}));
 }
 
-function view(
-	input: typeof schema.tasks.$inferSelect,
-	o: Outputs,
-	trs: Array<typeof schema.triggers.$inferSelect>,
-	records: RecordRow[],
-): TaskView {
+function view(input: typeof schema.tasks.$inferSelect, o: Outputs, trs: Array<typeof schema.triggers.$inferSelect>): TaskView {
 	let row = input;
 	const routes = o.routes.toSorted((a, b) => a.at - b.at);
 	const acting = routes.filter((r) => ["draft", "qa", "dev"].includes(r.actionKind));
@@ -172,8 +167,8 @@ function view(
 	let error: string | null | undefined = dev?.status === "failed" ? dev.error : undefined;
 	if (row.need === "retry" && last && last.actionKind !== "dev") {
 		const sources = new Set(last.triggers.map((id) => id.slice(id.indexOf(":") + 1)));
-		// records 按时间倒序。失败之后 Yi 点了忽略（retry.ts dismissTask 只记流水），或者亲自回了（跳过走的是不处理的分派，不挂任务）：这件事就结束了
-		const latest = records.find((r) => r.source && sources.has(r.source));
+		// 这几条消息最新的记录：失败之后 Yi 点了忽略（retry.ts dismissTask 只记流水），或者亲自回了（跳过走的是不处理的分派，不挂任务）：这件事就结束了
+		const latest = latestRecord([...sources]);
 		if (latest?.status === "dismissed" || latest?.status === "skipped") {
 			const status = latest.status === "dismissed" ? "cancelled" : "done";
 			const closed = latest.ts;
@@ -181,11 +176,13 @@ function view(
 			row = { ...row, status, need: null, closed };
 			result = latest.status === "dismissed" ? "已忽略" : "你已亲自回复";
 		}
-		const rec = records.find((r) => r.status === "failed" && r.source && sources.has(r.source));
+		const rec = latestRecord([...sources], { status: "failed" });
 		if (rec && row.need === "retry") {
 			retryId = `${rec.kind === "draft" ? "fail" : "qa"}-${rec.source}`;
 			error = rec.error;
 		}
+		// 失败记录没了也别只写「这次处理失败了」：时间线上最后一次失败的原因还在
+		if (row.need === "retry" && !error && lastResult?.outcome === "failed") error = lastResult.detail;
 	}
 	const runId =
 		dev && (dev.status === "running" || dev.status === "pushing")

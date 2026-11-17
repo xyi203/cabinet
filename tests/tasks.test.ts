@@ -220,3 +220,16 @@ test("分诊模型：给列表按顺序试，给一个字符串也行，没配�
 	assert.deepEqual(routerModels({ model: "claude/claude-haiku-5-5" }), ["claude/claude-haiku-5-5"]);
 	assert.deepEqual(routerModels({}), ["codex/gpt-6-luna"]);
 });
+
+test("起草失败：失败记录不在最近的流水里（几天前失败的）也能找到，工作台照样带重试和失败原因", async () => {
+	const { record } = await import("../server/records.ts");
+	const r1 = decide([msg("m30", "lark:oc_9#t3", "看下这两个 Sentry")], { agent: "assistant", rule: "分诊 deep", actionKind: "draft" });
+	settle({ actionKind: "draft", routeId: r1, outcome: "failed", effect: "internal", detail: "pi 失败 model_error" });
+	record({ kind: "draft", status: "failed", chatId: "oc_9", source: "m30", error: "pi 失败 model_error", retry: { chat: {}, msgs: [] } });
+	const id = taskOf(r1)!;
+	// 传进去的最近流水是空的：以前只在这里面找，找不到就没有重试
+	const v = taskViews([]).find((x) => x.id === id)!;
+	assert.equal(v.need, "retry");
+	assert.equal(v.retryId, "fail-m30");
+	assert.equal(v.error, "pi 失败 model_error");
+});
