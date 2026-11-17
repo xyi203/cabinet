@@ -7,6 +7,7 @@ import { resolveSticker } from "../drafts/format.ts";
 import { expireReactedDrafts } from "../drafts/replied.ts";
 import { DraftError } from "../drafts/store.ts";
 import { routeChat } from "../router/index.ts";
+import { pollMentions } from "../mentions.ts";
 import { pollTopics } from "../topics.ts";
 import { listChats, listMessages, reactAsUser, sendImageAsUser, sendTextAsUser } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
@@ -42,6 +43,8 @@ async function poll(since: number, full: boolean) {
 	}
 	// 话题里的回复不在会话列表里：按话题另外拉
 	await pollTopics(started, routeChat).catch((e) => log("轮询话题失败", e));
+	// 没在盯的话题里有人 @Yi：按会话、按话题都拉不到，靠搜索补上
+	await pollMentions(started, routeChat, full).catch((e) => log("搜 @Yi 失败", e));
 	// 表情回复要逐条查，不跟着快速轮次跑
 	if (full || started - reactionsCheckedAt >= POLL_INTERVAL) {
 		reactionsCheckedAt = started;

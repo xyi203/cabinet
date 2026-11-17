@@ -25,12 +25,12 @@ const taskOf = (routeId: number) =>
 		.all()
 		.find((r) => r.id === routeId)!.taskId;
 
-test("盯话题：只盯群里的话题根；节奏按最近动静分档", () => {
+test("盯话题：只盯群里的话题；话题回复按话题首条记；节奏按最近动静分档", () => {
 	watchTopic({ ...chat, chat_mode: "p2p" }, msg("om_p"));
 	watchTopic(chat, msg("om_reply", { root_id: "om_root", thread_id: "omt_1" }));
 	watchTopic(chat, msg("om_root2", { thread_id: "omt_2" }));
 	assert.equal(topicRoot("lark:oc_g#omt_2"), "om_root2");
-	assert.equal(topicRoot("omt_1"), undefined, "话题回复本身不记");
+	assert.equal(topicRoot("omt_1"), "om_root", "话题回复（搜 @Yi 搜到的）记到它的话题首条上");
 	const at = 100_000;
 	assert.equal(due({ fetched: at - 1, active: at - 60 }, at), true, "一小时内有动静：每轮拉");
 	assert.equal(due({ fetched: at - 10, active: at - 7200 }, at), false, "一天内：隔轮询间隔");

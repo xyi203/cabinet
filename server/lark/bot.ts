@@ -50,6 +50,8 @@ export const USER_SCOPES = [
 	"im:message.group_msg:get_as_user",
 	"im:message.reactions:write_only",
 	"contact:user.base:readonly",
+	// 搜 @Yi 的消息：话题里的回复按会话拉不到（server/mentions.ts）
+	"search:message",
 	"offline_access",
 ];
 
@@ -291,6 +293,46 @@ export async function getMessage(messageId: string, as: "user" | "bot" = "user")
 		"读取消息",
 	);
 	return d.items?.[0] ? toMessage(d.items[0]) : undefined;
+}
+
+/** 搜索到的一条消息：只有 id 和归属，内容另取 */
+export interface SearchHit {
+	messageId: string;
+	chatId: string;
+	threadId?: string;
+	p2p: boolean;
+}
+
+/** 以 Yi 的身份搜 @Yi 的消息（含话题里的回复）。start 为 unix 秒；最多翻 pages 页 */
+export async function searchAtMe(start: number, pages = 3): Promise<SearchHit[]> {
+	const out: SearchHit[] = [];
+	let page_token: string | undefined;
+	for (let i = 0; i < pages; i++) {
+		const d = check(
+			await client().im.v1.message.search(
+				{
+					data: { filter: { is_at_me: true, time_range: { start_time: String(Math.floor(start)) } } },
+					params: { page_size: 50, user_id_type: "open_id", ...(page_token ? { page_token } : {}) },
+				},
+				await asUser(),
+			),
+			"搜索 @Yi 的消息",
+		);
+		for (const it of d.items ?? []) {
+			const m = it.meta_data;
+			if (!m?.message_id || !m.chat_id) continue;
+			out.push({ messageId: m.message_id, chatId: m.chat_id, threadId: m.thread_id || undefined, p2p: Boolean(m.is_p2p_chat) });
+		}
+		if (!d.has_more || !d.page_token) break;
+		page_token = d.page_token;
+	}
+	return out;
+}
+
+/** 会话的模式与名字（不在轮询的会话列表里时用） */
+export async function getChat(chatId: string): Promise<{ chat_id: string; chat_mode: string; name: string }> {
+	const d = check(await client().im.v1.chat.get({ path: { chat_id: chatId } }, await asUser()), "读取会话");
+	return { chat_id: chatId, chat_mode: (d as any).chat_mode ?? "group", name: (d as any).name ?? "" };
 }
 
 /** 合并转发在消息列表里只是一个占位（「[合并转发]」），转发的内容要按 id 再取一次 */

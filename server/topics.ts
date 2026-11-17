@@ -26,13 +26,17 @@ const watchKey = (root: string) => `topic:${root}`;
 const rootKey = (thread: string) => `topicroot:${thread}`;
 const SLOW = 1800;
 
-/** 群里找 Yi 的消息：开始盯它的话题。本身就是话题回复的不用记（它的话题已经在盯） */
+/**
+ * 群里找 Yi 的消息：开始盯它的话题。话题里的回复（搜索 @Yi 搜到的）按它的话题首条记；
+ * 从已盯话题里拉到的回复，话题已经在盯，直接跳过
+ */
 export function watchTopic(chat: ChatRef, m: Message) {
-	if (chat.chat_mode === "p2p" || chat.chat_mode === "meego" || m.root_id) return;
-	if (getKv(watchKey(m.message_id), null)) return;
+	if (chat.chat_mode === "p2p" || chat.chat_mode === "meego") return;
+	const root = m.root_id ?? m.message_id;
+	if (getKv(watchKey(root), null)) return;
 	const at = m.create_time / 1000;
-	setKv(watchKey(m.message_id), { root: m.message_id, chat, thread: m.thread_id, fetched: at, active: at } satisfies TopicWatch);
-	if (m.thread_id) setKv(rootKey(m.thread_id), m.message_id);
+	setKv(watchKey(root), { root, chat, thread: m.thread_id, fetched: at, active: at } satisfies TopicWatch);
+	if (m.thread_id) setKv(rootKey(m.thread_id), root);
 }
 
 /** 话题 id → 它的第一条消息（归属时找原来那件事用）；thread 是 trigger 的 thread（lark:<chat>#<omt>）或 omt 本身 */
