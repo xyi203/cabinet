@@ -306,21 +306,32 @@ export interface SearchHit {
 	p2p: boolean;
 }
 
-/** 以 Yi 的身份搜 @Yi 的消息（含话题里的回复）。start 为 unix 秒；最多翻 pages 页 */
+/**
+ * 以 Yi 的身份搜 @Yi 的消息（含话题里的回复）。start 为 unix 秒；最多翻 pages 页。
+ * time_range 要 ISO 8601（实测 unix 秒、毫秒都报 99992402 field validation failed）
+ */
 export async function searchAtMe(start: number, pages = 3): Promise<SearchHit[]> {
 	const out: SearchHit[] = [];
 	let page_token: string | undefined;
+	const start_time = new Date(Math.floor(start) * 1000).toISOString().replace(/\.\d+Z$/, "Z");
 	for (let i = 0; i < pages; i++) {
-		const d = check(
-			await client().im.v1.message.search(
+		let res;
+		try {
+			res = await client().im.v1.message.search(
 				{
-					data: { filter: { is_at_me: true, time_range: { start_time: String(Math.floor(start)) } } },
+					data: { filter: { is_at_me: true, time_range: { start_time } } },
 					params: { page_size: 50, user_id_type: "open_id", ...(page_token ? { page_token } : {}) },
 				},
 				await asUser(),
-			),
-			"搜索 @Yi 的消息",
-		);
+			);
+		} catch (e) {
+			// 400 只给「Request failed」：把飞书的错误码和出错的字段带上
+			const data = (e as any)?.response?.data;
+			if (data?.code)
+				throw new LarkError(`搜索 @Yi 的消息失败 code=${data.code}: ${data.msg} ${JSON.stringify(data.error?.field_violations ?? "")}`);
+			throw e;
+		}
+		const d = check(res, "搜索 @Yi 的消息");
 		for (const it of d.items ?? []) {
 			const m = it.meta_data;
 			if (!m?.message_id || !m.chat_id) continue;
