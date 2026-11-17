@@ -257,7 +257,7 @@ export interface State {
 	issues: Issue[];
 	/** Claude 订阅额度（经 magpie 响应头查到的）；没查到过为 null */
 	quota?: Quota | null;
-	auth: { authorized: boolean; refreshExpiresAt?: number };
+	auth: { authorized: boolean; refreshExpiresAt?: number; missingScopes?: string[] };
 	pollSince: number | null;
 }
 

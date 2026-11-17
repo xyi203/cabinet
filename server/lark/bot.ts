@@ -114,11 +114,14 @@ export class UserAuthError extends Error {}
 export function userAuthStatus() {
 	const t = getKv<UserToken | null>("user_token", null);
 	if (!t) return { authorized: false as const };
+	// 刷新令牌沿用老的权限范围：代码里新加了权限，要重新授权才拿得到
+	const granted = new Set(t.scope.split(/\s+/));
 	return {
 		authorized: t.refreshExpiresAt === 0 || t.refreshExpiresAt > now(),
 		expiresAt: t.expiresAt,
 		refreshExpiresAt: t.refreshExpiresAt,
 		scope: t.scope,
+		missingScopes: USER_SCOPES.filter((s) => !granted.has(s)),
 	};
 }
 

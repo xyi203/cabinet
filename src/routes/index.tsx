@@ -176,7 +176,9 @@ function Dashboard() {
 			<main>
 				{error && !state && <div className="issue">连不上 Cabinet 服务，正在重试。确认服务已经启动。</div>}
 				{state && !connected && <div className="issue">和 Cabinet 服务的连接断了，正在重连，页面上的内容可能不是最新的。</div>}
-				{state && !state.auth.authorized && <AuthBanner />}
+				{state && (!state.auth.authorized || Boolean(state.auth.missingScopes?.length)) && (
+					<AuthBanner missing={state.auth.authorized ? state.auth.missingScopes : undefined} />
+				)}
 				{!state && !error && <div className="empty">加载中…</div>}
 				{state && view === "work" && (
 					<Workbench
@@ -331,11 +333,13 @@ function Ops({
 							<div className="tb">
 								<div className="title">飞书授权</div>
 								<div className="meta">
-									{s.auth.authorized
-										? s.auth.refreshExpiresAt
-											? `正常，会在到期（${date(s.auth.refreshExpiresAt, s.now)}）前自动续期`
-											: "正常"
-										: "还没有授权，在页面顶部授权"}
+									{s.auth.authorized && s.auth.missingScopes?.length
+										? `缺少权限 ${s.auth.missingScopes.join("、")}，在页面顶部重新授权`
+										: s.auth.authorized
+											? s.auth.refreshExpiresAt
+												? `正常，会在到期（${date(s.auth.refreshExpiresAt, s.now)}）前自动续期`
+												: "正常"
+											: "还没有授权，在页面顶部授权"}
 								</div>
 							</div>
 						</div>
@@ -440,7 +444,8 @@ function MiniQuota({ label, w, now }: { label: string; w?: QuotaWindow; now: num
 	);
 }
 
-function AuthBanner() {
+/** 没授权；或者授权过、但缺了代码后来加的权限（missing），要重新授权一次 */
+function AuthBanner({ missing }: { missing?: string[] }) {
 	const [err, setErr] = useState("");
 	async function start() {
 		try {
@@ -452,9 +457,11 @@ function AuthBanner() {
 	}
 	return (
 		<div className="issue">
-			授权飞书账号后，Cabinet 才能读到私聊和 @你 的消息，并替你发出回复。
+			{missing?.length
+				? `飞书授权缺少权限 ${missing.join("、")}，重新授权一次才能用上（先在开发者后台开通）。`
+				: "授权飞书账号后，Cabinet 才能读到私聊和 @你 的消息，并替你发出回复。"}
 			<button className="btn pri sm" onClick={start}>
-				授权飞书
+				{missing?.length ? "重新授权" : "授权飞书"}
 			</button>
 			{err && <span>{err}</span>}
 		</div>
