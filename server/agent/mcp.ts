@@ -87,6 +87,18 @@ function mcpRuleList(key: "_mcpRead" | "_mcpPreview"): Set<string> {
 	}
 }
 
+/**
+ * 工具的完整名，第一个是注册给 agent 的名字。magpie 这类 hub 把下游工具聚合成 <server>__<tool>，注册名成了
+ * mcp__magpie__<server>__<tool>；再按下游 server 算一个别名，skill-rules.json 的 _mcpRead / _mcpPreview
+ * 和 stories.ts 里写的 mcp__devops-mcp-prod__* 不用跟着换 hub 改
+ */
+function toolNames(server: string, tool: string): string[] {
+	const names = [mcpToolName(server, tool)];
+	const i = tool.indexOf("__");
+	if (i > 0) names.push(mcpToolName(tool.slice(0, i), tool.slice(i + 2)));
+	return names;
+}
+
 type ListedTool = Awaited<ReturnType<Client["listTools"]>>["tools"][number];
 const TOOL_CACHE = path.join(DATA_DIR, "mcp-tools.json");
 
@@ -112,9 +124,16 @@ export async function mcpTools(names: string[], servers = loadServers()): Promis
 			let listed: { tools: ListedTool[] };
 			try {
 				listed = await (await clientOf(name, def)).listTools(undefined, { timeout: CONNECT_TIMEOUT });
+				// hub 刚起时下游 server 可能还没连上，列出的工具缺一整组（magpie 只回了 38/76 个，devops 全没注册，直到下次重启）。
+				// 缓存里有、这次没列出的照样注册，调用时 hub 连好了就能用；所以缓存只增不减，下游真删了工具要手动删缓存文件
+				const live = new Set(listed.tools.map((t) => t.name));
+				const missing = (cache[name] ?? []).filter((t) => !live.has(t.name));
+				log(
+					`MCP server ${name}：${listed.tools.length} 个工具${missing.length ? `，另有缓存里的 ${missing.length} 个这次没列出，照样注册` : ""}`,
+				);
+				listed = { tools: [...listed.tools, ...missing] };
 				cache[name] = listed.tools;
 				cacheChanged = true;
-				log(`MCP server ${name}：${listed.tools.length} 个工具`);
 			} catch (e) {
 				const why = String((e as Error)?.message ?? e).slice(0, 200);
 				if (!cache[name]?.length) return log(`MCP server ${name} 连接失败，跳过`, why);
@@ -123,9 +142,10 @@ export async function mcpTools(names: string[], servers = loadServers()): Promis
 			}
 			for (const t of listed.tools) {
 				// 只读的直接放行，其余在守卫里按写操作处理（要审批）
-				if (t.annotations?.readOnlyHint || readList.has(mcpToolName(name, t.name))) mcpReadOnly.add(mcpToolName(name, t.name));
-				if (previewList.has(mcpToolName(name, t.name))) mcpPreview.add(mcpToolName(name, t.name));
-				registered.set(mcpToolName(name, t.name), { server: name, tool: t.name, def });
+				const full = toolNames(name, t.name);
+				if (t.annotations?.readOnlyHint || full.some((n) => readList.has(n))) mcpReadOnly.add(full[0]);
+				if (full.some((n) => previewList.has(n))) mcpPreview.add(full[0]);
+				for (const n of full) registered.set(n, { server: name, tool: t.name, def });
 				tools.push(
 					defineTool({
 						name: mcpToolName(name, t.name),
