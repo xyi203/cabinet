@@ -294,6 +294,15 @@ export function actionsOf(t: TaskView | undefined, c: Ctx): Actions {
 					: []),
 				{ ...done, label: "不用做了" },
 			],
+			// 还没起草的飞书消息：输入框里写的就是你的回复，原样以你的身份回给对方，不再转成助手任务
+			typeIn:
+				t.id.startsWith("q:") && t.source === "lark"
+					? {
+							hint: "或者自己回，回车以你的身份直接回复这条消息",
+							advance: true,
+							run: (v) => post("/api/queue/reply", { id: t.id.slice(2), text: v }).then(() => "已发送"),
+						}
+					: undefined,
 			slash: [],
 		};
 	return none;

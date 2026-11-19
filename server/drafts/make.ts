@@ -5,7 +5,7 @@ import { routeRules } from "../rules.ts";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import type { MeegoCard } from "../db/schema.ts";
-import { expandForward, FORWARD_PLACEHOLDER, imageKeys, imagesNote, saveImage } from "../lark/bot.ts";
+import { expandForward, FORWARD_PLACEHOLDER, getMessage, imageKeys, imagesNote, saveImage, sendTextAsUser } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import {
 	ASSISTANT,
@@ -57,7 +57,7 @@ import {
 	type MrWatch,
 } from "./mr.ts";
 import { ownerActive, ownerReplyCovers, recentAround, staleReason } from "./replied.ts";
-import { type ChatRef, claim, getDraft, inflight, LIVE, pushDraft, type Source, syncCard } from "./store.ts";
+import { type ChatRef, claim, DraftError, getDraft, inflight, LIVE, pushDraft, type Source, syncCard } from "./store.ts";
 
 /**
  * attempt 区分手动重试：同一批消息默认用同一个 requestId，进程重启后重新提交会接回原来那次运行；
@@ -259,6 +259,28 @@ export function draftNow(messageId: string): boolean {
 	log("Yi 点了立即起草，不再等", i.chatId, messageId);
 	done();
 	return true;
+}
+
+/**
+ * 还没起草的飞书消息（排队、你在聊先等着）：Yi 在看板上自己写一句，以他的身份直接回，和他在飞书里亲自回一样。
+ * 不唤醒等待：等待循环下次检查（或轮到起草前）会看到这条回复，按「Yi 已亲自回复」跳过起草；
+ * 立刻唤醒的话，起草前那次检查万一还读不到刚发的消息，就会白起草一份
+ */
+export async function replyQueued(messageId: string, text: string) {
+	const i = inflight.get(messageId);
+	if (!i) throw new DraftError("这条已经起草完或不在排队了");
+	if (i.chatMode === "meego") throw new DraftError("飞书项目评论还不能在这里直接回，等草稿出来再改");
+	const m = await getMessage(messageId);
+	if (!m) throw new DraftError("读不到原消息，可能已经撤回了");
+	const p2p = i.chatMode === "p2p";
+	const target = p2p ? { chatId: i.chatId } : { replyTo: messageId, inThread: Boolean(m.thread_id) };
+	// 群里和草稿发出时一样 @ 对方；uuid 带时间，同一条消息回第二句不会被飞书当重复请求去重
+	await sendTextAsUser(
+		target,
+		p2p ? text : `<at user_id="${m.sender.id}"></at> ${text}`,
+		`q-${messageId}-${Date.now().toString(36)}`.slice(0, 50),
+	);
+	log("Yi 在看板上直接回复了排队的消息", i.chatId, messageId);
 }
 
 /** 同一批消息默认同一个 requestId，进程重启后接回原来那次运行；手动重试带 attempt，换一个 */
