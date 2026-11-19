@@ -43,9 +43,21 @@ import { contextBlock, gatherContext } from "./context.ts";
 import { where as whereOf } from "./card.ts";
 import { notifyFailure } from "./failure.ts";
 import { draftLabel, isAckOnly, stickerHint } from "./format.ts";
-import { ackMr } from "./mr.ts";
+import {
+	ackMr,
+	autoApprove,
+	draftMrs,
+	lastMrDraft,
+	type MrFollow,
+	mrFollowup,
+	parseMrRef,
+	reReviewAsk,
+	unwatch,
+	watchKey,
+	type MrWatch,
+} from "./mr.ts";
 import { ownerActive, ownerReplyCovers, recentAround, staleReason } from "./replied.ts";
-import { type ChatRef, claim, inflight, LIVE, pushDraft, type Source } from "./store.ts";
+import { type ChatRef, claim, getDraft, inflight, LIVE, pushDraft, type Source, syncCard } from "./store.ts";
 
 /**
  * attempt 区分手动重试：同一批消息默认用同一个 requestId，进程重启后重新提交会接回原来那次运行；
@@ -101,6 +113,8 @@ interface Stage {
 	suffix?: string;
 	/** 对方在这批之前连着发、Yi 还没回的消息：一起起草，推出去之后它们各自的旧草稿标成已合并 */
 	earlier?: Message[];
+	/** 催复审时这个 MR 上一版预审草稿：还没发到 MR、还挂着的，新一版推出去后标成已合并 */
+	supersedes?: string;
 }
 
 /** stage 实际用哪个 agent、哪一档：改版前接回的旧分派（ask、cr…）交给 assistant 的对应档位 */
@@ -250,14 +264,20 @@ export function draftNow(messageId: string): boolean {
 /** 同一批消息默认同一个 requestId，进程重启后接回原来那次运行；手动重试带 attempt，换一个 */
 const requestIdOf = (msgs: Message[], attempt?: string) => `draft:${msgs.at(-1)!.message_id}${attempt ? `:${attempt}` : ""}`;
 
-/** 轮询到的消息（飞书私聊 / @Yi、飞书项目评论 @Yi）就是 trigger：过了轮询里的程序规则才会到这里 */
-function triggerOf(chat: ChatRef, m: Message): TriggerInput {
+const replyRefs = (m: Message) => (m.root_id && m.root_id !== m.message_id ? rootRefs(m.root_id) : []);
+
+/**
+ * 轮询到的消息（飞书私聊 / @Yi、飞书项目评论 @Yi）就是 trigger：过了轮询里的程序规则才会到这里。
+ * follow：没带链接、认定是在催这个 MR 复审的，也记成提到了它，看板上和那次 CR 归到同一件事
+ */
+function triggerOf(chat: ChatRef, m: Message, follow?: string): TriggerInput {
 	const meego = m.meego as MeegoCard | undefined;
+	const refs = [...replyRefs(m), ...(follow ? [follow] : [])];
 	return {
 		channel: chat.chat_mode === "meego" ? "meego" : "lark",
 		externalId: m.message_id,
 		thread: meego ? `meego:${meego.workItemId}` : `lark:${chat.chat_id}${m.thread_id ? `#${m.thread_id}` : ""}`,
-		refs: m.root_id && m.root_id !== m.message_id ? rootRefs(m.root_id) : undefined,
+		refs: refs.length ? refs : undefined,
 		actorId: m.sender.id,
 		actorName: m.sender.name || m.sender.id,
 		text: m.content,
@@ -272,8 +292,19 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 		if (m.content === FORWARD_PLACEHOLDER)
 			m.content = (await expandForward(m.message_id).catch((e) => log("展开合并转发失败", m.message_id, e))) ?? m.content;
 	const last = msgs.at(-1)!;
+	// 没带链接的「已更新，继续 CR」：认出是在催前面哪个 MR 的复审（认不准的留给 Yi 定）
+	const follow: MrFollow | undefined =
+		chat.chat_mode === "meego"
+			? undefined
+			: mrFollowup({
+					thread: triggerOf(chat, last).thread,
+					senderId: last.sender.id,
+					text: msgs.map((m) => m.content).join("\n"),
+					at: last.create_time / 1000,
+					rootRefs: replyRefs(last),
+				});
 	// 重启接回、手动重试会再走一遍：trigger 已经记过就不动
-	const triggerIds = msgs.map((m) => receive(triggerOf(chat, m)));
+	const triggerIds = msgs.map((m) => receive(triggerOf(chat, m, follow?.ref)));
 	let routeId: number | undefined;
 	const source: Source = {
 		chatId: chat.chat_id,
@@ -289,8 +320,8 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 	const label = draftLabel(source);
 	const started = now();
 	const requestId = requestIdOf(msgs, attempt);
-	// 发来要预审的 MR：排队、等 Yi、预审之前先回个 Get，对方知道收到了；手动重试不再回
-	const mrMsg = msgs.findLast((m) => MR_RE.test(m.content));
+	// 发来要预审的 MR：排队、等 Yi、预审之前先回个 Get，对方知道收到了；手动重试不再回。催复审的同样处理
+	const mrMsg = msgs.findLast((m) => MR_RE.test(m.content)) ?? (follow?.ref ? last : undefined);
 	if (mrMsg && !attempt) await ackMr(chat.chat_mode, mrMsg).catch((e) => log("MR 回 Get 失败", e));
 	await locks.run(`draft-${chat.chat_id}`, async () => {
 		const saved = getKv<Pending | null>(pendingKey, null)?.stage;
@@ -387,7 +418,8 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			// 订阅接续：同一个话题 / 工作项、或提到的 MR 已经挂在某个会话上，档位照常分诊，会话接着用
 			const thread = triggerOf(chat, last).thread;
 			// 话题回复带上话题根提到的 MR：接着 CR 的会话和 mr 档
-			const refs = [...new Set([...refsOf(source.text), ...rootRefs(last.root_id)])];
+			// 催复审认定的 MR 排最前：订阅优先接它的会话
+			const refs = [...new Set([...(follow?.ref ? [follow.ref] : []), ...refsOf(source.text), ...rootRefs(last.root_id)])];
 			const keys = subscribable(thread, refs);
 			const agents = loadAgents().agents;
 			const sub = subscriber(keys);
@@ -401,12 +433,18 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				info = { ...open.info, rule: open.rule, tier: open.info?.tier ?? LEGACY_TIER[open.agent!] };
 				sid = open.session;
 			} else {
-				[name, info] = await route(source);
+				const fm = follow?.ref ? parseMrRef(follow.ref) : undefined;
+				[name, info] = await route(fm ? { ...source, followMr: { ...fm, rule: `催复审（${follow!.via}）` } } : source);
+				// 催复审但不止一个 MR 可能：不挑，至少按 answer 档起草，提示里让它问 Yi（寒暄档会直接回个表情）
+				if (follow && !follow.ref && info.tier === "ack")
+					info = { ...info, tier: "answer", rule: `${info.rule}（可能在催复审，升到 answer）` };
 				// 寒暄档看不到图：消息带截图时至少按 answer 档，把图交给 agent 看（否则只能回「看不到图」）
 				if (info.tier === "ack" && msgs.some((m) => imageKeys(m.content).length))
 					info = { ...info, tier: "answer", rule: `${info.rule}（带截图，升到 answer）` };
 				// 寒暄确认不需要前文，不接续也不挂订阅
-				if (sub && info.tier !== "ack") {
+				// 拿不准是哪个 MR 时不接 MR 的会话：接上就等于替 Yi 挑了一个；认定了的只接这个 MR 的会话
+				const otherMr = follow && (!follow.ref || (sub?.info?.mrIid && `gitlab:${sub.info.mrProject}!${sub.info.mrIid}` !== follow.ref));
+				if (sub && info.tier !== "ack" && !otherMr) {
 					const { mrProject, mrIid } = (sub.info ?? {}) as Record<string, string>;
 					// 挂在 MR 上的会话：后续消息按 MR 预审档接着看
 					if (mrIid) info = { ...info, tier: "mr", mrProject, mrIid };
@@ -435,6 +473,10 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			}
 			// 之后同一件事（这个话题、这个 MR）的消息都进这个会话，跨渠道也接得上
 			if (sid && info.tier !== "ack") subscribe(keys, { agent: name, session: sid, info: routeExtra as Record<string, string>, routeId });
+			// 催复审：这一轮就是复审，先停掉盯 MR，免得它再按新提交复审一遍；评论发出去时按这一版重新开始盯
+			const prevMr = follow?.ref && info.mrIid ? lastMrDraft(info.mrProject!, info.mrIid) : undefined;
+			const watch = follow?.ref && info.mrIid ? getKv<MrWatch | undefined>(watchKey(info.mrProject!, info.mrIid), undefined) : undefined;
+			if (watch) unwatch(watch);
 			Object.assign(source, { agent: name, session: sid, route: info.rule, routeId });
 			log("分派", chat.chat_id, "->", name, info.rule);
 			let where: string;
@@ -450,9 +492,17 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				where = chat.chat_mode === "p2p" ? "私聊" : `群「${source.chatName}」里 @Yi`;
 				hint = stickerHint();
 			}
-			const extra = info.mrIid
+			let extra = info.mrIid
 				? `\n\n要预审的 MR：项目 \`${info.mrProject}\`，iid \`${info.mrIid}\`，glab 的 -R 参数用 \`${glabRepo(info.mrProject!)}\`。\nMR 概要（glab mr view）：\n${await mrBrief(info)}`
 				: "";
+			if (follow?.ref && info.mrIid) {
+				const how = follow.via === "回复原消息" ? "回复的是贴这个 MR 的那条消息" : "同一个会话里对方最近只贴过这一个 MR";
+				const said = `对方没带链接说「${last.content.slice(0, 200)}」（${how}）`;
+				extra += `\n\n${reReviewAsk(prevMr?.report ?? "", prevMr && draftMrs([prevMr]).get(prevMr.id), said, watch?.head)}`;
+			} else if (follow && !follow.ref)
+				extra +=
+					`\n\n对方像是改完了在催复审，但没带链接，最近在这里提过的 MR 不止一个：\n${follow.candidates.map((r) => `- ${parseMrRef(r)?.url ?? r}`).join("\n")}\n` +
+					"消息里没点明是哪个（仓库名、MR 编号）就不要自己挑一个审：只输出一行 `【无需回复】要你拍板：对方说的是哪个 MR`，候选写进【备注】。";
 			// 链式召回的起点：这条消息和它所在事件流的 ID，需要以前的来龙去脉时用 lookup 查
 			const ids = `（这条消息的 ID：${triggerIds.at(-1)}；所在事件流：thread:${thread}${refs.map((r) => `；提到 ${r}`).join("")}）`;
 			// Yi 在受众页给这个人 / 这个群设的口径
@@ -470,6 +520,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				triggerIds,
 				started,
 				earlier,
+				supersedes: prevMr?.id,
 			};
 			setKv(pendingKey, { chat, msgs, attempt, stage } satisfies Pending);
 			await finish(chat, msgs, stage, requestId, pendingKey, attempt);
@@ -578,6 +629,9 @@ async function finish(chat: ChatRef, msgs: Message[], first: Stage, requestId: s
 	const dm = await pushDraft(source, draft);
 	linkAction(routeId, dm, sessionId);
 	mergeEarlier(chat, stage.earlier ?? [], dm);
+	if (stage.supersedes) supersede(stage.supersedes, dm);
+	// 评审没问题就直接批准（Yi 定的规则），不等他点
+	if (stageAgent(stage).tier === "mr") void autoApprove(dm).catch((e) => log("自动批准出错", dm, e));
 	record({
 		kind: "draft",
 		status: "drafted",
@@ -608,6 +662,16 @@ function mergeEarlier(chat: ChatRef, earlier: Message[], into: string) {
 		log("草稿合并到新草稿", d.id, "->", into);
 		settle({ actionKind: "draft", actionId: d.id, routeId: d.routeId, outcome: "merged", effect: "internal", ref: into });
 	}
+}
+
+/** 催复审出了新一版：同一个 MR 上一版还挂着、评论也没发出去的，标成已合并（新一版的台账已经包含仍然成立的旧发现） */
+function supersede(id: string, into: string) {
+	const d = getDraft(id);
+	if (!d || !LIVE.includes(d.status) || draftMrs([d]).get(id)?.done.includes("note")) return;
+	if (!claim(id, LIVE, "merged")) return;
+	log("MR 预审上一版合并到复审的新一版", id, "->", into);
+	settle({ actionKind: "draft", actionId: id, routeId: d.routeId, outcome: "merged", effect: "internal", ref: into });
+	syncCard(id);
 }
 
 /** 运行被 abortIfYiReplied 中止：和起草完才发现 Yi 已回复一样记成跳过、草稿作废，不当失败提醒 */

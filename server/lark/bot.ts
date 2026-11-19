@@ -494,7 +494,7 @@ export async function unreact(messageId: string, reactionId?: string) {
 	}
 }
 
-// ---------- 以 Yi 身份发出：只在 Yi 确认草稿之后调用 ----------
+// ---------- 以 Yi 身份发出：只在 Yi 确认草稿之后调用（例外：MR 评审没问题时按 Yi 定的规则自动回 approved，drafts/mr.ts） ----------
 
 async function sendAsUser(target: UserTarget, msgType: string, content: string, uuid: string) {
 	const auth = await asUser();

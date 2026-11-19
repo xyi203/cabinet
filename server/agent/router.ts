@@ -92,6 +92,8 @@ export interface RouteSource {
 	text: string;
 	/** 与这条消息直接相关的前文；只有 @ 没有正文时全靠它判断 */
 	context?: string;
+	/** 没带链接、但认定是在催这个 MR 的复审（drafts/mr.ts mrFollowup）：和 MR 链接一样直接进 mr 档 */
+	followMr?: { project: string; iid: string; rule: string };
 }
 
 /** MR 链接直接进 mr 档，不用模型分诊 */
@@ -116,6 +118,8 @@ export async function route(source: RouteSource): Promise<[string, RouteInfo]> {
 	const { agents, router } = loadAgents();
 	const name = router.agent && agents[router.agent] ? router.agent : (Object.keys(agents).find((k) => !agents[k].manual) ?? ASSISTANT);
 	const agent = agents[name] ?? {};
+	const follow = source.followMr;
+	if (follow && agent.tiers?.mr) return [name, { tier: "mr", mrProject: follow.project, mrIid: follow.iid, rule: follow.rule }];
 	const fast = fastRoute(agent, source.text);
 	if (fast) return [name, fast];
 	if (!agent.tiers) return [name, { rule: "唯一的 agent" }];

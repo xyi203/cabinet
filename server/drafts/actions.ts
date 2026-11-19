@@ -24,7 +24,7 @@ import { claim, DraftError, getDraft, isQuiet, LIVE, pushDraft, setStatus, syncC
 import { cancelFollowups } from "../followups.ts";
 import { taskOfAction } from "../taskstore.ts";
 import { draftLink } from "../boardlink.ts";
-import { applyMrAction, draftMrs, type MrLedger } from "./mr.ts";
+import { applyMrAction, autoApprove, draftMrs, type MrLedger, reReviewAsk } from "./mr.ts";
 
 /** MR 预审的改写：Yi 多半是要删改某几条评论，把当前的报告和台账原样给回去 */
 function mrRevision(report: string, ledger?: MrLedger) {
@@ -106,7 +106,9 @@ async function newVersion(id: string, requestId: string, ask: (d: Draft) => stri
 	try {
 		const started = now();
 		const { text, context } = await rerun(d, requestId, ask(d), memoryQuery);
-		await pushDraft({ ...sourceOf(d), context }, text, live ? id : undefined);
+		const dm = await pushDraft({ ...sourceOf(d), context }, text, live ? id : undefined);
+		// 复审、到期复查出的新一版评审没问题：直接批准（Yi 定的规则）
+		void autoApprove(dm).catch((e) => log("自动批准出错", dm, e));
 		record({
 			kind: "draft",
 			status: "revised",
@@ -136,22 +138,10 @@ export async function reReview(id: string, reason: string): Promise<void> {
 	const mr = draftMrs([d]).get(id);
 	if (!mr) throw new DraftError("这条草稿不是 MR 预审");
 	log("开始复审", mr.url, reason);
-	const head = mr.ledger?.head_sha;
 	await newVersion(
 		id,
 		`rereview:${id}:${Date.now()}`,
-		(cur) =>
-			[
-				`上一轮评审报告：\n${cur.report || "（无）"}`,
-				`上一轮的评论台账${mr.done.includes("note") ? "（已经发到 MR 上了）" : "（还没发）"}：\n${mr.ledger ? JSON.stringify(mr.ledger, null, 2) : "（无）"}`,
-				`这次是复审，原因：${reason}。`,
-				`按 review skill 的 references/mr-re-review.md 做：上次审到的 head 是 ${head ?? "MR 总结评论标记里的 head_sha"}，只审它之后的增量（force-push 就全量审并说明）；` +
-					"读 MR 的 discussions，本工具开的线程（首条 note 带 `<!-- gitlab-mr-review -->`）逐个判断，已修复、或作者回复成立的 resolve，回复不成立的回复一次，都写进台账的 threads。" +
-					(mr.done.includes("note")
-						? "台账只放这一轮要新发的内容，上一轮已经发出去的评论不要再写。"
-						: "上一轮台账还没发，这一轮的台账要包含仍然成立的旧发现，替代上一轮。"),
-				"按 MR 预审的输出格式完整输出（回复、【评审报告】、【MR评论】三段都要有），评审报告开头写清这一轮看了什么、旧线程处理结果。",
-			].join("\n\n"),
+		(cur) => reReviewAsk(cur.report, mr, reason),
 		`${d.text}\n复审 ${mr.project}!${mr.iid}`,
 		`复审：${reason}`,
 	);

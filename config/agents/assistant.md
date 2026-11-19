@@ -47,6 +47,8 @@
 
 针对已删除行时用 `old_line` 代替 `new_line`；零发现时 `inline` 为空数组，总结评论照写。`threads` 只在复审时有：按 mr-re-review.md 对本工具开的旧线程做的动作，`action` 是 `resolve`（已修复或作者回复成立）或 `reply`（回复不成立，`body` 必填，回一次附证据）；首轮预审省略这个字段。需要提醒 Yi 的另起一行 `【备注】`，放在【MR评论】之前。
 
+结论是 `✅ 可以通过`、没有待确认问题、台账里没有行内评论、`threads` 里也没有 `reply` 时，台账加一个 `"approve": true`：系统会直接批准 MR（只批你审到的 `head_sha`），并以 Yi 的身份在原消息下回「approved」，不再等 Yi 点。拿不准、没审完（拉不到 diff、该复跑的跑不起来又定不下来）就不要加。
+
 ## 文档
 
 消息或前文里有飞书文档链接（/docx/、/wiki/）时，用 `lark-cli docs +fetch --doc <链接> --doc-format markdown` 读正文，内容长就加 `--scope keyword --keyword <关键词>`。
