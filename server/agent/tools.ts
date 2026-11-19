@@ -76,7 +76,7 @@ export const lsTool = defineTool({
 export const memoryTool = defineTool({
 	name: "memory",
 	description:
-		"查 Yi 的长期记忆（约定、Yi 的偏好与相关的人、以前的排查经验与事实）：注入的记忆不够用、或者想找以前的经验时，用一句话查。" +
+		"查 Yi 的长期记忆（约定、Yi 的偏好、以前的排查经验与事实）：注入的记忆不够用、或者想找以前的经验时，用一句话查。" +
 		"deep=true 时让记忆库综合推理后回答（慢，几十秒），适合「上次这类问题最后怎么定的、为什么」。约定在条件成立时照做；线索先核实再用。",
 	parameters: obj({ query: str(), deep: opt(bool()) }),
 	execute: async (args) => {

@@ -42,7 +42,7 @@ test("按规则发现问题", () => {
 	assert.deepEqual(keys({ failures: Array.from({ length: 5 }, () => ({ ts: T - 7200 })) }), []);
 	// 记忆服务调不通超过 15 分钟才算
 	assert.deepEqual(keys({ memoryDown: [{ service: "hindsight", since: T - 1200, error: "ECONNREFUSED" }] }), ["memory-down:hindsight"]);
-	assert.deepEqual(keys({ memoryDown: [{ service: "openviking", since: T - 300, error: "ECONNREFUSED" }] }), []);
+	assert.deepEqual(keys({ memoryDown: [{ service: "hindsight", since: T - 300, error: "ECONNREFUSED" }] }), []);
 	// 没开轮询就不查轮询和授权
 	assert.deepEqual(keys({ pollEnabled: false, auth: { authorized: false } }), []);
 });

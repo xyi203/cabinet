@@ -51,7 +51,6 @@ import { dashboardState, sessionLog } from "./tasks.ts";
 import { listKv } from "./db/index.ts";
 import { memoryDown } from "./memory/health.ts";
 import { listMemories } from "./memory/hindsight.ts";
-import { listNotes } from "./memory/viking.ts";
 import { recall, render } from "./memory/recall.ts";
 import { rememberFromYi } from "./memory/remember.ts";
 import { type Classification, MemoryError, editConvention, listConventions, removeConvention } from "./memory/store.ts";
@@ -102,7 +101,7 @@ const classification = (body: any): Classification => ({
 	appliesWhen: String(body.appliesWhen ?? ""),
 });
 
-/** 记忆的写操作：Yi 在看板上手写一条（按分类去约定 / OpenViking / Hindsight），改、停用、删除约定 */
+/** 记忆的写操作：Yi 在看板上手写一条（按分类去约定或 Hindsight），改、停用、删除约定 */
 async function memoryAction(p: string, body: any) {
 	if (p === "/api/memory") return rememberFromYi(String(body.content ?? ""), classification(body), `board:${Date.now()}`);
 	const m = /^\/api\/memory\/conventions\/([\w-]+)\/(edit|delete)$/.exec(p);
@@ -224,13 +223,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 				pending: listKv("pending:memory:").length,
 				bank: MEMORY.bank,
 				hindsightUrl: MEMORY.hindsightUrl,
-				vikingRoot: MEMORY.vikingRoot,
 			});
 		}
-		// 两边的明细列表；读失败照实回原因
-		if (p === "/api/memory/facts" || p === "/api/memory/notes") {
+		// Hindsight 的明细列表；读失败照实回原因
+		if (p === "/api/memory/facts") {
 			try {
-				if (p === "/api/memory/notes") return send(res, 200, { items: await listNotes() });
 				const sp = url.searchParams;
 				const type = sp.get("type") ?? "";
 				return send(
@@ -316,7 +313,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 			return item ? send(res, 200, { ok: true, item }) : send(res, 404, { error: "not found" });
 		} catch (e) {
 			if (e instanceof MemoryError) return send(res, 409, { error: e.message });
-			// Hindsight / OpenViking 不可用：原因照实回给看板
+			// Hindsight 不可用：原因照实回给看板
 			return send(res, 502, { error: String((e as Error).message).slice(0, 200) });
 		}
 	}

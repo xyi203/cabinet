@@ -1,4 +1,4 @@
-// 长期记忆：召回三路（约定 / Hindsight / OpenViking）与降级、草稿走完后的沉淀、「记住」按分类的去处、凭证闸
+// 长期记忆：召回两路（约定 / Hindsight 线索）与降级、草稿走完后的沉淀、「记住」按分类的去处、凭证闸
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";
@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 
-// 假的 Hindsight + OpenViking：按路径回固定结果，记下每次请求
+// 假的 Hindsight：按路径回固定结果，记下每次请求
 interface Req {
 	method: string;
 	path: string;
@@ -46,33 +46,7 @@ const server = createServer((req, res) => {
 					},
 				],
 			});
-		if (p.startsWith("/v1/")) return json({ success: true });
-		if (p === "/api/v1/search/find")
-			return json({
-				status: "ok",
-				result: {
-					memories: body.target_uri.endsWith("/preferences/")
-						? [
-								{ uri: "viking://user/default/memories/preferences/yi/沟通.md", level: 2, score: 0.8, abstract: "先结论后依据" },
-								{ uri: "viking://user/default/memories/preferences/yi/.overview.md", level: 1, score: 0.7, abstract: "目录" },
-							]
-						: [],
-				},
-			});
-		if (p.startsWith("/api/v1/fs/tree"))
-			return p.includes("preferences")
-				? json({
-						status: "ok",
-						result: [
-							{ uri: "viking://u/preferences/yi", isDir: true, rel_path: "yi" },
-							{ uri: "viking://u/preferences/yi/沟通.md", isDir: false, rel_path: "yi/沟通.md", modTime: "2026-11-17T00:00:00Z" },
-							{ uri: "viking://u/preferences/yi/.overview.md", isDir: false, rel_path: "yi/.overview.md" },
-						],
-					})
-				: json({ status: "error", error: { code: "NOT_FOUND" } }, 404);
-		if (p.startsWith("/api/v1/content/read")) return json({ status: "ok", result: "- 先结论后依据" });
-		if (p.startsWith("/api/v1/sessions") && req.method === "DELETE") return json({ status: "error" }, 404);
-		return json({ status: "ok", result: {} });
+		return json({ success: true });
 	});
 }).listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
@@ -81,7 +55,6 @@ const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 
 process.env.DATA_DIR = mkdtempSync(path.join(tmpdir(), "cabinet-memory-"));
 process.env.HINDSIGHT_URL = url;
-process.env.OPENVIKING_URL = url;
 process.env.MEMORY_MODEL = "faux-1";
 process.env.PI_FALLBACK_MODEL = "";
 
@@ -96,12 +69,11 @@ const { recall, render, recallBlock } = await import("../server/memory/recall.ts
 const extract = await import("../server/memory/extract.ts");
 const { classifyStatement, rememberFromYi } = await import("../server/memory/remember.ts");
 const { memoryDown } = await import("../server/memory/health.ts");
-const { listNotes } = await import("../server/memory/viking.ts");
 
 const take = () => reqs.splice(0);
 const pref = { kind: "preference" as const, application: "reference" as const, appliesWhen: "" };
 
-test("召回：约定按作用域与预算挑、线索按作用域 tag 过滤、OpenViking 只查偏好与人物的叶子文件", async () => {
+test("召回：约定按作用域与预算挑、线索按作用域 tag 过滤", async () => {
 	directives = [
 		{ id: "d1", name: "有人问上线时间时", content: "先说评估，不直接承诺", tags: ["personal"], is_active: true },
 		{ id: "d2", name: "回王五时", content: "用英文", tags: ["person:ou_wang", "name:王五"], is_active: true },
@@ -116,28 +88,22 @@ test("召回：约定按作用域与预算挑、线索按作用域 tag 过滤、
 	const hs = take().find((x) => x.path.endsWith("/memories/recall"))!;
 	assert.deepEqual(hs.body.tags, ["personal", "person:ou_zhang", "chat:oc_1"]);
 	assert.equal(hs.body.tags_match, "any_strict");
-	assert.deepEqual(
-		r.notes.map((n) => n.text),
-		["先结论后依据"],
-	);
 	const block = render(r);
 	assert.match(block, /先说评估，不直接承诺〔适用：有人问上线时间时〕/);
-	assert.match(block, /先结论后依据〔偏好〕/);
 	assert.match(block, /GET \/api\/internal\/cart〔事实 · 2026-11-01〕/);
 	// 和王五说话时带上只对他的约定，显示名来自 name: tag
 	const w = await recall("x", { personId: "ou_wang" });
 	assert.match(render(w), /用英文〔适用：回王五时 · 限 王五〕/);
 });
 
-test("召回：Hindsight 挂了只跳过它那两路，OpenViking 照带；Watchdog 能看到", async () => {
+test("召回：Hindsight 挂了两路都跳过，这一轮照常跑、不带记忆；Watchdog 能看到", async () => {
 	hindsightDown = true;
 	try {
 		const r = await recall("x", {});
 		assert.equal(r.conventions.length, 0);
 		assert.equal(r.facts.length, 0);
-		assert.equal(r.notes.length, 1);
 		assert.equal(r.degraded.length, 2);
-		assert.match(await recallBlock("x", {}), /先结论后依据/);
+		assert.equal(await recallBlock("x", {}), "");
 		assert.ok(memoryDown().some((d) => d.service === "hindsight"));
 	} finally {
 		hindsightDown = false;
@@ -146,7 +112,7 @@ test("召回：Hindsight 挂了只跳过它那两路，OpenViking 照带；Watch
 	assert.ok(!memoryDown().some((d) => d.service === "hindsight"));
 });
 
-test("草稿走完：整批进 Hindsight（来源当 document_id），只有 Yi 的话进 OpenViking，凭证打码", async () => {
+test("草稿走完：整批进 Hindsight（来源当 document_id），凭证打码", async () => {
 	const t = Date.now() / 1000;
 	const base = {
 		chatId: "oc_9",
@@ -188,13 +154,9 @@ test("草稿走完：整批进 Hindsight（来源当 document_id），只有 Yi 
 	assert.deepEqual(item.tags, ["personal", "person:ou_wang", "chat:oc_9"]);
 	assert.match(item.content, /Yi 的改稿意见/);
 	assert.match(item.content, /Yi 原样发出了最后一版草稿/);
+	assert.match(item.content, /以后别替我直接承诺上线时间/);
 	assert.doesNotMatch(item.content, /sk-/);
-	const batch = sent.find((x) => x.path.endsWith("/messages/batch"))!;
-	assert.match(batch.path, /cabinet-draft-om_q/);
-	const texts = batch.body.messages.map((m: any) => m.content).join("\n");
-	assert.match(texts, /以后别替我直接承诺上线时间/);
-	assert.doesNotMatch(texts, /周三能上线吗/);
-	assert.ok(sent.some((x) => x.path.endsWith("/commit")));
+	assert.equal(sent.length, 1);
 	assert.deepEqual(
 		db()
 			.select()
@@ -266,9 +228,12 @@ test("「记住」按分类写去不同地方", async () => {
 	);
 	assert.equal(directives.length, 1);
 
+	// 偏好和事实、经验一样进 Hindsight，处处适用的打 personal
 	const p = await rememberFromYi("回消息先结论后依据", pref, "remember:om_2");
-	assert.equal(p.where, "openviking");
-	assert.ok(take().some((x) => x.path === "/api/v1/sessions/cabinet-remember-om_2/commit"));
+	assert.equal(p.where, "hindsight");
+	const pr = take().find((x) => x.path.endsWith("/memories"))!;
+	assert.deepEqual(pr.body.items[0].tags, ["personal"]);
+	assert.match(pr.body.items[0].context, /偏好/);
 
 	const f = await rememberFromYi(
 		"王五负责 cart 发版",
@@ -296,13 +261,4 @@ test("凭证、空话、约定没写条件都拦在外面，不往外写", async
 	const img = "[图片 img_v3_0217h_78865c1a-2b3c-4d5e-8f90-a1b2c3d4e5f6g]";
 	assert.equal(store.redact(img), img);
 	assert.equal(store.redact("x Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7cDe0fGh y"), "x 〔已打码〕 y");
-});
-
-test("看板列偏好文件：目录不存在（404）当成空的，也不算 OpenViking 挂了", async () => {
-	const notes = await listNotes();
-	assert.deepEqual(
-		notes.map((n) => [n.type, n.path, n.text]),
-		[["preferences", "yi/沟通.md", "- 先结论后依据"]],
-	);
-	assert.ok(!memoryDown().some((d) => d.service === "openviking"));
 });

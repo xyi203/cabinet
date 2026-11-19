@@ -11,7 +11,6 @@ import {
 	editConvention,
 	fetchFacts,
 	fetchMemory,
-	fetchNotes,
 	searchMemory,
 } from "../lib/api";
 import { time } from "../lib/format";
@@ -19,11 +18,11 @@ import { DataTable, Pagination, type PaginationState, pageFeatures } from "./Dat
 import { toast } from "./Toast";
 import { Segmented } from "./ui";
 
-// 记忆存在外面：约定与经验在 Hindsight，你的偏好与画像在 OpenViking（Claude Code 也在用）。
-// 这一页管约定、手写一条、试召回，并列出两边存着的明细（只读）
+// 记忆存在外面：约定、偏好与经验都在 Hindsight。
+// 这一页管约定、手写一条、试召回，并列出 Hindsight 存着的明细（只读）
 const KIND: Record<Classification["kind"], string> = { preference: "偏好", fact: "事实", experience: "经验" };
-const WHERE = { convention: "约定", hindsight: "Hindsight", openviking: "你的偏好（OpenViking）" };
-const SERVICE: Record<string, string> = { hindsight: "Hindsight", openviking: "OpenViking" };
+const WHERE = { convention: "约定", hindsight: "Hindsight" };
+const SERVICE: Record<string, string> = { hindsight: "Hindsight" };
 /** 和后端 MAX_CONTENT 一致 */
 const MAX = 300;
 
@@ -87,7 +86,7 @@ function Section({ name, hint, children, count }: { name: string; hint?: string;
 	);
 }
 
-/** 手写一条：选「每次照做」进约定；否则偏好进 OpenViking，事实与经验进 Hindsight */
+/** 手写一条：选「每次照做」进约定；否则偏好、事实与经验都进 Hindsight */
 function NewMemory({ onClose }: { onClose: () => void }) {
 	const qc = useQueryClient();
 	const [content, setContent] = useState("");
@@ -151,11 +150,7 @@ function NewMemory({ onClose }: { onClose: () => void }) {
 					取消
 				</button>
 				<span className="text-[12px] text-muted">
-					{c.application === "convention"
-						? "进约定，条件成立时每次都带"
-						: c.kind === "preference"
-							? "进你的偏好（OpenViking）"
-							: "进 Hindsight"}
+					{c.application === "convention" ? "进约定，条件成立时每次都带" : "进 Hindsight，相关时参考"}
 				</span>
 			</div>
 		</div>
@@ -243,7 +238,6 @@ function ConventionRow({ c }: { c: Convention }) {
 }
 
 const TYPE: Record<string, string> = { world: "事实", experience: "经历", observation: "归纳" };
-const NOTE: Record<string, string> = { preferences: "偏好", entities: "人物", events: "事件", profile: "画像" };
 
 const row = (key: string, text: string, label: string) => (
 	<div key={key} className="flex flex-col gap-1 border-t border-line px-1 py-3 first:border-t-0">
@@ -253,7 +247,7 @@ const row = (key: string, text: string, label: string) => (
 );
 
 function Trial({ r }: { r: Recalled }) {
-	const empty = !r.conventions.length && !r.facts.length && !r.notes.length;
+	const empty = !r.conventions.length && !r.facts.length;
 	return (
 		<div className="flex flex-col gap-3">
 			{r.degraded.length > 0 && <div className="text-[12px] text-bad">有几路没查成：{r.degraded.join("；")}</div>}
@@ -262,7 +256,6 @@ function Trial({ r }: { r: Recalled }) {
 			) : (
 				<div className="border-y border-line">
 					{r.conventions.map((c) => row(`c${c.id}`, c.content, `约定 · 适用：${c.appliesWhen}`))}
-					{r.notes.map((n) => row(n.uri, n.text, `OpenViking · ${NOTE[n.type] ?? n.type} · ${n.score.toFixed(2)}`))}
 					{r.facts.map((f) => row(f.id, f.text, `Hindsight · ${TYPE[f.type] ?? f.type}${f.at ? ` · ${f.at.slice(0, 10)}` : ""}`))}
 				</div>
 			)}
@@ -278,35 +271,6 @@ function Trial({ r }: { r: Recalled }) {
 
 const factScope = (tags: string[]) =>
 	tags.includes("personal") || !tags.length ? "" : tags.some((t) => t.startsWith("chat:")) ? "仅某个群" : "仅某个人";
-
-/** OpenViking 的偏好与人物：一个主题一个文件，正文是 markdown 列表 */
-function Notes() {
-	const { data, error } = useQuery({ queryKey: ["memory", "notes"], queryFn: fetchNotes });
-	return (
-		<Section name="你的偏好与打过交道的人" count={data?.items.length} hint="OpenViking，按主题归并，Claude Code 也在用">
-			{error ? (
-				<div className="px-0.5 text-[14px] text-bad">读取失败：{(error as Error).message}</div>
-			) : !data ? (
-				<div className="px-0.5 text-[14px] text-muted">加载中…</div>
-			) : data.items.length ? (
-				<div className="border-y border-line">
-					{data.items.map((n) => (
-						<div key={n.uri} className="flex flex-col gap-1 border-t border-line px-1 py-3 first:border-t-0">
-							<div className="text-[12px] font-semibold text-text-2">{n.path.replace(/\.md$/, "")}</div>
-							<div className="text-[14px] leading-[22px] break-words whitespace-pre-wrap text-text">{n.text.trim()}</div>
-							<div className="text-[12px] text-muted">
-								{NOTE[n.type] ?? n.type}
-								{n.updated && ` · ${n.updated.slice(0, 10)}`}
-							</div>
-						</div>
-					))}
-				</div>
-			) : (
-				<div className="px-0.5 text-[14px] text-muted">还没有。</div>
-			)}
-		</Section>
-	);
-}
 
 const factHelper = createColumnHelper<typeof pageFeatures, ListedFact>();
 // 列定义放模块级：每次渲染都新建会让表重算行模型
@@ -417,8 +381,7 @@ export function MemoryBoard() {
 	return (
 		<div className="flex flex-col gap-6">
 			<p className="-mt-2 mb-0 text-[14px] text-muted">
-				助手回消息、做事时会参考这些记忆：约定和经验在 Hindsight（bank「{data.bank}」），你的偏好和打过交道的人在 OpenViking，和 Claude Code
-				共用。
+				助手回消息、做事时会参考这些记忆：约定、你的偏好和经验都在 Hindsight（bank「{data.bank}」）。
 			</p>
 			{(data.down.length > 0 || data.pending > 0) && (
 				<div className="flex flex-col gap-1 text-[12px]">
@@ -479,7 +442,6 @@ export function MemoryBoard() {
 					<div className="px-0.5 text-[14px] text-muted">还没有约定。在飞书里对助手说「以后……」「记住……」，或者点「记一条」。</div>
 				)}
 			</Section>
-			<Notes />
 			<Facts />
 		</div>
 	);

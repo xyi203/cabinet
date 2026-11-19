@@ -83,7 +83,7 @@ export async function remember(ev: BotEvent, text: string, tid: string) {
 	try {
 		m = await rememberStatement(content, ev.messageId, candidates);
 	} catch (e) {
-		// 记忆服务（Hindsight / OpenViking）挂了也照实告诉 Yi，不吞掉
+		// 记忆服务（Hindsight）挂了也照实告诉 Yi，不吞掉
 		const why = e instanceof MemoryError ? e.message : `记忆服务暂时不可用（${String((e as Error).message).slice(0, 120)}）`;
 		settle({ actionKind: "remember", actionId: ev.messageId, routeId, outcome: "failed", effect: "internal", detail: why });
 		return void (await reply(ev, `没记下：${why}。`));
@@ -97,7 +97,6 @@ export async function remember(ev: BotEvent, text: string, tid: string) {
 			? `，只在「${c.scopeName}」里用`
 			: "";
 	if (m.where === "convention") await reply(ev, `记住了，以后照做。适用：${c.appliesWhen}${scope}。不对的话到看板「记忆」里改。`);
-	else if (m.where === "openviking") await reply(ev, `记进你的偏好了（OpenViking，Claude Code 那边也看得到）${scope}。`);
 	else if (scope) await reply(ev, `记住了${scope}。`);
 	record({ kind: "qa", status: "remembered", source: ev.messageId, chatId: ev.chatId, question: content, label: "记忆" });
 }

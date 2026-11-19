@@ -10,7 +10,7 @@ const dir = mkdtempSync(path.join(tmpdir(), "cabinet-agent-"));
 process.env.DATA_DIR = path.join(dir, "data");
 process.env.DEFAULT_CWD = path.join(dir, "work");
 process.env.PI_FALLBACK_MODEL = "";
-// 测试不碰本机的 Hindsight / OpenViking：一个假的只回约定，其余回空
+// 测试不碰本机的 Hindsight：一个假的只回约定，其余回空
 const { createServer } = await import("node:http");
 const fake = createServer((req, res) => {
 	res.setHeader("content-type", "application/json");
@@ -23,11 +23,11 @@ const fake = createServer((req, res) => {
 			}),
 		);
 	if (req.url?.includes("/memories/recall")) return res.end(JSON.stringify({ results: [] }));
-	res.end(JSON.stringify({ status: "ok", result: { memories: [] } }));
+	res.end(JSON.stringify({ success: true }));
 }).listen(0, "127.0.0.1");
 await new Promise((r) => fake.once("listening", r));
 fake.unref();
-process.env.HINDSIGHT_URL = process.env.OPENVIKING_URL = `http://127.0.0.1:${(fake.address() as { port: number }).port}`;
+process.env.HINDSIGHT_URL = `http://127.0.0.1:${(fake.address() as { port: number }).port}`;
 const work = process.env.DEFAULT_CWD;
 await import("node:fs").then((fs) => fs.mkdirSync(work, { recursive: true }));
 writeFileSync(path.join(work, "a.txt"), "hello");

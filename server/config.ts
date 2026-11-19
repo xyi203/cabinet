@@ -117,7 +117,7 @@ export const SKILLS_DIR = expand(env("SKILLS_DIR", "~/.agents/skills"));
 // MCP server 定义，沿用 pi 的 mcp.json；agent 在 agents.json 的 mcp 里选用（server/agent/mcp.ts）
 export const MCP_CONFIG = expand(env("MCP_CONFIG", "~/.pi/agent/mcp.json"));
 
-// 长期记忆：经验、事实与约定在 Hindsight 的独立 bank（约定是 directive），Yi 本人的偏好与画像在 OpenViking（和 Claude Code 共用）
+// 长期记忆：约定、偏好、经验与事实都在 Hindsight 的独立 bank（约定是 directive）
 export const MEMORY = {
 	enabled: env("MEMORY_ENABLED", "1") === "1",
 	/** 「记住」分类用的模型 */
@@ -125,9 +125,6 @@ export const MEMORY = {
 	hindsightUrl: env("HINDSIGHT_URL", "http://127.0.0.1:8888"),
 	/** 不和 hindsight-coding-agents 给仓库建的 coding-agent::cabinet 混用：那个记的是代码，这个记的是 Yi 的事 */
 	bank: env("HINDSIGHT_BANK", "cabinet"),
-	vikingUrl: env("OPENVIKING_URL", "http://127.0.0.1:1933"),
-	/** 召回只看这棵树下的偏好、人物与事件 */
-	vikingRoot: env("OPENVIKING_MEMORY_ROOT", "viking://user/default/memories/"),
 	topK: Number(env("MEMORY_TOP_K", "8")),
 	tokens: Number(env("MEMORY_TOKENS", "1500")),
 	conventionTokens: Number(env("MEMORY_CONVENTION_TOKENS", "800")),

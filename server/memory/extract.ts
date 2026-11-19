@@ -1,7 +1,6 @@
 // 自动沉淀：一条草稿走完（发 / 不发 / 完成 / Yi 亲自回复作废）时的改稿过程，和一次问答里的工具结果。
 // - 材料由程序从草稿、流水和工具调用拼出来；注入的记忆不在材料里，memory 工具的结果也不收，不会被当成新证据
 // - 整批 retain 进 Hindsight（document_id 是来源，重试整篇替换），抽什么由 bank 的 retain_mission 管
-// - 有 Yi 自己的话时，只把这几段（加一段背景）送进 OpenViking，由它更新 Yi 的偏好与人物
 // - 任务先记进 kv，成功才删；失败过一会儿重试，进程重启后接着做
 import { and, asc, eq } from "drizzle-orm";
 import { MEMORY, OWNER_OPEN_ID } from "../config.ts";
@@ -10,7 +9,6 @@ import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import { log } from "../util.ts";
 import { retain } from "./hindsight.ts";
 import { normalize, redact } from "./store.ts";
-import { commit } from "./viking.ts";
 
 const WINDOW_CHARS = 24_000;
 const MAX_ATTEMPTS = 5;
@@ -241,17 +239,6 @@ export const batchTags = (b: Pick<Batch, "person" | "chat">) => [
 	...(b.chat ? [`chat:${b.chat.id}`] : []),
 ];
 
-/** 送进 OpenViking 的：Yi 的每句话一条 user 消息，前面一条 assistant 消息交代背景（不带对方原话） */
-export function vikingMessages(b: Batch) {
-	const yi = b.materials.filter((x) => x.role === "yi");
-	if (!yi.length) return [];
-	const where = [b.person ? `回复 ${b.person.name}` : "", b.chat ? `在「${b.chat.name}」` : ""].filter(Boolean).join("，");
-	return [
-		{ role: "assistant" as const, content: `〔cabinet 飞书助理〕下面是 Yi ${where}时对助理草稿的修改或自己写的回复。`, at: yi[0].at },
-		...yi.map((x) => ({ role: "user" as const, content: redact(`${x.label}：${x.text}`), at: x.at })),
-	];
-}
-
 export async function store(b: Batch) {
 	const at = Math.max(...b.materials.map((x) => x.at));
 	await retain([
@@ -266,9 +253,7 @@ export async function store(b: Batch) {
 			metadata: { source: b.source },
 		},
 	]);
-	const messages = vikingMessages(b);
-	if (messages.length) await commit(b.source, messages);
-	log(`记忆沉淀 ${b.source}：Hindsight 已收${messages.length ? "，Yi 的话已送 OpenViking" : ""}`);
+	log(`记忆沉淀 ${b.source}：Hindsight 已收`);
 }
 
 async function processJob(job: MemoryJob) {

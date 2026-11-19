@@ -55,7 +55,7 @@ server/          后端（Node 直接跑 TypeScript）
   tasks.ts       看板的任务模型、执行日志
   retry.ts       失败任务重试
   api.ts         看板接口、SSE、托管前端构建产物
-  memory/        长期记忆：Hindsight / OpenViking 客户端、召回与注入、草稿和问答的沉淀、「记住」、约定（directive）
+  memory/        长期记忆：Hindsight 客户端、召回与注入、草稿和问答的沉淀、「记住」、约定（directive）
   a2ui/          结论的结构化报告：show_ui 工具的组件目录和校验（A2UI v1.0，zod 4 补丁见 patches/），看板按它渲染（src/components/AgentUi.tsx）
   db/            Drizzle + Turso（turso.ts：drizzle 与 durable 存储的 Turso 适配）
 src/             看板前端（TanStack Start + React Query）
@@ -79,16 +79,15 @@ agent 跑在 [pi-durable](https://github.com/earendil-works/pi/tree/main/package
 
 ## 长期记忆
 
-记忆存在两个本机服务里，cabinet 只负责拼材料、调接口、渲染注入块（`server/memory/`）。
+记忆存在本机的 Hindsight 里，cabinet 只负责拼材料、调接口、渲染注入块（`server/memory/`）。
 
-- **Hindsight**（`HINDSIGHT_URL`，bank `HINDSIGHT_BANK=cabinet`）：经验、事实与约定。它不和 hindsight-coding-agents 给仓库建的 `coding-agent::cabinet` 混用，那个 bank 记的是代码。bank 的 retain / reflect mission 写在 `server/memory/hindsight.ts`，启动时按代码更新。
-- **OpenViking**（`OPENVIKING_URL`）：Yi 本人的偏好与打过交道的人，和 Claude Code 共用 `viking://user/default/memories/`。这里的内容会注入到每个 Claude Code 会话，所以只送 Yi 自己的话，不送同事的原话。
+- **Hindsight**（`HINDSIGHT_URL`，bank `HINDSIGHT_BANK=cabinet`）：约定、Yi 的偏好、经验与事实。它不和 hindsight-coding-agents 给仓库建的 `coding-agent::cabinet` 混用，那个 bank 记的是代码。bank 的 retain / reflect mission 写在 `server/memory/hindsight.ts`，启动时按代码更新。
 - **约定**是 Hindsight 的 directive：name 存适用条件，content 存正文，tag 记作用域（`personal` / `person:<open_id>` / `chat:<chat_id>`，另带 `name:<显示名>`）。生效的约定在作用域内每轮都带，不经过相关度门槛，单独占一份 `MEMORY_CONVENTION_TOKENS` 预算。
-- **召回**：起草、改写、问答和 agent 任务每次按当前消息召回一次，拼在这一轮的输入里，不进系统段。三路并发：约定；Hindsight recall（按作用域 tag `any_strict` 过滤，`MEMORY_TOKENS` 预算，最多 `MEMORY_TOP_K` 条）；OpenViking find（只查 `preferences/` 和 `entities/` 两棵子树）。哪一路失败就跳过哪一路，这一轮照常跑。agent 也能用 `memory` 工具自己查，`deep=true` 时走 Hindsight reflect。
-- **沉淀**：一条草稿走完（发 / 不发 / 完成 / Yi 亲自回复作废）时，程序把原消息、各版草稿、Yi 的改稿意见、Yi 实际发出或亲自回复的内容、这几次运行的工具结果拼成一批，整批 retain 进 Hindsight，`document_id` 用来源，重试时整篇替换。抽什么由 bank 的 retain_mission 决定。批里有 Yi 自己的话时，只把这几句加一段背景提交给 OpenViking。原样发出、又没有工具结果的草稿不沉淀；问答只在提问的是 Yi 或者用过工具时沉淀。凭证会先打码。任务记在 `kv` 的 `pending:memory:*`，成功后才删；失败 10 分钟后重试，最多 5 次，重启后接着做。
-- **「记住 xxx」**：正文就是 Yi 的原话，模型只帮着分类，按分类写到不同地方：约定（basis 必须逐字出现在原话里）写成 directive，偏好写进 OpenViking，事实和经验 retain 进 Hindsight。
-- **看板「记忆」页**：管理约定（改、停用、删除），手写一条，试召回（各路命中的内容和注入原文）。经验和偏好的明细在 Hindsight / OpenViking 各自的界面里看。Watchdog 发现某个服务连续 15 分钟调不通时会提醒。
-- **迁移**：`pnpm migrate-memory` 预演，加 `--apply` 才真的写。只迁生效的旧记忆：约定写成 directive，Yi 原话里的偏好进 OpenViking，其余进 Hindsight。候选、已取代、已遗忘的不迁。旧的 `memories` / `memory_terms` / `memory_vectors` 三张表原样保留。
+- **召回**：起草、改写、问答和 agent 任务每次按当前消息召回一次，拼在这一轮的输入里，不进系统段。两路并发：约定；Hindsight recall（Yi 的偏好也在这一路，按作用域 tag `any_strict` 过滤，`MEMORY_TOKENS` 预算，最多 `MEMORY_TOP_K` 条）。哪一路失败就跳过哪一路，这一轮照常跑。agent 也能用 `memory` 工具自己查，`deep=true` 时走 Hindsight reflect。
+- **沉淀**：一条草稿走完（发 / 不发 / 完成 / Yi 亲自回复作废）时，程序把原消息、各版草稿、Yi 的改稿意见、Yi 实际发出或亲自回复的内容、这几次运行的工具结果拼成一批，整批 retain 进 Hindsight，`document_id` 用来源，重试时整篇替换。抽什么由 bank 的 retain_mission 决定，Yi 的回复习惯与偏好也从这里抽。原样发出、又没有工具结果的草稿不沉淀；问答只在提问的是 Yi 或者用过工具时沉淀。凭证会先打码。任务记在 `kv` 的 `pending:memory:*`，成功后才删；失败 10 分钟后重试，最多 5 次，重启后接着做。
+- **「记住 xxx」**：正文就是 Yi 的原话，模型只帮着分类，按分类写到不同地方：约定（basis 必须逐字出现在原话里）写成 directive，偏好、事实和经验 retain 进 Hindsight（带作用域 tag）。
+- **看板「记忆」页**：管理约定（改、停用、删除），手写一条，试召回（各路命中的内容和注入原文）。另列出 Hindsight 里的经验与事实（分页、按类型过滤）。Watchdog 发现某个服务连续 15 分钟调不通时会提醒。
+- **迁移**：`pnpm migrate-memory` 预演，加 `--apply` 才真的写。只迁生效的旧记忆：约定写成 directive，其余（偏好、事实、经验）进 Hindsight。候选、已取代、已遗忘的不迁。旧的 `memories` / `memory_terms` / `memory_vectors` 三张表原样保留。
 
 ## 身份与权限
 

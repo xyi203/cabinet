@@ -1,6 +1,6 @@
 // 「记住 xxx」：正文就是 Yi 的原话，不经模型改写；模型只帮着分类（种类、是不是长期约定、什么时候适用）。
 // 约定同样要过 basis 校验：表达长期意图的原话片段必须逐字出现在 Yi 这句话里，否则记成线索。
-// 分完类按去处写：约定 → Hindsight directive；偏好 → OpenViking（Yi 的画像）；事实与经验 → Hindsight retain
+// 分完类按去处写：约定 → Hindsight directive；偏好、事实与经验 → Hindsight retain
 import { MEMORY } from "../config.ts";
 import { complete } from "../agent/models.ts";
 import { changed } from "../bus.ts";
@@ -16,7 +16,6 @@ import {
 	normalize,
 	rejectContent,
 } from "./store.ts";
-import { commit } from "./viking.ts";
 
 const SYSTEM = `Yi 让助理记住一句话。只做分类，不改写原话。只输出一行 JSON：
 {"kind":"preference|fact|experience","application":"convention|reference","applies_when":"","basis":""}
@@ -71,12 +70,14 @@ export async function classifyStatement(text: string, candidates?: ScopeCandidat
 }
 
 export interface Remembered {
-	where: "convention" | "hindsight" | "openviking";
+	where: "convention" | "hindsight";
 	content: string;
 	classification: Classification;
 	/** 约定的 directive id；其余是写进去时用的来源 id */
 	ref: string;
 }
+
+const KIND_LABEL: Record<Kind, string> = { preference: "偏好", fact: "事实", experience: "经验" };
 
 /** Yi 亲口记一条（飞书里「记住 xxx」、看板手写）。source 用来去重：同一个来源重试时整篇替换 */
 export async function rememberFromYi(text: string, c: Classification, source: string, at = Date.now() / 1000): Promise<Remembered> {
@@ -88,23 +89,11 @@ export async function rememberFromYi(text: string, c: Classification, source: st
 		const conv = await addConvention(content, c.appliesWhen, scope, c.scopeName ?? "");
 		return { where: "convention", content, classification: c, ref: conv.id };
 	}
-	if (c.kind === "preference") {
-		const about =
-			scope === "personal"
-				? ""
-				: `（只在${scope.startsWith("chat:") ? `「${c.scopeName}」这个会话里` : `和 ${c.scopeName} 打交道时`}适用）`;
-		await commit(source, [
-			{ role: "assistant", content: "〔cabinet 飞书助理〕Yi 让助理记住下面这句话，这是 Yi 的原话。", at },
-			{ role: "user", content: `记住：${content}${about}`, at },
-		]);
-		changed();
-		return { where: "openviking", content, classification: c, ref: source };
-	}
 	await retain(
 		[
 			{
 				content: `Yi 亲口让助理记住：${content}`,
-				context: "Yi 的原话，已确认",
+				context: `Yi 的原话，已确认；是 Yi 的${KIND_LABEL[c.kind]}`,
 				documentId: source,
 				at,
 				// 限定了人或会话的只打那一个 tag：召回时 personal 处处都在，带上它就等于不限

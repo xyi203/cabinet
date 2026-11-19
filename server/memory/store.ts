@@ -1,4 +1,4 @@
-// 记忆的写入闸与约定。存储在外面：经验、事实与约定在 Hindsight（约定 = directive），Yi 的偏好与画像在 OpenViking。
+// 记忆的写入闸与约定。存储在外面：约定、偏好、经验与事实都在 Hindsight（约定 = directive）。
 // cabinet 这边只管写出去之前的校验（不空、不超长、不像凭证；约定只给偏好且要有适用条件），以及约定的作用域怎么编进 tag
 import { changed } from "../bus.ts";
 import { type Directive, createDirective, deleteDirective, listDirectives, updateDirective } from "./hindsight.ts";
@@ -25,7 +25,7 @@ export function rejectContent(content: string): string | undefined {
 	if (SECRET.test(content)) return "看起来含有凭证";
 }
 
-/** 送进 Hindsight / OpenViking 的整批材料：凭证打码，不整批丢 */
+/** 送进 Hindsight 的整批材料：凭证打码，不整批丢 */
 export const redact = (s: string) => s.replace(new RegExp(SECRET.source, "gi"), "〔已打码〕");
 
 export interface Classification {

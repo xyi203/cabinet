@@ -93,8 +93,8 @@ export function checkHealth(s: Snapshot): Issue[] {
 		if (s.now - m.since > 15 * MIN)
 			issues.push({
 				key: `memory-down:${m.service}`,
-				title: `${m.service === "hindsight" ? "Hindsight" : "OpenViking"} 连不上`,
-				detail: `已经 ${span(s.now - m.since)} 调不通，这段时间起草不带${m.service === "hindsight" ? "经验与约定" : "你的偏好"}，沉淀在重试。最近的错误：${m.error}`,
+				title: "Hindsight 连不上",
+				detail: `已经 ${span(s.now - m.since)} 调不通，这段时间起草不带约定、偏好与经验，沉淀在重试。最近的错误：${m.error}`,
 			});
 	const failed = s.failures.filter((f) => s.now - f.ts < 3600).length;
 	if (failed >= 5)

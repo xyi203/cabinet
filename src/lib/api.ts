@@ -342,7 +342,6 @@ export interface MemoryState {
 	pending: number;
 	bank: string;
 	hindsightUrl: string;
-	vikingRoot: string;
 }
 
 export interface Classification {
@@ -359,17 +358,9 @@ export interface Fact {
 	at?: string;
 }
 
-export interface Note {
-	uri: string;
-	type: string;
-	text: string;
-	score: number;
-}
-
 export interface Recalled {
 	conventions: Convention[];
 	facts: Fact[];
-	notes: Note[];
 	degraded: string[];
 	conventionsOverBudget: number;
 	/** 注入时的样子 */
@@ -380,23 +371,14 @@ export interface ListedFact extends Fact {
 	documentId?: string;
 }
 
-export interface NoteFile {
-	uri: string;
-	type: string;
-	path: string;
-	text: string;
-	updated: string;
-}
-
 export const fetchFacts = (p: { q: string; type: string; offset: number; limit: number }) =>
 	getJson<{ items: ListedFact[]; total: number }>(
 		`/api/memory/facts?${new URLSearchParams({ q: p.q, type: p.type, offset: String(p.offset), limit: String(p.limit) })}`,
 	);
-export const fetchNotes = () => getJson<{ items: NoteFile[] }>("/api/memory/notes");
 export const fetchMemory = () => getJson<MemoryState>("/api/memory");
 export const searchMemory = (q: string) => getJson<Recalled>(`/api/memory/search?${new URLSearchParams({ q })}`);
 export const addMemory = (input: Classification & { content: string }) =>
-	post<{ item: { where: "convention" | "hindsight" | "openviking" } }>("/api/memory", input);
+	post<{ item: { where: "convention" | "hindsight" } }>("/api/memory", input);
 export const editConvention = (id: string, patch: { content?: string; appliesWhen?: string; active?: boolean }) =>
 	post(`/api/memory/conventions/${id}/edit`, patch);
 export const deleteConvention = (id: string) => post(`/api/memory/conventions/${id}/delete`, {});
