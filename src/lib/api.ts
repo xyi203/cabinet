@@ -204,6 +204,8 @@ export interface TaskView {
 	storyId?: string | null;
 	scheduleId?: string | null;
 	hold?: number;
+	/** 还没起草、在等你批准的消息：分诊出的档位 */
+	approval?: string;
 	runId?: string;
 	live?: string;
 	/** 正在跑的那次运行的开始时间 */
@@ -534,7 +536,7 @@ export interface DispatchState {
 	now: number;
 	queue: { capacity: number; free: number; waiting: number };
 	running: Array<{ key: string; label: string; agent: string | null; chatId: string | null; started: number; suspicious: boolean }>;
-	inflight: Array<{ id: string; label: string; text: string; since: number; waitUntil: number | null }>;
+	inflight: Array<{ id: string; label: string; text: string; since: number; waitUntil: number | null; approval: string | null }>;
 	suspects: DispatchSuspect[];
 	routes: DispatchRoute[];
 }

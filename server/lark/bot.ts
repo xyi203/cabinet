@@ -11,6 +11,10 @@ import { log, now } from "../util.ts";
 import { cardUserIds, renderCard } from "./card.ts";
 import type { BotEvent, Chat, Mention, Message, UserTarget } from "./types.ts";
 
+// SDK 默认的 axios 实例没有超时：睡眠唤醒、切网络后遇到半开连接，一次请求不返回，串行的轮询就整条停住
+// （Watchdog 只会报「收取消息停了」，要手动重启）。上传下载图片也走它，给宽一点
+lark.defaultHttpInstance.defaults.timeout = 30_000;
+
 let _client: lark.Client | undefined;
 const client = () =>
 	(_client ??= new lark.Client({
@@ -79,6 +83,8 @@ async function tokenRequest(body: Record<string, string>): Promise<UserToken> {
 		method: "POST",
 		headers: { "Content-Type": "application/json; charset=utf-8" },
 		body: JSON.stringify({ client_id: FEISHU_APP_ID, client_secret: FEISHU_APP_SECRET, ...body }),
+		// 刷新是共享的 promise：卡住的话所有用户身份的调用一起等
+		signal: AbortSignal.timeout(20_000),
 	});
 	const d: any = await res.json();
 	if (d.code || !d.access_token) throw new Error(`用户授权失败 code=${d.code}: ${d.error_description ?? d.msg ?? res.status}`);
@@ -270,10 +276,14 @@ export async function listChats(pageSize: number): Promise<Chat[]> {
 	}));
 }
 
-/** 会话消息（含话题内回复）。start 为 unix 秒 */
+/**
+ * 会话消息（含话题内回复）。start 为 unix 秒。
+ * pages：最多翻几页，默认只取一页。轮询按时间正序从 start 拉，间隔长（重启回看、睡眠唤醒）而会话又热闹时一页装不下，
+ * 不翻页的话拿到的是最旧的那一页，之后的消息就永远跳过了
+ */
 export async function listMessages(
 	container: { chatId?: string; threadId?: string },
-	opts: { start?: number; order?: "asc" | "desc"; pageSize?: number; as?: "user" | "bot" } = {},
+	opts: { start?: number; order?: "asc" | "desc"; pageSize?: number; pages?: number; as?: "user" | "bot" } = {},
 ): Promise<Message[]> {
 	const params: any = {
 		container_id_type: container.threadId ? "thread" : "chat",
@@ -284,9 +294,17 @@ export async function listMessages(
 		with_sender_name: true,
 	};
 	if (opts.start) params.start_time = String(Math.floor(opts.start));
-	const auth = opts.as === "bot" ? undefined : await asUser();
-	const d = check(await client().im.v1.message.list({ params }, auth), "读取消息");
-	return (d.items ?? []).map(toMessage);
+	const out: Message[] = [];
+	for (let page = 0; page < (opts.pages ?? 1); page++) {
+		// 每页重新取一次 token：翻页多时可能跨过刷新
+		const auth = opts.as === "bot" ? undefined : await asUser();
+		const d = check(await client().im.v1.message.list({ params }, auth), "读取消息");
+		out.push(...(d.items ?? []).map(toMessage));
+		if (!d.has_more || !d.page_token) return out;
+		params.page_token = d.page_token;
+	}
+	log("读取消息：翻到上限还没拉完，剩下的这一轮不拉", params.container_id, out.length);
+	return out;
 }
 
 export async function getMessage(messageId: string, as: "user" | "bot" = "user"): Promise<Message | undefined> {

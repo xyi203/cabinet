@@ -100,13 +100,22 @@ export const textOf = (content: unknown): string =>
 				.join("\n")
 		: String(content ?? "");
 
-/** 分诊这类一问一答：不需要工具和会话，直接调模型 */
-export async function complete(spec: string, systemPrompt: string, prompt: string): Promise<string> {
+/**
+ * 分诊这类一问一答：不需要工具和会话，直接调模型。
+ * 带超时：分诊是占着并发名额调的，网关挂住时（SDK 默认 10 分钟）会把起草一起堵住；超时按失败算，调用方有兜底
+ */
+export async function complete(spec: string, systemPrompt: string, prompt: string, timeoutSec = 60): Promise<string> {
 	const m = models();
 	const ref = resolveModel(spec);
 	const model = m.getModel(ref.provider, ref.modelId)!;
 	const messages: Message[] = [{ role: "user", content: prompt, timestamp: Date.now() }];
-	const res = await m.complete(model, { systemPrompt, messages });
+	let timer: NodeJS.Timeout | undefined;
+	const res = await Promise.race([
+		m.complete(model, { systemPrompt, messages }),
+		new Promise<never>((_, reject) => {
+			timer = setTimeout(() => reject(new Error(`模型 ${spec} ${timeoutSec} 秒没有返回`)), timeoutSec * 1000);
+		}),
+	]).finally(() => clearTimeout(timer));
 	if (res.stopReason === "error") throw new Error(res.errorMessage ?? "模型调用失败");
 	return textOf(res.content);
 }

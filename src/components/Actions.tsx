@@ -137,7 +137,9 @@ export function RowActions({ t, s, onOpen }: { t: TaskView; s: State; onOpen: ()
 	else if ((t.status === "todo" || t.status === "in_progress") && !dev)
 		body = (
 			<>
-				{t.id.startsWith("q:") && t.hold && btn("现在起草", () => act("/api/poll", { id: t.id.slice(2) }, "开始起草"))}
+				{t.id.startsWith("q:") &&
+					(t.hold || t.approval) &&
+					btn(t.approval ? "让助手处理" : "现在起草", () => act("/api/poll", { id: t.id.slice(2) }, "开始起草"), t.approval ? "pri" : "")}
 				{done()}
 			</>
 		);

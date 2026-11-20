@@ -9,6 +9,7 @@ import { expandForward, FORWARD_PLACEHOLDER, getMessage, imageKeys, imagesNote, 
 import type { Message } from "../lark/types.ts";
 import {
 	ASSISTANT,
+	DEFAULT_TIER,
 	LEGACY_TIER,
 	MR_RE,
 	glabRepo,
@@ -86,8 +87,12 @@ export async function makeDraft(chat: ChatRef, msgs: Message[], onDone?: (ids: s
 		for (const m of msgs) {
 			inflight.delete(m.message_id);
 			dismissed.delete(m.message_id);
+			approved.delete(m.message_id);
 			// 进程退出打断的要留着：重启接回时还得认这个标记
-			if (!interrupted) deleteKv(dismissKey(m.message_id));
+			if (!interrupted) {
+				deleteKv(dismissKey(m.message_id));
+				deleteKv(approvedKey(m.message_id));
+			}
 		}
 		changed();
 	}
@@ -145,6 +150,12 @@ interface Drafting {
 	deferUntil?: number;
 	/** MR 预审：Yi 亲自回复不中止（见 mrStale） */
 	mr?: boolean;
+	/** 分诊出来的档位不在自动处理的名单里：先不分派，等 Yi 在看板上点了再来（见 waitApproval） */
+	needApproval?: boolean;
+	/** 等批准时分诊已经做过：批准后沿用，不再调一次模型 */
+	routed?: [string, RouteInfo];
+	/** 等批准等到过期：按跳过收尾，值是原因 */
+	lapsed?: string;
 }
 const drafting = new Map<string, Drafting>();
 
@@ -247,18 +258,98 @@ export function dismissDraft(messageId: string): boolean {
 		d.aborted = true;
 		d.dismissed = true;
 		abortRun(d.key).catch((e) => log("中止起草失败", d.key, e));
-	} else skipWait.get(i.chatId)?.();
+	} else {
+		// 在等批准的只叫醒它自己：聊天锁已经让出，skipWait 可能是同一个聊天里后来那批消息的
+		const hold = holds.get(messageId);
+		if (hold) hold.wake();
+		else skipWait.get(i.chatId)?.();
+	}
 	return true;
 }
 
-/** 立即起草这条消息：在等的跳过等待，返回有没有跳过；不在等的（排队、已在起草）照常 */
+/**
+ * Yi 批准处理的消息：不在自动处理名单里的档位要他点了才起草。和 dismissed 一样同时记进 kv，
+ * 重启接回时（重新走一遍分诊）不用他再点一次；起草完（或跳过）清掉
+ */
+const approved = new Set<string>();
+const approvedKey = (mid: string) => `approved:${mid}`;
+const isApproved = (msgs: Message[]) => msgs.some((m) => approved.has(m.message_id) || getKv(approvedKey(m.message_id), false));
+
+/** 正在等 Yi 批准的消息（按消息 id，一批消息共用一个 wake）：批准、不用起草、这个聊天里有了新动静时叫醒 */
+const holds = new Map<string, { chatId: string; wake: () => void }>();
+/** 等批准期间没有事件叫醒时，隔这么久自己看一眼 Yi 回了没（表情回复轮询看不到），秒 */
+const APPROVAL_CHECK = 300;
+
+/** 这一档要不要等 Yi 批准：routes.json 的 approval.auto 里列的档位直接处理（"*" = 全部）；MR 预审、催复审总是直接处理 */
+export function needsApproval(tier: string | undefined, mr: boolean, auto = routeRules().approval.auto): boolean {
+	if (mr || tier === "mr" || auto.includes("*")) return false;
+	return !auto.includes(tier ?? DEFAULT_TIER);
+}
+
+/**
+ * 等 Yi 批准。返回过期的原因；其他情况（批准了、标了不用起草、Yi 自己回了、对方又接着发了）返回 undefined，
+ * 由再进一次 draftLocked 时的判断收尾。等的时候不占聊天锁和并发名额
+ */
+async function waitApproval(chat: ChatRef, msgs: Message[], tier: string | undefined): Promise<string | undefined> {
+	const ttl = routeRules().approval.ttl;
+	const until = sinceLast(msgs, ttl);
+	log(`分诊 ${tier ?? DEFAULT_TIER}，等 Yi 批准再处理`, chat.chat_id, msgs.at(-1)!.message_id);
+	let wakeUp: (() => void) | undefined;
+	const hold = { chatId: chat.chat_id, wake: () => wakeUp?.() };
+	for (const m of msgs) {
+		holds.set(m.message_id, hold);
+		const i = inflight.get(m.message_id);
+		if (i) i.approval = tier ?? DEFAULT_TIER;
+	}
+	changed();
+	try {
+		for (;;) {
+			if (isApproved(msgs) || isDismissed(msgs)) return;
+			if (now() >= until) return `等了 ${ttl >= 3600 ? `${Math.round(ttl / 3600)} 小时` : `${Math.round(ttl / 60)} 分钟`}没有批准`;
+			await new Promise<void>((r) => {
+				const timer = setTimeout(r, Math.min(APPROVAL_CHECK, until - now()) * 1000);
+				timer.unref();
+				wakeUp = () => {
+					clearTimeout(timer);
+					r();
+				};
+			});
+			if (isApproved(msgs) || isDismissed(msgs)) return;
+			if (await staleReason(chat, msgs)) return;
+		}
+	} finally {
+		for (const m of msgs) {
+			if (holds.get(m.message_id) === hold) holds.delete(m.message_id);
+			const i = inflight.get(m.message_id);
+			if (!i) continue;
+			delete i.approval;
+			// 等批准的时间不算排队：否则批准得晚的一开跑就被 Watchdog 当成「起草卡住了」
+			i.since = now();
+		}
+	}
+}
+
+/** 这个聊天里有了新消息（Yi 自己回了、对方又接着发了）：在等批准的马上看一眼还要不要等，不用等到下次定时检查 */
+export function nudgeApproval(chatId: string) {
+	for (const h of new Set(holds.values())) if (h.chatId === chatId) h.wake();
+}
+
+/**
+ * 处理这条消息：在等批准的算批准了，在「你在聊」等着的不等了；还没轮到的记下批准，轮到时不再问。
+ * 返回有没有叫醒正在等的
+ */
 export function draftNow(messageId: string): boolean {
 	const i = inflight.get(messageId);
-	const done = i && skipWait.get(i.chatId);
-	if (!done) return false;
-	log("Yi 点了立即起草，不再等", i.chatId, messageId);
-	done();
-	return true;
+	if (!i) return false;
+	approved.add(messageId);
+	setKv(approvedKey(messageId), true);
+	const hold = holds.get(messageId);
+	// 在等批准的只叫醒它自己：聊天锁已经让出，skipWait 可能是同一个聊天里后来那批消息的
+	const done = hold ? undefined : skipWait.get(i.chatId);
+	log(hold ? "Yi 批准处理" : "Yi 点了立即起草，不再等", i.chatId, messageId);
+	hold?.wake();
+	done?.();
+	return Boolean(hold || done);
 }
 
 /**
@@ -345,26 +436,38 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 	// 发来要预审的 MR：排队、等 Yi、预审之前先回个 Get，对方知道收到了；手动重试不再回。催复审的同样处理
 	const mrMsg = msgs.findLast((m) => MR_RE.test(m.content)) ?? (follow?.ref ? last : undefined);
 	if (mrMsg && !attempt) await ackMr(chat.chat_mode, mrMsg).catch((e) => log("MR 回 Get 失败", e));
-	await locks.run(`draft-${chat.chat_id}`, async () => {
-		const saved = getKv<Pending | null>(pendingKey, null)?.stage;
-		const resuming = Boolean(saved && hasRun(`${requestId}${saved.suffix ?? ""}`));
-		// 重启接回、手动重试不等：前者已经在跑，后者是 Yi 自己点的。等的时候不占并发名额
-		// MR 预审不等 Yi：他回不回都要预审
-		if (!resuming && !attempt && !mrMsg) await waitBeforeDraft(chat, msgs);
-		const self: Drafting = { msgs, mr: Boolean(mrMsg) };
-		drafting.set(chat.chat_id, self);
-		try {
-			await sem.run(() => draftLocked(self));
-			// 分诊成 deep 的私聊：分派记好了，等的时候让出并发名额，到点再进来接着起草（第二次进来沿用这次的分派）
-			if (self.deferUntil) {
-				await waitUntil(chat, msgs, self.deferUntil, "私聊 deep 档");
-				self.deferUntil = undefined;
+	// 群里 @Yi 的（含话题里的）：Yi 要的是马上去查，不等他聊完，也不等批准
+	const direct = routeRules().approval.group && chat.chat_mode !== "p2p" && chat.chat_mode !== "meego";
+	const self: Drafting = { msgs, mr: Boolean(mrMsg) };
+	const pass = (first: boolean) =>
+		locks.run(`draft-${chat.chat_id}`, async () => {
+			const saved = getKv<Pending | null>(pendingKey, null)?.stage;
+			const resuming = Boolean(saved && hasRun(`${requestId}${saved.suffix ?? ""}`));
+			// 重启接回、手动重试不等：前者已经在跑，后者是 Yi 自己点的。等的时候不占并发名额
+			// MR 预审不等 Yi：他回不回都要预审。Yi 已经点了处理的也不等
+			if (first && !resuming && !attempt && !mrMsg && !direct && !isApproved(msgs)) await waitBeforeDraft(chat, msgs);
+			drafting.set(chat.chat_id, self);
+			try {
 				await sem.run(() => draftLocked(self));
+				// 分诊成 deep 的私聊：分派记好了，等的时候让出并发名额，到点再进来接着起草（第二次进来沿用这次的分派）
+				if (self.deferUntil) {
+					await waitUntil(chat, msgs, self.deferUntil, "私聊 deep 档");
+					self.deferUntil = undefined;
+					await sem.run(() => draftLocked(self));
+				}
+			} finally {
+				drafting.delete(chat.chat_id);
 			}
-		} finally {
-			drafting.delete(chat.chat_id);
-		}
-	});
+		});
+	await pass(true);
+	// 这一档要 Yi 批准：等的时候聊天锁也让出来（可能等很久，同一个聊天里别的草稿的改写、后面来的消息不能被它堵住），批准后再进来
+	// 用循环：等待因为「Yi 回了 / 对方接着发了」结束，再进来时那个判断可能翻回去（对方撤回了后面那条、查表情偶发失败），
+	// 这时还没批准就接着等，不能无声结束
+	while (self.needApproval) {
+		self.lapsed = await waitApproval(chat, msgs, self.routed?.[1].tier);
+		self.needApproval = false;
+		await pass(false);
+	}
 
 	/** 拿到聊天锁和并发名额之后的起草 */
 	async function draftLocked(self: Drafting) {
@@ -398,7 +501,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			}
 			return;
 		}
-		const stale = isDismissed(msgs) ? DISMISSED : await staleReason(chat, msgs).then((r) => (mrMsg ? mrStale(r) : r));
+		const stale = isDismissed(msgs) ? DISMISSED : (self.lapsed ?? (await staleReason(chat, msgs).then((r) => (mrMsg ? mrStale(r) : r))));
 		// 已经分派过（私聊 deep 档等到点再来、或重启接回）：按作废收尾那条分派，不另记一条跳过
 		if (stale && open) {
 			yiRepliedMidway(chat, source, label, open.id, stale);
@@ -456,13 +559,17 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				sid = open.session;
 			} else {
 				const fm = follow?.ref ? parseMrRef(follow.ref) : undefined;
-				[name, info] = await route(fm ? { ...source, followMr: { ...fm, rule: `催复审（${follow!.via}）` } } : source);
+				// 等批准之前已经分诊过：沿用，不再调一次模型
+				self.routed ??= await route(fm ? { ...source, followMr: { ...fm, rule: `催复审（${follow!.via}）` } } : source);
+				[name, info] = self.routed;
 				// 催复审但不止一个 MR 可能：不挑，至少按 answer 档起草，提示里让它问 Yi（寒暄档会直接回个表情）
 				if (follow && !follow.ref && info.tier === "ack")
 					info = { ...info, tier: "answer", rule: `${info.rule}（可能在催复审，升到 answer）` };
 				// 寒暄档看不到图：消息带截图时至少按 answer 档，把图交给 agent 看（否则只能回「看不到图」）
 				if (info.tier === "ack" && msgs.some((m) => imageKeys(m.content).length))
 					info = { ...info, tier: "answer", rule: `${info.rule}（带截图，升到 answer）` };
+				// 群里 @Yi 的一般问题也按 deep 档去查
+				if (direct && info.tier === "answer") info = { ...info, tier: "deep", rule: `${info.rule}（群里 @Yi，按 deep 查）` };
 				// 寒暄确认不需要前文，不接续也不挂订阅
 				// 拿不准是哪个 MR 时不接 MR 的会话：接上就等于替 Yi 挑了一个；认定了的只接这个 MR 的会话
 				const otherMr = follow && (!follow.ref || (sub?.info?.mrIid && `gitlab:${sub.info.mrProject}!${sub.info.mrIid}` !== follow.ref));
@@ -477,6 +584,12 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			const agent = withTier(agents[name] ?? {}, info.tier);
 			// 接续到 MR 会话的后续消息也是 mr 档，同样不因 Yi 回复中止
 			if (info.tier === "mr") self.mr = true;
+			// 不在自动处理名单里的档位：先不分派（看板上还是「排队中」的一行），等 Yi 点了处理再来。
+			// 11-04 ~ 11-19 的 379 份草稿只发出 24 份、226 份因为 Yi 自己回了作废：默认只自动做 MR 预审和要查证据的
+			if (!open && !attempt && !isApproved(msgs) && needsApproval(info.tier, Boolean(mrMsg || follow || direct))) {
+				self.needApproval = true;
+				return;
+			}
 			const { rule: _rule, ...routeExtra } = info;
 			routeId =
 				open?.id ??
@@ -489,7 +602,15 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				});
 			// deep 档贵，Yi 多半在几分钟里自己回了：私聊先等到消息来了 deep 秒（重启接回、手动重试、第二次进来不等）
 			const deepWait = routeRules().yiActive.deep;
-			if (!open && !attempt && chat.chat_mode === "p2p" && info.tier === "deep" && deepWait > 0 && sinceLast(msgs, deepWait) > now() + 1) {
+			if (
+				!open &&
+				!attempt &&
+				!isApproved(msgs) &&
+				chat.chat_mode === "p2p" &&
+				info.tier === "deep" &&
+				deepWait > 0 &&
+				sinceLast(msgs, deepWait) > now() + 1
+			) {
 				self.deferUntil = sinceLast(msgs, deepWait);
 				return;
 			}

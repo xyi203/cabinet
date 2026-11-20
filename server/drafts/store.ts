@@ -52,8 +52,29 @@ export interface Inflight {
 	since: number;
 	/** Yi 正在这个聊天里聊，等到这个时间再起草（见 make.ts waitBeforeDraft）；看板上可以点「立即起草」跳过 */
 	waitUntil?: number;
+	/** 分诊出的档位要 Yi 批准才处理（值是档位）：看板上点「处理」才起草（见 make.ts waitApproval） */
+	approval?: string;
 }
 export const inflight = new Map<string, Inflight>();
+
+/**
+ * 启动时：上次进程退出时停在「正在发送 / 正在改写」的草稿没有人会再推进（改写、复审不记 pending:*），
+ * 之后发送、改写、完成都会被拒。复位成等 Yi 处理：
+ * 改写中的回到改写前那一版；发送中的不知道发没发出去，回到待发送——真发出去了的话轮询会看到 Yi 的那条消息，按「已亲自回复」作废
+ */
+export function recoverDrafts(): number {
+	const stuck = db()
+		.select({ id: schema.drafts.id, status: schema.drafts.status, draft: schema.drafts.draft })
+		.from(schema.drafts)
+		.where(inArray(schema.drafts.status, ["sending", "revising"]))
+		.all();
+	for (const d of stuck) {
+		const back = d.draft.startsWith(NO_REPLY_MARK) ? "noreply" : "pending";
+		db().update(schema.drafts).set({ status: back }).where(eq(schema.drafts.id, d.id)).run();
+		log(`草稿停在「${d.status}」，复位成 ${back}`, d.id);
+	}
+	return stuck.length;
+}
 
 export function getDraft(id: string): Draft | undefined {
 	return db().select().from(schema.drafts).where(eq(schema.drafts.id, id)).get();

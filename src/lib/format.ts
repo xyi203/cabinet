@@ -165,10 +165,10 @@ export const titleOf = (t: { title: string }) =>
 		.trim() || "（没有文字内容）";
 export const waitingOn = (t: { status: string }) => t.status === "in_review" || t.status === "blocked";
 /** 这件事的状态标签：等 Yi 的按 need，其余按生命周期 */
-export function pillOf(t: { status: string; need: string | null; hold?: number; result?: string }): [string, string] {
+export function pillOf(t: { status: string; need: string | null; hold?: number; approval?: string; result?: string }): [string, string] {
 	if (waitingOn(t) && t.need) return NEED[t.need] ?? ["待处理", "p-zhu"];
 	if (t.status === "in_progress") return ["进行中", "p-run"];
-	if (t.status === "todo") return t.hold ? ["等你聊完", "p-hold"] : ["排队中", "p-q"];
+	if (t.status === "todo") return t.approval ? ["等你批准", "p-hold"] : t.hold ? ["等你聊完", "p-hold"] : ["排队中", "p-q"];
 	if (t.status === "cancelled") return [t.result ?? "已取消", "p-off"];
 	return ["已完成", "p-done"];
 }

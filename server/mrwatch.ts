@@ -2,25 +2,36 @@
 // 有就复审一轮（drafts/actions.ts reReview）：同一个会话审增量、维护旧线程，出新一版评论等 Yi 过目。
 // GitLab 没有接 webhook（docs/router-worker.md P5），先轮询；MR 合并或关闭就不再盯。
 import { MR_WATCH_INTERVAL, MR_WATCH_SETTLE } from "./config.ts";
+import { getKv } from "./db/index.ts";
 import { reReview } from "./drafts/actions.ts";
-import { glabApi, INLINE_MARK, listWatches, type MrWatch, saveWatch, unwatch } from "./drafts/mr.ts";
+import { glabApi, INLINE_MARK, listWatches, type MrWatch, saveWatch, unwatch, watchKey } from "./drafts/mr.ts";
 import { syncCard } from "./drafts/store.ts";
 import { log, now } from "./util.ts";
 
 let timer: NodeJS.Timeout | undefined;
 let me: number | undefined;
 
+let stopped = false;
+
 export function startMrWatch() {
 	if (MR_WATCH_INTERVAL <= 0) return;
-	const tick = () => void checkAll().catch((e) => log("盯 MR 出错", e));
-	timer = setInterval(tick, MR_WATCH_INTERVAL * 1000);
-	timer.unref();
-	tick();
+	// 跑完一轮再排下一轮：GitLab 慢的时候两轮不会叠着跑、对同一个 MR 触发两次复审
+	const tick = async () => {
+		await checkAll().catch((e) => log("盯 MR 出错", e));
+		if (stopped) return;
+		timer = setTimeout(() => void tick(), MR_WATCH_INTERVAL * 1000);
+		timer.unref();
+	};
+	void tick();
 }
 
 export function stopMrWatch() {
-	if (timer) clearInterval(timer);
+	stopped = true;
+	if (timer) clearTimeout(timer);
 }
+
+/** 复审开跑后这么久（秒）还标着「在复审」：多半是进程中途退出了，恢复盯。比 agent 任务的最长运行时间宽 */
+const REVIEWING_GRACE = 2 * 3600;
 
 async function checkAll() {
 	for (const w of listWatches()) await checkOne(w).catch((e) => log("检查 MR 失败", w.url, e));
@@ -42,19 +53,30 @@ export async function checkOne(w: MrWatch, at = now()): Promise<string | undefin
 		unwatch(w);
 		return;
 	}
+	// 这个 MR 的复审还在跑：不重复触发
+	if (w.reviewing && at - w.reviewing < REVIEWING_GRACE) return;
 	me ??= JSON.parse(await glabApi("GET", "user"))?.id;
 	const discussions: Array<{ id: string; notes: Note[] }> = JSON.parse(await glabApi("GET", `${base}/discussions?per_page=100`));
 	const reason = decide(w, mr?.diff_refs?.head_sha, discussions, me, at);
 	if (!reason) return;
-	// 先停止盯，免得复审还没跑完下一轮又触发；评论再发出去时会重新开始盯
-	unwatch(w);
+	// 复审期间不再触发，但盯梢先留着、只标上「在复审」：以前是先删掉、失败了再加回来，复审跑到一半进程退出这个 MR 就再也不盯了。
+	// 跑完才删（评论再发出去时会按新的一版重新开始盯）
+	const key = watchKey(w.project, w.iid);
+	saveWatch({ ...(getKv<MrWatch | null>(key, null) ?? w), reviewing: at });
 	log("MR 复审", w.url, reason);
-	void reReview(w.draftId, reason).catch((e) => {
-		log("复审失败", w.url, e);
-		// 没跑成：恢复盯，下一轮再试；卡片上写原因
-		saveWatch({ ...w, pendingHead: undefined, pendingSince: undefined });
-		syncCard(w.draftId, `自动复审没有成功：${String((e as Error).message).slice(0, 200)}`);
-	});
+	void reReview(w.draftId, reason).then(
+		() => {
+			// 期间评论发出去、重新开始盯了的（没有这个标记）不动
+			if (getKv<MrWatch | null>(key, null)?.reviewing === at) unwatch(w);
+		},
+		(e) => {
+			log("复审失败", w.url, e);
+			// 没跑成：恢复盯，下一轮再试；卡片上写原因。期间评论发出去、重新开始盯了的不覆盖
+			if (getKv<MrWatch | null>(key, null)?.reviewing === at)
+				saveWatch({ ...w, pendingHead: undefined, pendingSince: undefined, reviewing: undefined });
+			syncCard(w.draftId, `自动复审没有成功：${String((e as Error).message).slice(0, 200)}`);
+		},
+	);
 	return reason;
 }
 

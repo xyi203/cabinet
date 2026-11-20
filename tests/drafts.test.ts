@@ -73,3 +73,49 @@ test("看板操作草稿的路由也认安静草稿的 id（quiet_ 开头）", a
 	assert.ok(DRAFT_DISPATCH_RE.test("/api/drafts/quiet_om_abc_x/dispatch"));
 	assert.equal(DRAFT_ACTION_RE.exec("/api/drafts/../etc/send"), null);
 });
+
+test("启动时把停在发送中 / 改写中的草稿复位：建议不回复的回到 noreply，其余回到待发送", async () => {
+	const { recoverDrafts } = await import("../server/drafts/store.ts");
+	const rows = [
+		{ id: "om_r1", status: "sending", draft: "好的" },
+		{ id: "om_r2", status: "revising", draft: "好的" },
+		{ id: "om_r3", status: "revising", draft: "【无需回复】对方只是知会" },
+		{ id: "om_r4", status: "sent", draft: "好的" },
+	];
+	for (const r of rows)
+		db()
+			.insert(schema.drafts)
+			.values({ ...base, ...r })
+			.run();
+	assert.equal(recoverDrafts(), 3);
+	assert.deepEqual(
+		rows.map((r) => getDraft(r.id)!.status),
+		["pending", "pending", "noreply", "sent"],
+	);
+	assert.equal(recoverDrafts(), 0);
+});
+
+test("哪些档位要等 Yi 批准：默认只有 deep 和 MR 直接处理", async () => {
+	const { needsApproval } = await import("../server/drafts/make.ts");
+	const { RULE_DEFAULTS } = await import("../server/rules.ts");
+	assert.deepEqual(RULE_DEFAULTS.approval.auto, ["deep"]);
+	const auto = RULE_DEFAULTS.approval.auto;
+	assert.equal(needsApproval("deep", false, auto), false);
+	assert.equal(needsApproval("ack", false, auto), true);
+	assert.equal(needsApproval("answer", false, auto), true);
+	// 没有档位的按默认档（answer）算
+	assert.equal(needsApproval(undefined, false, auto), true);
+	// MR 预审、催复审总是直接处理
+	assert.equal(needsApproval("mr", false, auto), false);
+	assert.equal(needsApproval("answer", true, auto), false);
+	assert.equal(needsApproval("ack", false, ["*"]), false);
+	assert.equal(needsApproval("deep", false, []), true);
+});
+
+test("轮询连续失败时间隔翻倍，最多 60 秒", async () => {
+	const { backoff } = await import("../server/poller.ts");
+	assert.deepEqual(
+		[0, 1, 2, 3, 4, 10].map((n) => backoff(n, 5)),
+		[5, 10, 20, 40, 60, 60],
+	);
+});

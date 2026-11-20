@@ -111,7 +111,15 @@ export async function draftCommand(ev: BotEvent, text: string, tid: string): Pro
 	if (!m) return false;
 	const cmd = CMD_ALIAS[m[1]] ?? m[1];
 	const opinion = (m[2] ?? "").trim();
-	// 「建议不回复」的草稿没有可发内容，不引用时「发」不该落到它头上
+	// 「发」是以 Yi 的身份对外发出，必须引用那张草稿卡片：不引用时不猜是哪条。
+	// 以前会落到最近 30 分钟最新的一条上，「发送 失败的订单有哪些」这种提问就把一张没看过的草稿发给了别人
+	const parent = ev.parentId ?? ev.rootId;
+	if (cmd === "发" && !(parent && getDraft(parent))) {
+		// 后面还带着话的是在提问，交给问答
+		if (opinion) return false;
+		await reply(ev, "要发哪一条？引用那张草稿卡片回「发送」，或者直接点卡片上的按钮。");
+		return true;
+	}
 	const d = pickDraft(ev.parentId ?? ev.rootId, cmd === "发" ? ["pending"] : LIVE);
 	if (!d) {
 		if (["改", "表情", "表情包"].includes(cmd)) return false;

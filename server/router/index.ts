@@ -6,7 +6,7 @@
 import { addAlert, batching, isAlert } from "../alerts.ts";
 import { ALERT_ENABLED, OWNER_OPEN_ID } from "../config.ts";
 import { asksYi } from "../drafts/context.ts";
-import { abortIfYiReplied, makeDraft } from "../drafts/make.ts";
+import { abortIfYiReplied, makeDraft, nudgeApproval } from "../drafts/make.ts";
 import { expireDrafts } from "../drafts/replied.ts";
 import { type ChatRef, inflight } from "../drafts/store.ts";
 import { isHandled, markHandled } from "../handled.ts";
@@ -65,6 +65,8 @@ export function routeChat(chat: ChatRef, msgs: Message[]) {
 		}
 	}
 	markHandled(skip);
+	// 这个聊天里有了新消息：在等 Yi 批准的那几条马上看一眼还要不要等（他自己回了、对方又接着发了）
+	if (fresh.length || skip.length) nudgeApproval(chat.chat_id);
 	routeDraft(chat, fresh);
 }
 

@@ -65,9 +65,20 @@ export interface RouterConfig {
 	agent?: string;
 }
 
-/** 每次都重新读，改 agents.json 不用重启 */
+let lastGood: Record<string, any> | undefined;
+
+/** 每次都重新读，改 agents.json 不用重启。手改出语法错时沿用上一次读成功的；启动时就是坏的才报错 */
 export function loadAgents(): { agents: Record<string, AgentConfig>; router: RouterConfig } {
-	const raw = existsSync(PATHS.agents) ? JSON.parse(readFileSync(PATHS.agents, "utf8")) : {};
+	let raw: Record<string, any> = {};
+	if (existsSync(PATHS.agents)) {
+		try {
+			raw = lastGood = JSON.parse(readFileSync(PATHS.agents, "utf8"));
+		} catch (e) {
+			if (!lastGood) throw new Error(`config/agents.json 不是合法的 JSON：${(e as Error).message}`, { cause: e });
+			log("agents.json 解析失败，沿用上一次的配置", (e as Error).message);
+			raw = lastGood;
+		}
+	}
 	const router = raw._router ?? {};
 	const agents = Object.fromEntries(Object.entries(raw).filter(([k]) => !k.startsWith("_"))) as Record<string, AgentConfig>;
 	return { agents, router };

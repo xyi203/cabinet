@@ -289,8 +289,14 @@ export function actionsOf(t: TaskView | undefined, c: Ctx): Actions {
 	if (t.status === "todo")
 		return {
 			options: [
-				...(t.id.startsWith("q:") && t.hold
-					? [{ key: "now", label: "不等了，现在起草", run: () => post("/api/poll", { id: t.id.slice(2) }).then(() => "开始起草") }]
+				...(t.id.startsWith("q:") && (t.hold || t.approval)
+					? [
+							{
+								key: "now",
+								label: t.approval ? "让助手处理" : "不等了，现在起草",
+								run: () => post("/api/poll", { id: t.id.slice(2) }).then(() => "开始起草"),
+							},
+						]
 					: []),
 				{ ...done, label: "不用做了" },
 			],

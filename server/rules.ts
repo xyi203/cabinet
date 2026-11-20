@@ -37,6 +37,12 @@ export interface RouteRules {
 	alert: { quiet: number; maxWait: number; follow: number; senders: string[]; chats: string[] };
 	/** 定时：巡检时 Claude 5 小时额度用到这个比例就跳过（手动运行不拦） */
 	cron: { patrolPauseAt: number };
+	/**
+	 * 起草前要不要 Yi 批准：auto 里的档位（ack / answer / deep，"*" = 全部）分诊完直接处理，其余的在看板上等 Yi 点了才起草；
+	 * MR 预审总是直接处理。等了 ttl 秒没批准就按跳过收尾。
+	 * group：群里 @Yi 的不等批准、也不等「你在聊」，马上去查（一般问题按 deep 档查）
+	 */
+	approval: { auto: string[]; ttl: number; group: boolean };
 }
 
 export const RULE_DEFAULTS: RouteRules = {
@@ -45,6 +51,7 @@ export const RULE_DEFAULTS: RouteRules = {
 	yiActive: { window: YI_ACTIVE_WINDOW, delay: YI_ACTIVE_DELAY, check: YI_ACTIVE_CHECK, p2p: P2P_WAIT, deep: DEEP_WAIT },
 	alert: { quiet: ALERT_QUIET, maxWait: ALERT_MAX_WAIT, follow: ALERT_FOLLOW, senders: [...ALERT_SENDERS], chats: [...ALERT_CHATS] },
 	cron: { patrolPauseAt: PATROL_PAUSE_AT },
+	approval: { auto: ["deep"], ttl: 86400, group: true },
 };
 
 let cache: { mtime: number; rules: RouteRules } | undefined;
@@ -73,6 +80,7 @@ function merge(raw: Partial<RouteRules>): RouteRules {
 		yiActive: { ...d.yiActive, ...raw.yiActive },
 		alert: { ...d.alert, ...raw.alert },
 		cron: { ...d.cron, ...raw.cron },
+		approval: { ...d.approval, ...raw.approval },
 	};
 }
 
@@ -91,12 +99,15 @@ export function saveRouteRules(input: unknown): RouteRules {
 		["告警最长攒批", r.alert.maxWait, 10, 7200],
 		["告警续批窗口", r.alert.follow, 0, 86400],
 		["巡检额度上限", r.cron.patrolPauseAt, 0, 1],
+		["等批准的最长时间", r.approval.ttl, 60, 7 * 86400],
 	];
 	for (const [name, v, lo, hi] of nums)
 		if (typeof v !== "number" || !Number.isFinite(v) || v < lo || v > hi) throw new RuleError(`${name}要在 ${lo} 到 ${hi} 之间`);
 	if (r.alert.maxWait < r.alert.quiet) throw new RuleError("告警最长攒批不能比静默收口短");
 	for (const k of ["senders", "chats"] as const)
 		if (!Array.isArray(r.alert[k]) || r.alert[k].some((x) => typeof x !== "string")) throw new RuleError(`告警的 ${k} 要是字符串列表`);
+	if (!Array.isArray(r.approval.auto) || r.approval.auto.some((x) => typeof x !== "string"))
+		throw new RuleError("自动处理的档位要是字符串列表");
 	writeFileSync(PATHS.routes, `${JSON.stringify(r, null, "\t")}\n`);
 	return r;
 }

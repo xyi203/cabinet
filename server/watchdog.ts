@@ -5,7 +5,7 @@ import { routeRules } from "./rules.ts";
 import { deleteKv, getKv, listKv, setKv } from "./db/index.ts";
 import { running } from "./agent/driver.ts";
 import { batchesSnapshot } from "./alerts.ts";
-import { devTasksList } from "./dev.ts";
+import { devActive, devTasksList } from "./dev.ts";
 import { inflight } from "./drafts/store.ts";
 import { sendCardToUserAsBot, userAuthStatus } from "./lark/bot.ts";
 import { memoryDown } from "./memory/health.ts";
@@ -113,8 +113,10 @@ function snapshot(): Snapshot {
 		pollSince: lastPoll(),
 		auth: userAuthStatus(),
 		devTasks: devTasksList(),
-		runningKeys: new Set(running.keys()),
-		inflight: [...inflight].map(([id, d]) => ({ id, since: d.since, label: d.label })),
+		// 在排队（等会话锁、等并发名额）的 agent 任务也算在跑，不报「中断了」
+		runningKeys: new Set([...running.keys(), ...[...devActive.keys()].map((id) => `dev-${id}`)]),
+		// 等 Yi 批准的不算卡住
+		inflight: [...inflight].filter(([, d]) => !d.approval).map(([id, d]) => ({ id, since: d.since, label: d.label })),
 		failures: recentRecords(200).filter((r) => r.status === "failed"),
 		alertBatches: batchesSnapshot(),
 		memoryDown: memoryDown(),
@@ -145,8 +147,11 @@ function card(issues: Issue[]) {
 	};
 }
 
-/** 查一遍：新出现的问题私聊一次，恢复了的清掉 */
-export async function tick(s = snapshot()) {
+/** 查一遍：新出现的问题私聊一次，恢复了的清掉。notify 可替换，测试用 */
+export async function tick(
+	s = snapshot(),
+	notify: (fresh: Issue[]) => Promise<unknown> = (fresh) => sendCardToUserAsBot(OWNER_OPEN_ID, card(fresh)),
+) {
 	const issues = checkHealth(s);
 	const keys = new Set(issues.map((i) => i.key));
 	for (const { key } of listKv<number>("watchdog:")) {
@@ -159,12 +164,13 @@ export async function tick(s = snapshot()) {
 	const fresh = issues.filter((i) => getKv(seenKey(i.key), null) === null);
 	current = issues;
 	if (!fresh.length) return;
-	for (const i of fresh) setKv(seenKey(i.key), s.now);
 	log("Watchdog：发现问题", fresh.map((i) => i.key).join(", "));
 	try {
-		await sendCardToUserAsBot(OWNER_OPEN_ID, card(fresh));
+		await notify(fresh);
+		// 发出去了才算提醒过：最需要提醒的时候（网络、飞书出问题）恰恰最容易发不出去，下一轮要再试
+		for (const i of fresh) setKv(seenKey(i.key), s.now);
 	} catch (e) {
-		log("Watchdog 提醒发送失败", e);
+		log("Watchdog 提醒发送失败，下一轮再试", e);
 	}
 }
 

@@ -37,7 +37,8 @@ export function suspects(t = now()): Suspect[] {
 	}
 	const busyChats = new Set([...running.values()].map((r) => r.chatId).filter(Boolean));
 	for (const [mid, i] of inflight) {
-		if (busyChats.has(i.chatId) || t - i.since < SUSPECT_QUEUE) continue;
+		// 等 Yi 批准的本来就不会自己开始
+		if (busyChats.has(i.chatId) || i.approval || t - i.since < SUSPECT_QUEUE) continue;
 		out.push({
 			key: `queue:${mid}`,
 			title: `排队 ${Math.round((t - i.since) / 60)} 分钟还没开始起草`,
@@ -135,6 +136,7 @@ export function dispatchState(t = now()) {
 			text: i.text.slice(0, 200),
 			since: i.since,
 			waitUntil: i.waitUntil ?? null,
+			approval: i.approval ?? null,
 		})),
 		suspects: suspects(t),
 		routes: recentRoutes(),

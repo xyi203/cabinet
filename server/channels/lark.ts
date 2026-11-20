@@ -17,6 +17,8 @@ import type { Channel } from "./index.ts";
 /** 每个会话上一次成功拉消息开始的时间：后排的会话隔 POLL_INTERVAL 才拉，从这里接着拉 */
 const fetchedAt = new Map<string, number>();
 let reactionsCheckedAt = 0;
+/** 一个会话一轮最多翻几页（每页 50 条） */
+const PAGES = 10;
 
 /**
  * 分层：会话列表按最近活跃排序，每轮都拉；前 POLL_HOT_N 个会话每轮拉消息（正在聊的一般都在这里），
@@ -29,11 +31,13 @@ async function poll(since: number, full: boolean) {
 		const last = fetchedAt.get(chat.chat_id);
 		if (!full && rank >= POLL_HOT_N && last && started - last < POLL_INTERVAL) continue;
 		// 时间只按秒过滤，往前多取 2 分钟，靠 message_id 去重；后排会话从它上次拉到的地方接着拉
-		const start = Math.min(since, last ?? since) - 120;
+		// 后排会话、睡眠唤醒后 last 可能很旧：和 since 一样最多回看 30 分钟
+		const start = Math.max(Math.min(since, last ?? since), started - 1800) - 120;
 		let msgs: Message[];
 		try {
-			msgs = await listMessages({ chatId: chat.chat_id }, { start, order: "asc" });
-			fetchedAt.set(chat.chat_id, started);
+			msgs = await listMessages({ chatId: chat.chat_id }, { start, order: "asc", pages: PAGES });
+			// 翻到上限还没拉完：下一轮从拉到的最后一条接着拉，不能跳到现在
+			fetchedAt.set(chat.chat_id, msgs.length >= PAGES * 50 ? Math.floor(msgs.at(-1)!.create_time / 1000) : started);
 		} catch (e) {
 			log("轮询会话失败", chat.chat_id, e);
 			continue;

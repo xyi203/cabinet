@@ -31,7 +31,7 @@ export const PI_FALLBACK_MODEL = env("PI_FALLBACK_MODEL", "codex/gpt-6.1-sol");
 export const PI_TIMEOUT = Number(env("PI_TIMEOUT", "600"));
 // agent 任务（首次发布观察、排查、开发）要跑多个 skill、查多处数据，10 分钟常常不够；起草、问答仍按 PI_TIMEOUT
 export const TASK_TIMEOUT = Number(env("TASK_TIMEOUT", "1800"));
-export const MAX_CONCURRENCY = Number(env("MAX_CONCURRENCY", "3"));
+export const MAX_CONCURRENCY = Number(env("MAX_CONCURRENCY", "10"));
 export const THREAD_CONTEXT_N = Number(env("THREAD_CONTEXT_N", "15"));
 export const DEFAULT_CWD = expand(env("DEFAULT_CWD", "~"));
 

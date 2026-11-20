@@ -26,7 +26,7 @@ async function meegoChat(): Promise<string> {
 async function pollMeego(since: number) {
 	const chatId = await meegoChat();
 	if (!chatId) return;
-	const msgs = await listMessages({ chatId }, { start: since - 120, order: "asc" });
+	const msgs = await listMessages({ chatId }, { start: since - 120, order: "asc", pages: 10 });
 	const done = isHandled(msgs.map((m) => m.message_id));
 	const byItem = new Map<string, Message[]>();
 	const skip: string[] = [];

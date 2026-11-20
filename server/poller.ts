@@ -21,15 +21,20 @@ export async function pollForever() {
 	let since = Math.max(getKv("poll_since", now()), now() - 1800);
 	log(`草稿轮询启动，回看到 ${new Date(since * 1000).toLocaleString("sv-SE")}`);
 	let authWarned = false;
+	// 连续失败的次数：飞书报错、限流、断网时拉长间隔，不照样每 POLL_FAST 秒打一次
+	let failures = 0;
 	// oxlint-disable-next-line no-unmodified-loop-condition -- stopped 由 stopPolling 在别处修改
 	while (!stopped) {
 		const force = full;
 		full = false;
 		try {
-			since = await pollChannels(since, force);
+			// 睡眠唤醒后 since 还是睡前的：和启动时一样最多回看 30 分钟
+			since = await pollChannels(Math.max(since, now() - 1800), force);
 			setKv("poll_since", since);
 			authWarned = false;
+			failures = 0;
 		} catch (e) {
+			failures++;
 			// 没授权时不推进 since，授权后从停下的地方继续
 			if (e instanceof UserAuthError) {
 				if (!authWarned) log("轮询暂停：", e.message);
@@ -44,12 +49,16 @@ export async function pollForever() {
 					wake = undefined;
 					r();
 				};
-				const timer = setTimeout(done, POLL_FAST * 1000);
+				const timer = setTimeout(done, backoff(failures) * 1000);
 				wake = done;
 			});
 		again = false;
 	}
 }
+
+/** 下一轮隔多久：正常 POLL_FAST 秒；连续失败每次翻倍，最多 60 秒 */
+export const backoff = (failures: number, base = POLL_FAST) =>
+	failures ? Math.min(60, Math.max(base, 1) * 2 ** Math.min(failures, 6)) : base;
 
 /** 看板上点「立即拉取 / 立即起草」：不等这一轮的间隔，马上拉一次新消息 */
 export function pollNow() {

@@ -107,7 +107,11 @@ export function DispatchPage({ onOpenDev }: { onOpenDev: (id: string) => void })
 									<span className="ml-2 text-muted">{i.text}</span>
 								</span>
 								<span className="shrink-0 text-[12px] text-muted tabular-nums">
-									{i.waitUntil && i.waitUntil > d.now ? `你还在聊，${dur(i.waitUntil - d.now)}后起草` : `已等 ${span(d.now - i.since)}`}
+									{i.approval
+										? "等你批准"
+										: i.waitUntil && i.waitUntil > d.now
+											? `你还在聊，${dur(i.waitUntil - d.now)}后起草`
+											: `已等 ${span(d.now - i.since)}`}
 								</span>
 								<span className="flex shrink-0 gap-2">
 									<button className="btn sm" onClick={() => act("/api/poll", { id: i.id }, "开始起草")}>

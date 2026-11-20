@@ -15,7 +15,7 @@ import { settle } from "./pipeline.ts";
 import { routeBoard } from "./router/board.ts";
 import type { DevTask } from "./db/schema.ts";
 import { DraftError, getDraft } from "./drafts/store.ts";
-import { sem } from "./agent/slots.ts";
+import { locks, sem } from "./agent/slots.ts";
 import { ASSISTANT, LEGACY_TIER, TASK_TIER, completeAny, loadAgents, routerModels, withTier } from "./agent/router.ts";
 import { exec, isStopping, log, now } from "./util.ts";
 import { cancelFollowups, saveFollowups, takeFollowups } from "./followups.ts";
@@ -307,8 +307,27 @@ async function taskImages(task: DevTask): Promise<string> {
 	return imagesNote(saved);
 }
 
-/** 跑一轮 dev agent：首轮按需求实现，之后是 Yi 发来的消息（要求、问题、纠偏） */
-async function runDev(id: string, opinion?: string, from = "Yi") {
+/** 进了 runDev 还没跑完的任务（含排队等会话锁、等并发名额的）：Watchdog 靠它区分「在排队」和「中断了」 */
+export const devActive = new Map<string, number>();
+
+/**
+ * 跑一轮 dev agent：首轮按需求实现，之后是 Yi 发来的消息（要求、问题、纠偏）。
+ * 同一个任务的各轮按会话排队：上一轮在等名额或刚开始、还插不进话时又来一句（告警续批、到期复查、Yi 补一句），
+ * 不排队的话两轮会并发写同一个 durable 会话，pending:dev 互相覆盖，后一轮超时还会中止前一轮
+ */
+function runDev(id: string, opinion?: string, from = "Yi") {
+	// 计数：同一个任务可能排着好几轮，一轮结束不代表没有在排的了
+	devActive.set(id, (devActive.get(id) ?? 0) + 1);
+	return locks
+		.run(sessionOf(id), () => runDevLocked(id, opinion, from))
+		.finally(() => {
+			const n = (devActive.get(id) ?? 1) - 1;
+			if (n > 0) devActive.set(id, n);
+			else devActive.delete(id);
+		});
+}
+
+async function runDevLocked(id: string, opinion?: string, from = "Yi") {
 	const task = getDevTask(id)!;
 	const run = task.runs + 1;
 	const pendingKey = `pending:dev:${id}`;
@@ -484,6 +503,16 @@ export async function stopDev(id: string) {
 	if (t.status !== "running") throw new DraftError("任务已经停下了");
 	stoppedByYi.add(id);
 	await abortRun(sessionOf(id));
+}
+
+/** 启动时：停在「正在推送」的任务没有人会再推进，之后发消息、放弃、完成都被拒。退回待审，推没推成 Yi 再点一次推送就知道（推送幂等） */
+export function recoverDev(): number {
+	const stuck = db().select({ id: schema.devTasks.id }).from(schema.devTasks).where(eq(schema.devTasks.status, "pushing")).all();
+	for (const { id } of stuck) {
+		update(id, { status: "review" });
+		log("开发任务停在「正在推送」，复位成待审", id);
+	}
+	return stuck.length;
 }
 
 export function resumePendingDev() {

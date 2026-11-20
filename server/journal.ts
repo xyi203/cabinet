@@ -132,7 +132,7 @@ const SYSTEM = [
 /** 让模型据当天汇总写一段文字总结，存下来（再生成会覆盖） */
 export async function generateJournal(date: string): Promise<JournalSummary> {
 	const md = dayMarkdown(dayData(date));
-	const text = (await complete(JOURNAL_MODEL, SYSTEM, md)).trim();
+	const text = (await complete(JOURNAL_MODEL, SYSTEM, md, 300)).trim();
 	if (!text) throw new Error("模型没有输出");
 	const s = { text, at: now(), model: JOURNAL_MODEL };
 	setKv(KEY(date), s);

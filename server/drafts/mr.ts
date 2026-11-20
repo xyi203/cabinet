@@ -362,6 +362,8 @@ export interface MrWatch {
 	/** 新 head 先等它稳定一会儿再复审（对方常连推几次） */
 	pendingHead?: string;
 	pendingSince?: number;
+	/** 复审开跑的时间：跑完删掉这条盯梢；还标着说明在跑（或者跑到一半进程退出了，见 mrwatch.ts REVIEWING_GRACE） */
+	reviewing?: number;
 	since: number;
 }
 

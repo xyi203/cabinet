@@ -44,6 +44,8 @@ export interface TaskView {
 	scheduleId?: string | null;
 	/** 排队里：Yi 正在这个聊天里聊，等到这个时间再起草 */
 	hold?: number;
+	/** 还没起草、在等 Yi 批准的消息：分诊出的档位 */
+	approval?: string;
 	/** 正在跑的运行（停止、看步骤用） */
 	runId?: string;
 	live?: string;
@@ -256,11 +258,13 @@ function queued(t: number): TaskView[] {
 			title: i.text,
 			source: i.chatMode === "meego" ? "meego" : "lark",
 			label: i.label,
-			status: busy.has(i.chatId) ? "in_progress" : "todo",
+			// 等批准的固定是待办：同一个聊天里有别的运行在跑也不算它在进行
+			status: busy.has(i.chatId) && !i.approval ? "in_progress" : "todo",
 			need: null,
 			created: i.since,
 			updated: i.since,
 			hold: i.waitUntil && i.waitUntil > t ? i.waitUntil : undefined,
+			approval: i.approval,
 			drafts: [],
 			devTasks: [],
 			approvals: [],

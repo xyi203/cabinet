@@ -47,16 +47,23 @@ test("按规则发现问题", () => {
 	assert.deepEqual(keys({ pollEnabled: false, auth: { authorized: false } }), []);
 });
 
-test("同一个问题只记一次，恢复后清掉", async () => {
-	// 发卡片会失败（测试里没有飞书），只记日志；去重和恢复照常
-	await tick({ ...healthy, pollSince: T - 3600 });
-	assert.equal(getKv("watchdog:poll", null), T);
+test("同一个问题只提醒一次，恢复后清掉；提醒没发出去的下一轮再发", async () => {
+	const sent: string[][] = [];
+	const ok = async (fresh: Array<{ key: string }>) => void sent.push(fresh.map((i) => i.key));
+	// 发不出去（网络、飞书出问题）：不记成提醒过，看板上照样列着
+	await tick({ ...healthy, pollSince: T - 3600 }, async () => {
+		throw new Error("发不出去");
+	});
+	assert.equal(getKv("watchdog:poll", null), null);
 	assert.deepEqual(
 		watchdogIssues().map((i) => i.key),
 		["poll"],
 	);
-	await tick({ ...healthy, now: T + 300, pollSince: T - 3600 });
+	await tick({ ...healthy, pollSince: T - 3600 }, ok);
 	assert.equal(getKv("watchdog:poll", null), T);
+	await tick({ ...healthy, now: T + 300, pollSince: T - 3600 }, ok);
+	assert.equal(getKv("watchdog:poll", null), T);
+	assert.deepEqual(sent, [["poll"]]);
 	await tick(healthy);
 	assert.equal(getKv("watchdog:poll", null), null);
 	assert.deepEqual(watchdogIssues(), []);

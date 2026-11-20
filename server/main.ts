@@ -6,8 +6,9 @@ import { DRAFT_ENABLED, MEMORY, PATHS, PI_MODEL, missingConfig } from "./config.
 import { closeHarness, harness, pruneRuns } from "./agent/driver.ts";
 import { scheduleCleanup } from "./cleanup.ts";
 import { db } from "./db/index.ts";
-import { resumePendingDev } from "./dev.ts";
+import { recoverDev, resumePendingDev } from "./dev.ts";
 import { resumePendingDrafts } from "./drafts/make.ts";
+import { recoverDrafts } from "./drafts/store.ts";
 import { startListeners } from "./channels/index.ts";
 import { markHandled, pollForever, stopPolling } from "./poller.ts";
 import { resumePendingQa } from "./qa.ts";
@@ -23,6 +24,10 @@ import { startMrWatch, stopMrWatch } from "./mrwatch.ts";
 import { backfillTopics } from "./topics.ts";
 import { startFollowups, stopFollowups } from "./followrun.ts";
 
+// Node 默认把没人接的 rejection 当致命错误退出：一次飞书回复失败（void 出去的问答、起草）就会带崩整个进程，
+// launchd 再拉起来，正在改写 / 发送的草稿留在中间态。记日志，不退
+process.on("unhandledRejection", (e) => log("未处理的 rejection", e));
+
 const missing = missingConfig();
 if (missing.length) {
 	console.error(`.env 缺少 ${missing.join(", ")}，参考 .env.example`);
@@ -30,6 +35,9 @@ if (missing.length) {
 }
 for (const d of [PATHS.sessions, PATHS.stickers, PATHS.images]) mkdirSync(d, { recursive: true });
 db();
+// 上次进程退出时停在中间态的草稿和任务：没有人会再推进它们，复位成能继续操作的状态
+recoverDrafts();
+recoverDev();
 // 任务表上线前的分派补挂到任务上（只跑一次）
 backfillTasks();
 backfillSkipped();
