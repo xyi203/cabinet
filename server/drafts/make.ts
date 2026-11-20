@@ -52,6 +52,8 @@ import {
 	lastMrDraft,
 	type MrFollow,
 	mrFollowup,
+	type MrPick,
+	mrPicks,
 	parseMrRef,
 	reReviewAsk,
 	unwatch,
@@ -65,26 +67,40 @@ import { type ChatRef, claim, DraftError, getDraft, inflight, LIVE, pushDraft, t
  * attempt 区分手动重试：同一批消息默认用同一个 requestId，进程重启后重新提交会接回原来那次运行；
  * 手动重试要换一个，否则拿回的是上次失败的结果。
  */
-export async function makeDraft(chat: ChatRef, msgs: Message[], onDone?: (ids: string[]) => void, attempt?: string) {
-	// 起草中的任务记到库里：跑得久时轮询进度会越过这条消息，重启后靠它接回
-	const pendingKey = `pending:draft:${msgs.at(-1)!.message_id}`;
-	// 重启接回时保留上次记下的这一步（stage），只更新消息和 attempt
-	const prev = getKv<Pending | null>(pendingKey, null);
-	setKv(pendingKey, { chat, msgs, attempt, stage: prev?.attempt === attempt ? prev?.stage : undefined } satisfies Pending);
+export async function makeDraft(chat: ChatRef, msgs: Message[], onDone?: (ids: string[]) => void, attempt?: string, pick?: MrPick) {
+	// 消息里不止一个 MR：点给 Yi 的每个各起一份（各自的 trigger、分派、会话、草稿卡片），批准、发评论、复审都按单个 MR 走。
+	// 同一个聊天的起草本来就排队，挨个跑；接回、重试带着 pick 进来，只跑那一份
+	const picks: Array<MrPick | undefined> = pick ? [pick] : mrPicksOf(msgs);
+	// 起草中的任务记到库里：跑得久时轮询进度会越过这条消息，重启后靠它接回。几份一起先记上，中断时没轮到的也接得回
+	for (const p of picks) {
+		const key = pendingKeyOf(msgs, p);
+		// 重启接回时保留上次记下的这一步（stage），只更新消息和 attempt
+		const prev = getKv<Pending | null>(key, null);
+		setKv(key, { chat, msgs, attempt, pick: p, stage: prev?.attempt === attempt ? prev?.stage : undefined } satisfies Pending);
+	}
 	let interrupted = false;
+	let error: unknown;
 	try {
-		await _makeDraft(chat, msgs, pendingKey, attempt);
-	} catch (e) {
-		if (!isStopping()) throw e;
-		interrupted = true;
-	} finally {
-		if (!interrupted) {
+		for (const p of picks) {
+			const pendingKey = pendingKeyOf(msgs, p);
+			try {
+				await _makeDraft(chat, msgs, pendingKey, attempt, p);
+			} catch (e) {
+				if (isStopping()) {
+					interrupted = true;
+					break;
+				}
+				// 一份出错不耽误后面几个 MR
+				error ??= e;
+			}
 			const suffix = getKv<Pending | null>(pendingKey, null)?.stage?.suffix;
 			deleteKv(pendingKey);
-			forgetRun(requestIdOf(msgs, attempt));
-			if (suffix) forgetRun(`${requestIdOf(msgs, attempt)}${suffix}`);
-			onDone?.(msgs.map((m) => m.message_id));
+			forgetRun(requestIdOf(msgs, attempt, p));
+			if (suffix) forgetRun(`${requestIdOf(msgs, attempt, p)}${suffix}`);
 		}
+		if (error) throw error;
+	} finally {
+		if (!interrupted) onDone?.(msgs.map((m) => m.message_id));
 		for (const m of msgs) {
 			inflight.delete(m.message_id);
 			dismissed.delete(m.message_id);
@@ -134,7 +150,20 @@ interface Pending {
 	chat: ChatRef;
 	msgs: Message[];
 	attempt?: string;
+	/** 几个 MR 各一份时，这份审哪个 */
+	pick?: MrPick;
 	stage?: Stage;
+}
+
+/** 几个 MR 各一份时第二个起的后缀：pending、requestId、trigger 都带上，第一个和原来一样不带 */
+const pickSuffix = (pick?: MrPick) => (pick?.index ? `#${pick.ref}` : "");
+const pendingKeyOf = (msgs: Message[], pick?: MrPick) => `pending:draft:${msgs.at(-1)!.message_id}${pickSuffix(pick)}`;
+
+/** 消息里提到不止一个 MR 时，点给 Yi 的那几个；只有一个（或一个都不是点给 Yi 的）照原来整批起草一份 */
+function mrPicksOf(msgs: Message[]): Array<MrPick | undefined> {
+	if (new Set(msgs.flatMap((m) => refsOf(m.content))).size < 2) return [undefined];
+	const refs = mrPicks(msgs);
+	return refs.length ? refs.map((ref, index) => ({ ref, index, total: refs.length })) : [undefined];
 }
 
 /**
@@ -377,7 +406,8 @@ export async function replyQueued(messageId: string, text: string) {
 }
 
 /** 同一批消息默认同一个 requestId，进程重启后接回原来那次运行；手动重试带 attempt，换一个 */
-const requestIdOf = (msgs: Message[], attempt?: string) => `draft:${msgs.at(-1)!.message_id}${attempt ? `:${attempt}` : ""}`;
+const requestIdOf = (msgs: Message[], attempt?: string, pick?: MrPick) =>
+	`draft:${msgs.at(-1)!.message_id}${pickSuffix(pick)}${attempt ? `:${attempt}` : ""}`;
 
 const replyRefs = (m: Message) => (m.root_id && m.root_id !== m.message_id ? rootRefs(m.root_id) : []);
 
@@ -385,13 +415,14 @@ const replyRefs = (m: Message) => (m.root_id && m.root_id !== m.message_id ? roo
  * 轮询到的消息（飞书私聊 / @Yi、飞书项目评论 @Yi）就是 trigger：过了轮询里的程序规则才会到这里。
  * follow：没带链接、认定是在催这个 MR 复审的，也记成提到了它，看板上和那次 CR 归到同一件事
  */
-function triggerOf(chat: ChatRef, m: Message, follow?: string): TriggerInput {
+function triggerOf(chat: ChatRef, m: Message, follow?: string, pick?: MrPick): TriggerInput {
 	const meego = m.meego as MeegoCard | undefined;
 	const doc = m.doc as DocRef | undefined;
 	const refs = [...replyRefs(m), ...(follow ? [follow] : [])];
 	return {
 		channel: chat.chat_mode === "meego" || chat.chat_mode === "doc" ? chat.chat_mode : "lark",
-		externalId: m.message_id,
+		// 同一条消息里的第二个 MR 起：单独一条 trigger，分派、重启接回（openRoute）各管各的
+		externalId: `${m.message_id}${pickSuffix(pick)}`,
 		thread: meego
 			? `meego:${meego.workItemId}`
 			: doc
@@ -406,7 +437,7 @@ function triggerOf(chat: ChatRef, m: Message, follow?: string): TriggerInput {
 	};
 }
 
-async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, attempt?: string) {
+async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, attempt?: string, pick?: MrPick) {
 	// 合并转发只有占位：先展开，trigger、分诊和起草看到的都是转发的内容（11-10 有草稿只能回「看不到转发里的内容」）
 	for (const m of msgs)
 		if (m.content === FORWARD_PLACEHOLDER)
@@ -424,7 +455,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 					rootRefs: replyRefs(last),
 				});
 	// 重启接回、手动重试会再走一遍：trigger 已经记过就不动
-	const triggerIds = msgs.map((m) => receive(triggerOf(chat, m, follow?.ref)));
+	const triggerIds = msgs.map((m) => receive(triggerOf(chat, m, follow?.ref, pick)));
 	let routeId: number | undefined;
 	const source: Source = {
 		chatId: chat.chat_id,
@@ -440,7 +471,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 	};
 	const label = draftLabel(source);
 	const started = now();
-	const requestId = requestIdOf(msgs, attempt);
+	const requestId = requestIdOf(msgs, attempt, pick);
 	// 发来要预审的 MR：排队、等 Yi、预审之前先回个 Get，对方知道收到了；手动重试不再回。催复审的同样处理
 	const mrMsg = msgs.findLast((m) => MR_RE.test(m.content)) ?? (follow?.ref ? last : undefined);
 	if (mrMsg && !attempt) await ackMr(chat.chat_mode, mrMsg).catch((e) => log("MR 回 Get 失败", e));
@@ -485,7 +516,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 		const onError = (e: unknown) => {
 			if (isStopping()) throw e;
 			if (self.aborted) yiRepliedMidway(chat, source, label, routeId, self.dismissed ? DISMISSED : undefined);
-			else failed(chat, msgs, source, label, started, routeId, e);
+			else failed(chat, msgs, source, label, started, routeId, e, pick);
 		};
 		const open = openRoute(triggerIds, "draft");
 		// 上次进程已经把草稿推给 Yi，只是没来得及记成已处理：不再推第二张
@@ -558,8 +589,11 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			const thread = triggerOf(chat, last).thread;
 			// 话题回复带上话题根提到的 MR：接着 CR 的会话和 mr 档
 			// 催复审认定的 MR 排最前：订阅优先接它的会话
-			const refs = [...new Set([...(follow?.ref ? [follow.ref] : []), ...refsOf(source.text), ...rootRefs(last.root_id)])];
-			const keys = subscribable(thread, refs);
+			// 几个 MR 各一份：只接这个 MR 的会话；话题也不挂（挂上了第二份会接到第一份的会话、审成同一个 MR）
+			const refs = pick
+				? [pick.ref]
+				: [...new Set([...(follow?.ref ? [follow.ref] : []), ...refsOf(source.text), ...rootRefs(last.root_id)])];
+			const keys = pick && pick.total > 1 ? refs : subscribable(thread, refs);
 			const agents = loadAgents().agents;
 			const sub = subscriber(keys);
 			let name: string;
@@ -572,9 +606,14 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				info = { ...open.info, rule: open.rule, tier: open.info?.tier ?? LEGACY_TIER[open.agent!] };
 				sid = open.session;
 			} else {
-				const fm = follow?.ref ? parseMrRef(follow.ref) : undefined;
+				const fm = pick ? parseMrRef(pick.ref) : follow?.ref ? parseMrRef(follow.ref) : undefined;
+				const fmRule = pick
+					? pick.total > 1
+						? `MR 链接（点给 Yi 的第 ${pick.index + 1}/${pick.total} 个）`
+						: "MR 链接（点给 Yi 的）"
+					: `催复审（${follow?.via}）`;
 				// 等批准之前已经分诊过：沿用，不再调一次模型
-				self.routed ??= await route(fm ? { ...source, followMr: { ...fm, rule: `催复审（${follow!.via}）` } } : source);
+				self.routed ??= await route(fm ? { ...source, followMr: { ...fm, rule: fmRule } } : source);
 				[name, info] = self.routed;
 				// 催复审但不止一个 MR 可能：不挑，至少按 answer 档起草，提示里让它问 Yi（寒暄档会直接回个表情）
 				if (follow && !follow.ref && info.tier === "ack")
@@ -587,7 +626,9 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 					info = { ...info, tier: "deep", rule: `${info.rule}（${chat.chat_mode === "doc" ? "文档评论里" : "群里"} @Yi，按 deep 查）` };
 				// 寒暄确认不需要前文，不接续也不挂订阅
 				// 拿不准是哪个 MR 时不接 MR 的会话：接上就等于替 Yi 挑了一个；认定了的只接这个 MR 的会话
-				const otherMr = follow && (!follow.ref || (sub?.info?.mrIid && `gitlab:${sub.info.mrProject}!${sub.info.mrIid}` !== follow.ref));
+				// 几个 MR 各一份时同理：只接这份那个 MR 的会话
+				const want = pick?.ref ?? follow?.ref;
+				const otherMr = (follow && !follow.ref) || (want && sub?.info?.mrIid && `gitlab:${sub.info.mrProject}!${sub.info.mrIid}` !== want);
 				if (sub && info.tier !== "ack" && !otherMr) {
 					const { mrProject, mrIid } = (sub.info ?? {}) as Record<string, string>;
 					// 挂在 MR 上的会话：后续消息按 MR 预审档接着看
@@ -660,6 +701,8 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			let extra = info.mrIid
 				? `\n\n要预审的 MR：项目 \`${info.mrProject}\`，iid \`${info.mrIid}\`，glab 的 -R 参数用 \`${glabRepo(info.mrProject!)}\`。\nMR 概要（glab mr view）：\n${await mrBrief(info)}`
 				: "";
+			if (pick && pick.total > 1)
+				extra += `\n\n这条消息里点给 Yi 的 MR 有 ${pick.total} 个，每个单独一份草稿，这份只审上面这个，别的 MR 不用看、也不用在回复里提。`;
 			if (follow?.ref && info.mrIid) {
 				const how = follow.via === "回复原消息" ? "回复的是贴这个 MR 的那条消息" : "同一个会话里对方最近只贴过这一个 MR";
 				const said = `对方没带链接说「${last.content.slice(0, 200)}」（${how}）`;
@@ -848,7 +891,16 @@ function yiRepliedMidway(chat: ChatRef, source: Source, label: string, routeId: 
 	settle({ actionKind: "draft", routeId, outcome: reason === DISMISSED ? "completed" : "expired", effect: "internal", detail: reason });
 }
 
-function failed(chat: ChatRef, msgs: Message[], source: Source, label: string, started: number, routeId: number | undefined, e: unknown) {
+function failed(
+	chat: ChatRef,
+	msgs: Message[],
+	source: Source,
+	label: string,
+	started: number,
+	routeId: number | undefined,
+	e: unknown,
+	pick?: MrPick,
+) {
 	log("起草失败", chat.chat_id, e);
 	settle({ actionKind: "draft", routeId, outcome: "failed", effect: "internal", detail: String((e as Error).message) });
 	record({
@@ -862,7 +914,7 @@ function failed(chat: ChatRef, msgs: Message[], source: Source, label: string, s
 		seconds: now() - started,
 		error: String((e as Error).message),
 		question: source.text,
-		retry: { chat, msgs },
+		retry: { chat, msgs, pick },
 	});
 	// 对方的消息没人回：私聊提醒一次，可以直接重试或忽略（重试后又失败会再提醒）
 	void notifyFailure({ taskId: `fail-${source.replyTo}`, where: whereOf(source), text: source.text, error: String((e as Error).message) });
@@ -879,8 +931,8 @@ async function imageHint(msgs: Message[]): Promise<string> {
 
 /** 启动时接回上次进程没起草完的消息 */
 export function resumePendingDrafts(onDone: (ids: string[]) => void) {
-	for (const { value } of listKv<{ chat: ChatRef; msgs: Message[]; attempt?: string }>("pending:draft:")) {
-		const { chat, msgs, attempt } = value;
+	for (const { value } of listKv<Pending>("pending:draft:")) {
+		const { chat, msgs, attempt, pick } = value;
 		log(
 			"接回未完成的起草",
 			chat.chat_id,
@@ -894,6 +946,6 @@ export function resumePendingDrafts(onDone: (ids: string[]) => void) {
 				text: m.content.slice(0, 300),
 				since: now(),
 			});
-		void makeDraft(chat, msgs, onDone, attempt);
+		void makeDraft(chat, msgs, onDone, attempt, pick);
 	}
 }

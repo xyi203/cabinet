@@ -5,7 +5,7 @@
 // 例外：评审没发现任何要作者处理的问题时不等 Yi 点，直接批准（autoApprove，Yi 定的规则）。
 import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { changed } from "../bus.ts";
-import { GLAB_BIN } from "../config.ts";
+import { GLAB_BIN, OWNER_OPEN_ID } from "../config.ts";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import type { Draft } from "../db/schema.ts";
 import { GITLAB_HOST, glabRepo, MR_RE } from "../agent/router.ts";
@@ -30,6 +30,60 @@ export async function ackMr(chatMode: string, m: Pick<Message, "message_id">) {
 	if (getKv(key, false)) return;
 	setKv(key, true);
 	if (!(await react(m.message_id, MR_ACK_EMOJI))) log("MR 链接回 Get 没成功（机器人可能不在这个会话里）", m.message_id);
+}
+
+/** 一批消息里有几个 MR 时，这份草稿审的是哪个：index 0 沿用原消息的 trigger / requestId，后面的带 #<ref> 后缀各记一份 */
+export interface MrPick {
+	ref: string;
+	index: number;
+	total: number;
+}
+
+/**
+ * 这批消息里点给 Yi 的 MR（gitlab:<project>!<iid>），按出现顺序去重。
+ * 一条消息常常 @ 好几个人各看各的（11-20 告警调整那条：@Yi 两个、@欧阳嘉威 两个，原来只审了第一个链接）：
+ * 链接归到它前面最近的那组 @（紧挨着、中间只有空格顿号之类的几个 @ 算一组，如「@A @Yi 看下」），第一个 @ 之前的链接归第一组。
+ * 没 @ 别人（私聊、只 @Yi）或者按 @ 认不出 Yi 的，全算 Yi 的：宁可多审一个，不漏
+ */
+export function mrPicks(msgs: Array<Pick<Message, "content" | "mentions">>, owner = OWNER_OPEN_ID): string[] {
+	const out: string[] = [];
+	for (const m of msgs) {
+		const links = [...m.content.matchAll(new RegExp(MR_RE.source, "g"))].map((x) => ({ pos: x.index, ref: `gitlab:${x[1]}!${x[2]}` }));
+		if (!links.length) continue;
+		const ats = m.mentions.flatMap((x) => {
+			const at: Array<{ pos: number; end: number; yi: boolean }> = [];
+			for (let i = m.content.indexOf(`@${x.name}`); x.name && i >= 0; i = m.content.indexOf(`@${x.name}`, i + 1))
+				at.push({ pos: i, end: i + x.name.length + 1, yi: x.id === owner });
+			return at;
+		});
+		if (!ats.some((a) => a.yi) || !ats.some((a) => !a.yi)) {
+			out.push(...links.map((l) => l.ref));
+			continue;
+		}
+		const events = [...ats.map((a) => ({ ...a, ref: "" })), ...links.map((l) => ({ ...l, end: l.pos, yi: false }))].toSorted(
+			(a, b) => a.pos - b.pos,
+		);
+		const start = out.length;
+		const leading: string[] = [];
+		let group: boolean | undefined;
+		let first: boolean | undefined;
+		let prevAt: number | undefined;
+		for (const e of events) {
+			if (!e.ref) {
+				const joined = prevAt !== undefined && /^[ \t,，、&和及]*$/.test(m.content.slice(prevAt, e.pos));
+				if (!joined && group !== undefined) first ??= group;
+				group = joined ? group || e.yi : e.yi;
+				prevAt = e.end;
+				continue;
+			}
+			prevAt = undefined;
+			if (group === undefined) leading.push(e.ref);
+			else if (group) out.push(e.ref);
+		}
+		// 只有一组 @ 时 first 没定下来，group 就是第一组
+		if (leading.length && (first ?? group)) out.splice(start, 0, ...leading);
+	}
+	return [...new Set(out)];
 }
 
 /** 一条行内评论：位置按 GitLab discussions 的 position，行号是 head_sha 下的绝对行号 */

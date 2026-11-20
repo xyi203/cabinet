@@ -11,7 +11,7 @@ import { now } from "./util.ts";
 export function retryTask(taskId: string) {
 	const r = failedRecord(taskId);
 	if (r?.retry && r.kind === "draft") {
-		const { chat, msgs } = r.retry as any;
+		const { chat, msgs, pick } = r.retry as any;
 		if (msgs.some((m: any) => inflight.has(m.message_id))) throw new DraftError("这条正在起草中");
 		for (const m of msgs)
 			inflight.set(m.message_id, {
@@ -21,7 +21,7 @@ export function retryTask(taskId: string) {
 				text: String(m.content ?? "").slice(0, 300),
 				since: now(),
 			});
-		void makeDraft(chat, msgs, markHandled, `retry-${Date.now()}`);
+		void makeDraft(chat, msgs, markHandled, `retry-${Date.now()}`, pick);
 		closeFailure(taskId, "retrying");
 		return;
 	}
