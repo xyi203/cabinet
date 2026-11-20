@@ -7,7 +7,7 @@ import { DraftError } from "./drafts/store.ts";
 import { exec } from "./util.ts";
 
 export interface PromptFile {
-	/** 相对仓库根目录，比如 config/agents/assistant.md */
+	/** 相对仓库根目录，比如 config/agents/mr.md */
 	path: string;
 	name: string;
 	/** 谁用它 */

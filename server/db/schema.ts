@@ -174,6 +174,30 @@ export const subscriptions = sqliteTable(
 	(t) => [primaryKey({ columns: [t.key, t.session] }), index("subscriptions_updated").on(t.updated)],
 );
 
+/**
+ * 标记：消息、话题、飞书项目评论、云文档评论里提到的同一件事（工作项、文档、MR、话题），
+ * 跨渠道串起来，起草时当上下文。只用来串上下文，不参与分派和订阅（那些仍按 triggers.refs）
+ */
+export const marks = sqliteTable(
+	"marks",
+	{
+		/** meego:<工作项 id>、doc:<文档 token>、gitlab:<项目>!<iid>、lark:<chat>#<话题> */
+		key: text("key").notNull(),
+		/** 带这个标记的事件：trigger id，或没进分派的消息 lark:<message_id> */
+		event: text("event").notNull(),
+		thread: text("thread").notNull(),
+		actorName: text("actor_name").notNull().default(""),
+		/** Yi 本人发的 */
+		owner: integer("owner", { mode: "boolean" }).notNull().default(false),
+		text: text("text").notNull().default(""),
+		url: text("url"),
+		at: real("at").notNull(),
+	},
+	(t) => [primaryKey({ columns: [t.key, t.event] }), index("marks_key_at").on(t.key, t.at)],
+);
+
+export type MarkRow = typeof marks.$inferSelect;
+
 /** 轮询已处理过的消息，重启后不重复起草 */
 export const handled = sqliteTable("handled", {
 	messageId: text("message_id").primaryKey(),

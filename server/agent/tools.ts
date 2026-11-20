@@ -94,7 +94,8 @@ export const lookupTool = defineTool({
 	name: "lookup",
 	description:
 		"按 ID 查 cabinet 记下的事：某条消息（trigger）被分派给了谁、产出了什么草稿或任务、结果如何；某个事件流（会话、话题、MR）里最近的消息。" +
-		"每个结果只给摘要，末尾「相关」列出下一跳的 ID，需要就接着查。提示里出现的 ID（trigger、route、draft、dev-、thread、gitlab:）都能查。" +
+		"每个结果只给摘要，末尾「相关」列出下一跳的 ID，需要就接着查。提示里出现的 ID（trigger、route、draft、dev-、thread、gitlab:）都能查；" +
+		"meego:<工作项 id>、doc:<文档 token> 列出这个工作项、文档在各处被提到的消息。" +
 		LOOKUP_HELP,
 	parameters: obj({ id: str() }),
 	execute: async (args) => text(lookup(args.id)),

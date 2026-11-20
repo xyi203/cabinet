@@ -64,7 +64,7 @@ const KNOWN: Record<string, [name: string, usedBy: string]> = {
 	"config/draft.md": ["起草规则", "起草和改写回复时使用"],
 	"config/agents.json": ["助手配置", "模型、思考强度、能用的工具和技能"],
 	"config/skill-rules.json": ["命令规则", "哪些命令直接执行、要你批准或不允许"],
-	"config/agents/assistant.md": ["助手", "处理别人发给你的消息"],
+	"config/agents/mr.md": ["MR 预审", "预审 GitLab MR，评审意见等你确认后发出"],
 	"config/agents/ack.md": ["简单回应", "只需回个表情或不用回的消息"],
 	"config/agents/alert.md": ["告警助手", "分析群里的告警"],
 	"config/agents/dev.md": ["开发助手", "按需求改代码"],

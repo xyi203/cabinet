@@ -1,5 +1,8 @@
 // 飞书项目：评论里 @Yi 时「飞书项目」机器人会私聊 Yi 一张卡片；回复用 meegle CLI 以 Yi 身份发评论。
 // 卡片示例：标题「💬 有人在评论中提到了你」或「💬 缺陷有新评论」，正文里有工作项链接、评论人 @名字(ou_xxx) 和评论原文
+import { createHash } from "node:crypto";
+import { mkdirSync, readdirSync, renameSync } from "node:fs";
+import path from "node:path";
 import { MEEGLE_BIN, OWNER_OPEN_ID } from "./config.ts";
 import type { MeegoCard } from "./db/schema.ts";
 import { exec, log } from "./util.ts";
@@ -86,7 +89,104 @@ const comments = async (mg: MeegoCard) =>
 export const plainComment = (content: unknown) => String(content ?? "").replace(/<!--[\s\S]*?-->/g, "");
 
 /** 工作项最近的评论（带评论人名字）作为起草上下文 */
-export async function meegoContext(mg: MeegoCard): Promise<string> {
+const IMAGE_MD_RE = /!\[[^\]]*\]\((https:\/\/project\.feishu\.cn\/[^)\s]+)\)(?:<!--[\s\S]*?-->)?/g;
+const MAX_IMAGES = 4;
+
+/** 字段值转成给人看的文字；业务线这类只有内部 id 的、空的返回空串 */
+function fieldText(v: unknown): string {
+	if (v == null || v === "") return "";
+	if (typeof v === "string") return /^[0-9a-f]{16,}$/i.test(v) ? "" : v;
+	if (typeof v === "number" || typeof v === "boolean") return String(v);
+	if (Array.isArray(v)) return v.map(fieldText).filter(Boolean).join("、");
+	if (typeof v === "object") {
+		const o = v as Record<string, unknown>;
+		if (typeof o.name === "string") return o.name;
+		if (typeof o.label === "string") return o.label;
+		if (typeof o.iso_time === "string") return o.iso_time.replace("T", " ").slice(0, 16);
+	}
+	return "";
+}
+
+/**
+ * meegle workitem get 的结果整理成给 agent 看的正文：标题、类型、状态、各角色、字段和描述。
+ * 描述里的截图换成 [截图 n]，链接按顺序返回，由调用方下载
+ */
+export function formatWorkItem(d: any): { text: string; imageUrls: string[] } {
+	const a = d?.work_item_attribute ?? {};
+	const imageUrls: string[] = [];
+	const lines = [
+		`工作项「${a.work_item_name ?? ""}」（${[a.work_item_type?.name, a.template?.name].filter(Boolean).join(" · ")}），状态：${a.work_item_status?.name ?? "?"}`,
+	];
+	const roles = (a.role_members ?? [])
+		.map((r: any) => `${r.name}：${fieldText(r.members) || "无"}`)
+		.filter((s: string) => !s.endsWith("：无"));
+	if (a.create_by?.name) roles.unshift(`创建人：${a.create_by.name}`);
+	if (roles.length) lines.push(roles.join("；"));
+	let description = "";
+	for (const f of d?.work_item_fields ?? []) {
+		if (f.key === "description") {
+			description = String(f.value ?? "")
+				.replace(IMAGE_MD_RE, (_, url: string) => {
+					imageUrls.push(url);
+					return `[截图 ${imageUrls.length}]`;
+				})
+				.replace(/<[^>]+>/g, "")
+				.replace(/\n{3,}/g, "\n\n")
+				.trim();
+			continue;
+		}
+		const text = fieldText(f.value);
+		if (text) lines.push(`${f.name}：${text.slice(0, 300)}`);
+	}
+	if (description) lines.push(`描述：\n${description.slice(0, 3000)}`);
+	return { text: lines.join("\n"), imageUrls };
+}
+
+/** 描述里的截图下载到 dir（同一张已下载过就复用），返回本地路径；下载失败的跳过 */
+async function saveWorkItemImages(mg: MeegoCard, urls: string[], dir: string): Promise<string[]> {
+	mkdirSync(dir, { recursive: true });
+	const out: string[] = [];
+	for (const url of urls.slice(0, MAX_IMAGES)) {
+		const base = `meego-${mg.workItemId}-${createHash("sha1").update(url).digest("hex").slice(0, 12)}`;
+		const cached = readdirSync(dir).find((f) => f.startsWith(`${base}.`));
+		if (cached) {
+			out.push(path.join(dir, cached));
+			continue;
+		}
+		try {
+			const tmp = path.join(dir, `${base}.download`);
+			const got = await meegle(
+				["attachment", "+download", url, "--project-key", mg.projectKey!, "--work-item-id", mg.workItemId, "--output", tmp, "--overwrite"],
+				60,
+			);
+			const ext = /^image\/(png|jpe?g|gif|webp)$/.exec(got?.mime_type ?? "")?.[1]?.replace("jpeg", "jpg") ?? "png";
+			const file = path.join(dir, `${base}.${ext}`);
+			renameSync(tmp, file);
+			out.push(file);
+		} catch (e) {
+			log("下载飞书项目截图失败", mg.workItemId, e);
+		}
+	}
+	return out;
+}
+
+/**
+ * 起草飞书项目评论的上下文：工作项本身（描述、字段、截图）+ 最近的评论。
+ * 只给评论时，描述里的店铺、订单号和客户截图 agent 都看不到（11-20 vikingstu 单就是这样查偏的）
+ */
+export async function meegoContext(mg: MeegoCard, imageDir?: string): Promise<string> {
+	const parts: string[] = [];
+	try {
+		const { text, imageUrls } = formatWorkItem(
+			await meegle(["workitem", "get", "--project-key", mg.projectKey!, "--work-item-id", mg.workItemId], 30),
+		);
+		parts.push(text);
+		const files = imageDir ? await saveWorkItemImages(mg, imageUrls, imageDir) : [];
+		if (files.length)
+			parts.push(`描述里的截图已存到本地，先用 read 工具打开看清内容：\n${files.map((f, i) => `- [截图 ${i + 1}]：${f}`).join("\n")}`);
+	} catch (e) {
+		log("读取飞书项目工作项失败", mg.workItemId, e);
+	}
 	try {
 		const list = await comments(mg);
 		const name = await lookupUsers(
@@ -96,11 +196,11 @@ export async function meegoContext(mg: MeegoCard): Promise<string> {
 		const lines = list
 			.slice(-15)
 			.map((c) => `- ${c.created_at} ${name(c.creator)?.name ?? c.creator}：${plainComment(c.content).slice(0, 400)}`);
-		return `工作项「${mg.workItemTitle}」最近的评论：\n${lines.toReversed().join("\n")}`;
+		parts.push(`工作项「${mg.workItemTitle}」最近的评论：\n${lines.toReversed().join("\n")}`);
 	} catch (e) {
 		log("读取飞书项目评论失败", mg.workItemId, e);
-		return "";
 	}
+	return parts.join("\n\n");
 }
 
 /** 这条 @ 之后 Yi 在工作项下评论过，就算已亲自回复 */

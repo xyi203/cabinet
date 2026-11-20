@@ -58,7 +58,7 @@ const turn = (text: string) => [
 	},
 ];
 
-const agent = { model: "codex/gpt-6.1-sol", thinking: "high", prompt: "agents/assistant.md" };
+const agent = { model: "codex/gpt-6.1-sol", thinking: "high", prompt: "agents/mr.md" };
 
 test("codex 跑一轮：最后一条消息是结果，命令转成执行日志，用量按缓存拆开，thread 记下来", async () => {
 	const { client, calls } = fake(turn("【无需回复】已回 Get"));

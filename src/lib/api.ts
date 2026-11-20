@@ -65,7 +65,7 @@ export interface AgentStat {
 	runs: number;
 	failed: number;
 	cost: number;
-	/** config/ 下的提示词文件，如 agents/assistant.md */
+	/** config/ 下的提示词文件，如 agents/mr.md */
 	prompt: string | null;
 	runner: string;
 	tiers: Array<{ name: string; desc: string; model: string; thinking: string; prompt: string | null; runner: string }>;

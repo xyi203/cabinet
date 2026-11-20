@@ -5,6 +5,7 @@ import { desc, eq, like, or } from "drizzle-orm";
 import { db, schema } from "./db/index.ts";
 import type { DevTask, Draft, ResultRow, RouteRow, TriggerRow } from "./db/schema.ts";
 import { describeReply } from "./drafts/format.ts";
+import { relatedEvents } from "./marks.ts";
 import { subscriptionsOf } from "./pipeline.ts";
 
 const SHORT = 120;
@@ -17,7 +18,8 @@ const time = (ts: number) => new Date(ts * 1000).toLocaleString("sv-SE", { hour1
 
 export const LOOKUP_HELP =
 	"ID 的写法：trigger 用 `<渠道>:<消息 id>`（lark:om_x、meego:om_x、doc:doc_x、bot:om_x、alert:om_x、board:dev-x、cron:<任务>:<时间>）；" +
-	"分派 `route:<数字>`；草稿 `draft:<id>`；agent 任务 `dev-<数字>`；事件流 `thread:<thread>`（比如 thread:lark:oc_x）；MR `gitlab:<项目>!<iid>`。";
+	"分派 `route:<数字>`；草稿 `draft:<id>`；agent 任务 `dev-<数字>`；事件流 `thread:<thread>`（比如 thread:lark:oc_x）；MR `gitlab:<项目>!<iid>`；" +
+	"工作项、文档在各处被提到的消息：`meego:<工作项数字 id>`、`doc:<文档 token>`。";
 
 function triggerLine(t: TriggerRow) {
 	return `- ${t.id} · ${time(t.at)} · ${t.actorName || t.actorId || "?"}${t.owner ? "（Yi）" : ""}：${cut(t.text, SHORT)}`;
@@ -126,10 +128,22 @@ function showThread(thread: string): string {
 				.all()
 		: db().select().from(schema.triggers).where(eq(schema.triggers.thread, thread)).orderBy(desc(schema.triggers.at)).limit(30).all();
 	const subs = subscriptionsOf(thread).map((s) => `${s.agent} 的会话 ${s.session}（${time(s.updated)} 更新）`);
-	if (!rows.length && !subs.length) return `事件流 ${thread} 里没有记录`;
+	// 别处带着同一个标记的事件（含没进分派的消息、Yi 自己发的）：同一个工作项、文档、MR 在其他会话里被提到
+	const seen = new Set(rows.map((r) => r.id));
+	const linked = relatedEvents([thread], thread, { limit: 10, days: 30 }).filter((m) => !seen.has(m.event));
+	if (!rows.length && !subs.length && !linked.length) return `事件流 ${thread} 里没有记录`;
 	return [
 		`事件流 ${thread}，最近 ${rows.length} 条（新的在前）：`,
 		...rows.map(triggerLine),
+		...(linked.length
+			? [
+					`别处提到它的（${linked.length} 条）：`,
+					...linked.map(
+						(m) =>
+							`- ${m.event} · ${time(m.at)} · thread:${m.thread} · ${m.actorName}${m.owner ? "（Yi 本人）" : ""}：${cut(m.text, SHORT)}`,
+					),
+				]
+			: []),
 		...(subs.length ? [`订阅在：${subs.join("；")}`] : []),
 		"用 lookup <trigger id> 看某一条的分派和结果。",
 	].join("\n");
@@ -163,5 +177,7 @@ export function lookup(rawId: string): string {
 	}
 	const t = db().select().from(schema.triggers).where(eq(schema.triggers.id, id)).get();
 	if (t) return showTrigger(t);
+	// 标记直接查（飞书项目工作项 meego:<数字 id>、云文档 doc:<token>）：放在 trigger 之后，meego:om_x、doc:doc_x 这类 trigger id 优先
+	if (id.startsWith("meego:") || id.startsWith("doc:")) return showThread(id);
 	return `没找到 ${id}。${LOOKUP_HELP}`;
 }

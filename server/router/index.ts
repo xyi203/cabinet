@@ -13,6 +13,7 @@ import { type ChatRef, inflight } from "../drafts/store.ts";
 import { isHandled, markHandled } from "../handled.ts";
 import type { DocNotice } from "../lark/bot.ts";
 import type { BotEvent, Message } from "../lark/types.ts";
+import { mark } from "../marks.ts";
 import { decide } from "../pipeline.ts";
 import { accept, answer, botTrigger, devReply, draftCommand, firstSeen, remember, stripMentions } from "../qa.ts";
 import { devTaskOfDm } from "../dev.ts";
@@ -60,6 +61,15 @@ export function routeChat(chat: ChatRef, msgs: Message[]) {
 			fresh.push(m);
 		} else {
 			skip.push(m.message_id);
+			// 不用回的消息（含 Yi 自己发的）不进分派，但带着工单、文档、MR 或在话题里的记个标记，之后起草时能串到
+			mark({
+				event: `lark:${m.message_id}`,
+				thread: `lark:${chat.chat_id}${m.thread_id ? `#${m.thread_id}` : ""}`,
+				actorName: m.sender.name,
+				owner: m.sender.id === OWNER_OPEN_ID,
+				text: m.content,
+				at: m.create_time / 1000,
+			});
 			if (m.sender.id === OWNER_OPEN_ID) {
 				expireDrafts(chat, m);
 				abortIfYiReplied(chat, m);

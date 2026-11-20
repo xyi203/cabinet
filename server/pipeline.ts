@@ -8,6 +8,7 @@ import { changed } from "./bus.ts";
 import { db, schema } from "./db/index.ts";
 import type { ResultRow, RouteRow, Subscription, TriggerRow } from "./db/schema.ts";
 import { MR_RE } from "./agent/router.ts";
+import { mark } from "./marks.ts";
 import { assignTask } from "./taskstore.ts";
 import { routeRules } from "./rules.ts";
 import { now } from "./util.ts";
@@ -73,6 +74,7 @@ export function receive(t: TriggerInput): string {
 		})
 		.onConflictDoNothing()
 		.run();
+	mark({ event: id, thread: t.thread, actorName: t.actorName, owner: t.owner, text: t.text, url: t.url, at: t.at, keys: t.refs });
 	return id;
 }
 
