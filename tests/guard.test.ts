@@ -197,6 +197,28 @@ test("命令三态：read 放行，write 和没列出的子命令要审批，den
 	assert.equal(v("kafka produce --topic x"), "approve");
 });
 
+test("lazza-cli 按规则文件判：查询放行，改线上和工单的要审批，动凭证和本机安装的拒绝", () => {
+	const ga = new Guard({ roots: [repo], bash: "*", skillsDir: skills });
+	const v = (cmd: string) => ga.verdict("bash", { command: cmd }, repo).kind;
+	assert.equal(
+		v(`lazza-cli logs logv3 query --source logv3-saas-prod --where "meta_x_request_id = 'x'" --since 1h 2>&1 | head -60`),
+		"allow",
+	);
+	assert.equal(v("lazza-cli devops +timeline --service ladybug --env prod"), "allow");
+	assert.equal(v("lazza-cli k8s kubectl --env stg -- get pods"), "allow");
+	assert.equal(v("lazza-cli schema devops.+restart"), "allow");
+	assert.equal(v("lazza-cli devops +restart --env prod --service owl --yes"), "approve");
+	assert.equal(v("lazza-cli k8s deployment scale --env stg owl --replicas 0 --yes"), "approve");
+	assert.equal(v("lazza-cli archery workflow execute --env stg 12 --yes"), "approve");
+	assert.equal(v("lazza-cli pagerduty incident resolve P123 --yes"), "approve");
+	assert.equal(v("lazza-cli auth login lowcoder"), "deny");
+	assert.equal(v("lazza-cli update"), "deny");
+	// 没登记的新子命令交给审批，不默认放行
+	assert.equal(v("lazza-cli devops ticket rollback GD-1"), "approve");
+	// 藏进 bash -c 的受管命令拒绝
+	assert.equal(v(`bash -c "lazza-cli devops +restart --yes"`), "deny");
+});
+
 test("规则文件：每条都有 argv0，子命令不在 read 和 write 里重复", () => {
 	const rules = loadRules("/skills");
 	assert.ok(Object.keys(rules).length >= 10);
