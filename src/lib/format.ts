@@ -123,7 +123,9 @@ export const where = (d: { chatMode: string; chatName: string; senderName: strin
 		? `和 ${d.senderName} 的私聊`
 		: d.chatMode === "meego"
 			? `飞书项目「${d.chatName}」里 ${d.senderName} @你`
-			: `「${d.chatName}」里 ${d.senderName} @你`;
+			: d.chatMode === "doc"
+				? `云文档「${d.chatName}」的评论里 ${d.senderName} 找你`
+				: `「${d.chatName}」里 ${d.senderName} @你`;
 
 /** 发布工单（GD-*）在发布系统里的详情页 */
 export const ticketUrl = (key: string) => `https://publish.shoplazza.site/issue-view?issueKey=${encodeURIComponent(key)}`;
@@ -140,6 +142,7 @@ export const NEED: Record<string, [string, string]> = {
 export const SOURCE: Record<string, string> = {
 	lark: "飞书",
 	meego: "飞书项目",
+	doc: "云文档",
 	bot: "机器人",
 	board: "你派的",
 	alert: "告警",
@@ -150,6 +153,7 @@ export const SOURCE_FILTER: Array<[string, string[]]> = [
 	["全部", []],
 	["飞书", ["lark", "bot"]],
 	["飞书项目", ["meego"]],
+	["云文档", ["doc"]],
 	["告警", ["alert"]],
 	["定时", ["cron"]],
 	["你派的", ["board"]],
@@ -175,7 +179,7 @@ export function pillOf(t: { status: string; need: string | null; hold?: number; 
 
 /** 没起草也没派过活的飞书 / 飞书项目消息（你已亲自回复、回过表情）：事情可能还要接着做，能直接转成任务 */
 export const isBare = (t: Pick<TaskView, "drafts" | "devTasks" | "source">) =>
-	!t.drafts.length && !t.devTasks.length && (t.source === "lark" || t.source === "meego");
+	!t.drafts.length && !t.devTasks.length && (t.source === "lark" || t.source === "meego" || t.source === "doc");
 
 /** 转成任务时交给助手的内容：这件事里的消息原文，带上消息 ID，助手能用 lookup 查前后文 */
 export function requestOf(t: Pick<TaskView, "events" | "source">) {

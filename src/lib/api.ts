@@ -17,6 +17,7 @@ export interface Draft {
 	/** 起草时补齐的相关前文 */
 	context: string;
 	meego: { url: string } | null;
+	doc: { url: string; whole: boolean } | null;
 	agent: string | null;
 	route: string | null;
 	/** 起草这一版的 durable 会话：任务详情按它拉执行步骤 */

@@ -4,7 +4,7 @@ import { draftLink } from "../boardlink.ts";
 import { changed } from "../bus.ts";
 import { OWNER_OPEN_ID } from "../config.ts";
 import { db, getKv, schema, setKv } from "../db/index.ts";
-import type { Draft, MeegoCard } from "../db/schema.ts";
+import type { DocRef, Draft, MeegoCard } from "../db/schema.ts";
 import { queuePatch, sendCardToUserAsBot, sendToUserAsBot } from "../lark/bot.ts";
 import { log, now } from "../util.ts";
 import { draftCard, where } from "./card.ts";
@@ -22,7 +22,7 @@ export const isQuiet = (id: string) => id.startsWith(QUIET_PREFIX);
 
 export interface ChatRef {
 	chat_id: string;
-	chat_mode: string; // p2p / group / topic / meego
+	chat_mode: string; // p2p / group / topic / meego / doc
 	name: string;
 }
 
@@ -37,6 +37,7 @@ export interface Source {
 	text: string;
 	context?: string;
 	meego?: MeegoCard | null;
+	doc?: DocRef | null;
 	agent?: string | null;
 	session?: string | null;
 	route?: string | null;
@@ -126,6 +127,7 @@ const quote = (t: string) =>
 function draftText(source: Source, kind: Kind, body: string, note: string, report: string, noReply: boolean) {
 	const parts = [`**${where(source)}**`];
 	if (source.chatMode === "meego" && source.meego) parts.push(source.meego.url);
+	else if (source.chatMode === "doc" && source.doc) parts.push(source.doc.url);
 	// 只看 @ 那一条常常不知道在说什么：私聊草稿里带上相关前文的最后几行
 	else if (source.context) parts.push(`前面的消息：\n${quote(source.context.slice(-500))}`);
 	parts.push(quote(source.text.slice(0, 600)));
@@ -170,6 +172,7 @@ export async function pushDraft(source: Source, raw: string, replaces?: string):
 		...source,
 		threadId: source.threadId ?? null,
 		meego: source.meego ?? null,
+		doc: source.doc ?? null,
 		kind,
 		draft: body,
 		note,

@@ -6,7 +6,15 @@ import { TIER_NAME } from "./Stats";
 import { toast } from "./Toast";
 import { Card, SectionTitle, StatTile, dur, span } from "./ui";
 
-const CHANNEL: Record<string, string> = { lark: "飞书", meego: "飞书项目", bot: "机器人", board: "看板", alert: "告警", cron: "定时" };
+const CHANNEL: Record<string, string> = {
+	lark: "飞书",
+	meego: "飞书项目",
+	doc: "云文档",
+	bot: "机器人",
+	board: "看板",
+	alert: "告警",
+	cron: "定时",
+};
 const OUTCOME: Record<string, string> = { ...STATUS, done: "完成", pushed: "已推送", rerouted: "改派", none: "不处理" };
 /** 分派依据：去掉「分诊 answer：」这类内部前缀（类型已经单独显示），兜底换成人话 */
 const reason = (rule: string) => (rule === "兜底" ? "没有匹配的规则，交给默认助手" : rule.replace(/^分诊 \w+：/, ""));

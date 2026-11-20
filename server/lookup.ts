@@ -16,7 +16,7 @@ const cut = (s: string | null | undefined, n: number) => {
 const time = (ts: number) => new Date(ts * 1000).toLocaleString("sv-SE", { hour12: false }).slice(0, 16);
 
 export const LOOKUP_HELP =
-	"ID 的写法：trigger 用 `<渠道>:<消息 id>`（lark:om_x、meego:om_x、bot:om_x、alert:om_x、board:dev-x、cron:<任务>:<时间>）；" +
+	"ID 的写法：trigger 用 `<渠道>:<消息 id>`（lark:om_x、meego:om_x、doc:doc_x、bot:om_x、alert:om_x、board:dev-x、cron:<任务>:<时间>）；" +
 	"分派 `route:<数字>`；草稿 `draft:<id>`；agent 任务 `dev-<数字>`；事件流 `thread:<thread>`（比如 thread:lark:oc_x）；MR `gitlab:<项目>!<iid>`。";
 
 function triggerLine(t: TriggerRow) {
@@ -83,7 +83,7 @@ function showDraft(d: Draft): string {
 	const versions = db().select().from(schema.drafts).where(eq(schema.drafts.replyTo, d.replyTo)).orderBy(schema.drafts.created).all();
 	const out = [
 		`draft:${d.id} · ${time(d.created)} · ${d.status} · agent ${d.agent ?? "?"}`,
-		`回复对象：${d.senderName}（${d.chatMode === "p2p" ? "私聊" : d.chatMode === "meego" ? `飞书项目「${d.chatName}」` : `群「${d.chatName}」`}）`,
+		`回复对象：${d.senderName}（${d.chatMode === "p2p" ? "私聊" : d.chatMode === "meego" ? `飞书项目「${d.chatName}」` : d.chatMode === "doc" ? `云文档「${d.chatName}」的评论` : `群「${d.chatName}」`}）`,
 		`原消息：${cut(d.text, LONG)}`,
 		`草稿：${cut(describeReply(d.kind, d.draft), LONG)}`,
 	];
@@ -91,11 +91,11 @@ function showDraft(d: Draft): string {
 	if (versions.length > 1) out.push(`同一条消息的各版草稿：${versions.map((v) => `draft:${v.id}（${v.status}）`).join(" ")}`);
 	const results = db().select().from(schema.results).where(eq(schema.results.actionId, d.id)).all();
 	if (results.length) out.push("结果：", ...results.map(resultLine));
-	const channel = d.chatMode === "meego" ? "meego" : "lark";
+	const channel = d.chatMode === "meego" || d.chatMode === "doc" ? d.chatMode : "lark";
 	const next = [
 		`${channel}:${d.replyTo}`,
 		d.routeId ? `route:${d.routeId}` : "",
-		`thread:${d.chatMode === "meego" ? `meego:${d.meego?.workItemId}` : `lark:${d.chatId}`}`,
+		`thread:${d.chatMode === "meego" ? `meego:${d.meego?.workItemId}` : d.chatMode === "doc" ? `doc:${d.doc?.commentId}` : `lark:${d.chatId}`}`,
 	];
 	return [...out, `相关：${next.filter(Boolean).join(" ")}`].join("\n");
 }

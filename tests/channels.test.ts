@@ -6,7 +6,7 @@ const { channelOfDraft, channels } = await import("../server/channels/index.ts")
 
 test("渠道注册：名字不重复，草稿按来源发回对应渠道", () => {
 	const names = channels().map((c) => c.name);
-	assert.deepEqual(names.toSorted(), ["bot", "lark", "meego"]);
+	assert.deepEqual(names.toSorted(), ["bot", "doc", "lark", "meego"]);
 	assert.equal(channelOfDraft({ chatMode: "p2p" }).name, "lark");
 	assert.equal(channelOfDraft({ chatMode: "group" }).name, "lark");
 	assert.equal(channelOfDraft({ chatMode: "meego" }).name, "meego");

@@ -57,10 +57,11 @@ export interface TargetChoice {
 }
 
 /** 草稿能发去哪：私聊只有原处；群里和飞书项目评论还能私聊对方。表情是加在原消息上的，没得选 */
-export function targetsOf(d: Pick<Draft, "chatMode" | "kind" | "senderName" | "chatName">): TargetChoice[] {
+export function targetsOf(d: Pick<Draft, "chatMode" | "kind" | "senderName" | "chatName" | "doc">): TargetChoice[] {
 	if (d.chatMode === "p2p" || d.kind === "reaction") return [];
 	const dm: TargetChoice = { key: "dm", label: `私聊 ${d.senderName}` };
 	if (d.chatMode === "meego") return [{ key: "reply", label: "工作项评论里回复" }, dm];
+	if (d.chatMode === "doc") return [{ key: "reply", label: d.doc?.whole ? "发一条全文评论" : "评论串里回复" }, dm];
 	return [{ key: "reply", label: `${d.chatName ? `「${d.chatName}」` : "群"}里回复原消息` }, dm];
 }
 
@@ -137,7 +138,7 @@ export function actionsOf(t: TaskView | undefined, c: Ctx): Actions {
 			post(`/api/drafts/${d.id}/send`, { text, kind, to: kind === "reaction" ? "reply" : to }).then(() =>
 				to === "dm" && kind !== "reaction" ? `已私聊发给 ${d.senderName}` : "已发送",
 			);
-		const meego = d.chatMode === "meego";
+		const meego = d.chatMode === "meego" || d.chatMode === "doc";
 		const options: Option[] = [];
 		if (d.status === "pending" || typed)
 			options.push(

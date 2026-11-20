@@ -12,7 +12,7 @@ import { assignTask } from "./taskstore.ts";
 import { routeRules } from "./rules.ts";
 import { now } from "./util.ts";
 
-export type Channel = "lark" | "meego" | "bot" | "board" | "alert" | "cron";
+export type Channel = "lark" | "meego" | "doc" | "bot" | "board" | "alert" | "cron";
 export type ActionKind = "draft" | "qa" | "dev" | "remember" | "command" | "none";
 export type Effect = "internal" | "bot" | "local" | "outward";
 
@@ -214,12 +214,12 @@ export function recentLineage(limit = 200): Lineage[] {
 // ---------- 订阅：事件流 / 被引用的 MR -> agent 会话（订阅直通） ----------
 
 /**
- * 能订阅的键：话题和飞书项目工作项这类「一件事」的事件流，加上提到的 MR。
+ * 能订阅的键：话题、飞书项目工作项、云文档评论串这类「一件事」的事件流，加上提到的 MR。
  * 整个群聊、整个私聊不订阅：否则之后群里所有消息都会被拉进同一个会话。refs 排在前面，命中时优先。
  */
 export function subscribable(thread: string, refs: string[]): string[] {
 	const keys = [...refs];
-	if (thread.startsWith("meego:") || (thread.startsWith("lark:") && thread.includes("#"))) keys.push(thread);
+	if (thread.startsWith("meego:") || thread.startsWith("doc:") || (thread.startsWith("lark:") && thread.includes("#"))) keys.push(thread);
 	return [...new Set(keys)];
 }
 

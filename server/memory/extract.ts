@@ -134,7 +134,13 @@ async function draftBatch(job: Extract<MemoryJob, { type: "draft" }>): Promise<B
 		.all();
 	const m: Omit<Material, "n">[] = [];
 	const where =
-		first.chatMode === "p2p" ? "私聊" : first.chatMode === "meego" ? `飞书项目「${first.chatName}」` : `群「${first.chatName}」`;
+		first.chatMode === "p2p"
+			? "私聊"
+			: first.chatMode === "meego"
+				? `飞书项目「${first.chatName}」`
+				: first.chatMode === "doc"
+					? `云文档「${first.chatName}」的评论`
+					: `群「${first.chatName}」`;
 	if (first.context) m.push({ role: "context", label: "前文", text: clip(first.context, 1500), ref: job.replyTo, at: first.created });
 	m.push({ role: "other", label: `${first.senderName}（${where}）的消息`, text: first.text, ref: job.replyTo, at: first.created });
 	for (const d of drafts) {

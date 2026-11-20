@@ -56,6 +56,9 @@ export const USER_SCOPES = [
 	"contact:user.base:readonly",
 	// 搜 @Yi 的消息：话题里的回复按会话拉不到（server/mentions.ts）
 	"search:message",
+	// 云文档评论里 @Yi：订阅评论通知、读评论串、以 Yi 的身份回评论（server/doc.ts）
+	"docs:document.comment:read",
+	"docs:document.comment:create",
 	"offline_access",
 ];
 
@@ -303,7 +306,8 @@ export async function listMessages(
 		if (!d.has_more || !d.page_token) return out;
 		params.page_token = d.page_token;
 	}
-	log("读取消息：翻到上限还没拉完，剩下的这一轮不拉", params.container_id, out.length);
+	// 只取一页的调用方（看最近几条）本来就不要后面的，不算没拉完
+	if ((opts.pages ?? 1) > 1) log("读取消息：翻到上限还没拉完，剩下的这一轮不拉", params.container_id, out.length);
 	return out;
 }
 
@@ -365,6 +369,130 @@ export async function searchAtMe(start: number, pages = 3): Promise<SearchHit[]>
 export async function getChat(chatId: string): Promise<{ chat_id: string; chat_mode: string; name: string }> {
 	const d = check(await client().im.v1.chat.get({ path: { chat_id: chatId } }, await asUser()), "读取会话");
 	return { chat_id: chatId, chat_mode: (d as any).chat_mode ?? "group", name: (d as any).name ?? "" };
+}
+
+// ---------- 云文档评论 ----------
+
+/** 评论通知事件 drive.notice.comment_add_v1：只有标识，没有评论内容 */
+export interface DocNotice {
+	fileToken: string;
+	fileType: string;
+	commentId: string;
+	replyId: string;
+	fromId: string;
+	toId: string;
+	mention: boolean;
+}
+
+export interface DocReply {
+	id: string;
+	userId: string;
+	text: string;
+	/** unix 秒 */
+	at: number;
+}
+
+export interface DocComment {
+	quote: string;
+	whole: boolean;
+	solved: boolean;
+	replies: DocReply[];
+}
+
+const DRIVE = "/open-apis/drive/v1";
+
+async function driveAsUser<T = any>(method: "GET" | "POST", url: string, what: string, params?: object, data?: object): Promise<T> {
+	try {
+		return check(await client().request({ method, url: `${DRIVE}${url}`, params, data }, await asUser()), what) as T;
+	} catch (e) {
+		throw larkError(e, what);
+	}
+}
+
+/**
+ * 订阅「评论通知到 Yi」的事件（被 @、Yi 参与的评论串有新回复）。订阅挂在应用 + 用户上，不分文档，重复调用没有副作用。
+ * 开发者后台还要在事件订阅里加 drive.notice.comment_add_v1，否则订阅成功也收不到
+ */
+export const subscribeDocNotice = () =>
+	driveAsUser("POST", "/user/subscription", "订阅云文档评论通知", undefined, { event_type: "drive.notice.comment_add_v1" });
+
+const replyText = (elements: any[]) =>
+	(elements ?? [])
+		.map((e) =>
+			e.type === "person" ? `@${e.person?.user_id ?? ""}` : e.type === "docs_link" ? (e.docs_link?.url ?? "") : (e.text_run?.text ?? ""),
+		)
+		.join("");
+
+/** 一个评论串：划的原文和全部回复（按时间正序）；评论里 @ 的人只有 id，写成 @ou_xxx，由调用方换成名字 */
+export async function docComment(fileToken: string, fileType: string, commentId: string): Promise<DocComment | undefined> {
+	const d = await driveAsUser(
+		"POST",
+		`/files/${fileToken}/comments/batch_query`,
+		"读取云文档评论",
+		{ file_type: fileType, user_id_type: "open_id" },
+		{ comment_ids: [commentId] },
+	);
+	const c = d.items?.[0];
+	if (!c) return undefined;
+	return {
+		quote: c.quote ?? "",
+		whole: Boolean(c.is_whole),
+		solved: Boolean(c.is_solved),
+		replies: (c.reply_list?.replies ?? []).map((r: any) => ({
+			id: r.reply_id,
+			userId: r.user_id ?? "",
+			text: replyText(r.content?.elements),
+			at: Number(r.create_time ?? 0),
+		})),
+	};
+}
+
+const textElements = (text: string) => ({ elements: [{ type: "text_run", text_run: { text } }] });
+
+/** 以 Yi 的身份在评论串里回复 */
+export const replyDocComment = (fileToken: string, fileType: string, commentId: string, text: string) =>
+	driveAsUser(
+		"POST",
+		`/files/${fileToken}/comments/${commentId}/replies`,
+		"回复云文档评论",
+		{ file_type: fileType },
+		{ content: textElements(text) },
+	);
+
+/** 以 Yi 的身份发一条全文评论（全文评论的评论串接口回不了，报 1069302） */
+export const addDocComment = (fileToken: string, fileType: string, text: string) =>
+	driveAsUser("POST", `/files/${fileToken}/new_comments`, "发云文档评论", undefined, {
+		file_type: fileType,
+		reply_elements: [{ type: "text", text }],
+	});
+
+/** 文档标题和链接；要 drive:drive.metadata:readonly，没开这个权限就读不到 */
+export async function docMeta(fileToken: string, fileType: string): Promise<{ title: string; url: string } | undefined> {
+	const d = await driveAsUser("POST", "/metas/batch_query", "读取云文档信息", undefined, {
+		request_docs: [{ doc_token: fileToken, doc_type: fileType }],
+		with_url: true,
+	});
+	const m = d.metas?.[0];
+	return m ? { title: m.title ?? "", url: m.url ?? "" } : undefined;
+}
+
+const names = new Map<string, string>();
+
+/** open_id 对应的名字（评论接口只给 id）；查不到就用 id */
+export async function userName(openId: string): Promise<string> {
+	if (!openId) return "";
+	const hit = names.get(openId);
+	if (hit) return hit;
+	try {
+		// 机器人身份：用户身份读通讯录要 contact:contact.base:readonly，Yi 的授权里没有
+		const d = check(await client().contact.v3.user.get({ path: { user_id: openId }, params: { user_id_type: "open_id" } }), "读取用户");
+		const name = (d as any).user?.name;
+		if (name) names.set(openId, name);
+		return name ?? openId;
+	} catch (e) {
+		log("读取用户名失败", openId, e);
+		return openId;
+	}
 }
 
 /** 合并转发在消息列表里只是一个占位（「[合并转发]」），转发的内容要按 id 再取一次 */
@@ -588,11 +716,15 @@ export function toBotEvent(data: any): BotEvent {
 }
 
 /**
- * 长连接收 im.message.receive_v1 和卡片回调 card.action.trigger。SDK 自带断线重连；同一应用多条长连接时事件只推给其中一条。
+ * 长连接收 im.message.receive_v1、云文档评论通知 drive.notice.comment_add_v1 和卡片回调 card.action.trigger。SDK 自带断线重连；同一应用多条长连接时事件只推给其中一条。
  * 卡片回调的返回值由 SDK 经长连接回传（toast、新卡片），必须 3 秒内返回。
  * 开发者后台要在「事件与回调 → 回调配置」选长连接并订阅「卡片回传交互」，否则点按钮没有反应。
  */
-export function startEvents(onMessage: (ev: BotEvent) => void, onCardAction?: (data: unknown) => Promise<unknown>) {
+export function startEvents(
+	onMessage: (ev: BotEvent) => void,
+	onCardAction?: (data: unknown) => Promise<unknown>,
+	onDocNotice?: (n: DocNotice) => void,
+) {
 	const ws = new lark.WSClient({
 		appId: FEISHU_APP_ID,
 		appSecret: FEISHU_APP_SECRET,
@@ -606,6 +738,23 @@ export function startEvents(onMessage: (ev: BotEvent) => void, onCardAction?: (d
 				onMessage(toBotEvent(data));
 			} catch (e) {
 				log("处理事件失败", e);
+			}
+		},
+		// 云文档评论通知到 Yi（要先 subscribeDocNotice，用户身份的订阅）
+		"drive.notice.comment_add_v1": (data) => {
+			try {
+				const meta = data.notice_meta ?? {};
+				onDocNotice?.({
+					fileToken: meta.file_token ?? "",
+					fileType: meta.file_type ?? "",
+					commentId: data.comment_id ?? "",
+					replyId: data.reply_id ?? "",
+					fromId: meta.from_user_id?.open_id ?? "",
+					toId: meta.to_user_id?.open_id ?? "",
+					mention: Boolean(data.is_mentioned),
+				});
+			} catch (e) {
+				log("处理云文档评论通知失败", e);
 			}
 		},
 		// 类型定义里没有这个回调

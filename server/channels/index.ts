@@ -7,6 +7,7 @@ import { UserAuthError } from "../lark/bot.ts";
 import { POLL_INTERVAL } from "../config.ts";
 import { log, now } from "../util.ts";
 import { botChannel } from "./bot.ts";
+import { docChannel } from "./doc.ts";
 import { larkChannel } from "./lark.ts";
 import { meegoChannel } from "./meego.ts";
 
@@ -26,11 +27,11 @@ export interface Channel {
 }
 
 /** 函数而不是常量：渠道模块之间有循环引用，用到时再取 */
-export const channels = (): Channel[] => [larkChannel, meegoChannel, botChannel];
+export const channels = (): Channel[] => [larkChannel, meegoChannel, docChannel, botChannel];
 
 /** 草稿发回它来的那个渠道 */
 export function channelOfDraft(d: Pick<Draft, "chatMode">): Channel {
-	const name = d.chatMode === "meego" ? "meego" : "lark";
+	const name = d.chatMode === "meego" || d.chatMode === "doc" ? d.chatMode : "lark";
 	const ch = channels().find((c) => c.name === name);
 	if (!ch?.send) throw new DraftError(`渠道 ${name} 不能发消息`);
 	return ch;

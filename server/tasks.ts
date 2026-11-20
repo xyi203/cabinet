@@ -29,7 +29,7 @@ export type TaskEvent =
 export interface TaskView {
 	id: string;
 	title: string;
-	/** lark meego bot board alert cron */
+	/** lark meego doc bot board alert cron */
 	source: string;
 	/** 谁、在哪 */
 	label: string;
@@ -242,7 +242,7 @@ function queued(t: number): TaskView[] {
 				and(
 					inArray(
 						schema.triggers.id,
-						mids.flatMap((m) => [`lark:${m}`, `meego:${m}`]),
+						mids.flatMap((m) => [`lark:${m}`, `meego:${m}`, `doc:${m}`]),
 					),
 					gte(schema.triggers.routeId, 0),
 				),
@@ -256,7 +256,7 @@ function queued(t: number): TaskView[] {
 		.map(([mid, i]) => ({
 			id: `q:${mid}`,
 			title: i.text,
-			source: i.chatMode === "meego" ? "meego" : "lark",
+			source: i.chatMode === "meego" || i.chatMode === "doc" ? i.chatMode : "lark",
 			label: i.label,
 			// 等批准的固定是待办：同一个聊天里有别的运行在跑也不算它在进行
 			status: busy.has(i.chatId) && !i.approval ? "in_progress" : "todo",

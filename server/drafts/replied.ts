@@ -1,11 +1,12 @@
 // Yi 是否已亲自回复：起草前再看一眼，已回复就不起草；之后回复了，没处理的草稿作废
-import { and, eq, gte, inArray, ne } from "drizzle-orm";
+import { and, eq, gte, inArray, notInArray } from "drizzle-orm";
 import { changed } from "../bus.ts";
 import { OWNER_OPEN_ID } from "../config.ts";
 import { db, schema } from "../db/index.ts";
-import type { MeegoCard } from "../db/schema.ts";
+import type { DocRef, MeegoCard } from "../db/schema.ts";
 import { listMessages, reactionsOf } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
+import { docStale } from "../doc.ts";
 import { meegoYiReplied } from "../meego.ts";
 import { settle } from "../pipeline.ts";
 import { enqueueMemory } from "../memory/extract.ts";
@@ -31,6 +32,7 @@ export function ownerReplyCovers(chatMode: string, m: Message, msgs: Array<Pick<
 export async function staleReason(chat: ChatRef, msgs: Message[]): Promise<string | null> {
 	const last = msgs.at(-1)!;
 	if (chat.chat_mode === "meego") return (await meegoYiReplied(last.meego as MeegoCard)) ? "Yi 已亲自回复" : null;
+	if (chat.chat_mode === "doc") return docStale(last.doc as DocRef);
 	let recent: Message[];
 	try {
 		recent = await recentAround(chat, msgs);
@@ -62,7 +64,13 @@ export async function expireReactedDrafts() {
 	const live = db()
 		.select()
 		.from(schema.drafts)
-		.where(and(inArray(schema.drafts.status, LIVE), ne(schema.drafts.chatMode, "meego"), gte(schema.drafts.created, now() - 86400)))
+		.where(
+			and(
+				inArray(schema.drafts.status, LIVE),
+				notInArray(schema.drafts.chatMode, ["meego", "doc"]),
+				gte(schema.drafts.created, now() - 86400),
+			),
+		)
 		.all();
 	for (const d of live) {
 		if (!d.replyTo.startsWith("om_") || !(await ownerReacted([d.replyTo]))) continue;
@@ -135,6 +143,24 @@ export function expireDrafts(chat: ChatRef, m: Message) {
 				outcome: "expired",
 				yiReply: { id: m.message_id, text: m.content, at: repliedAt },
 			});
+		}
+	}
+}
+
+/** 云文档评论同理：Yi 自己回了、评论被解决了都没有通知，对待确认的草稿逐条查 */
+export async function expireDocDrafts() {
+	const live = db()
+		.select()
+		.from(schema.drafts)
+		.where(and(eq(schema.drafts.chatMode, "doc"), inArray(schema.drafts.status, LIVE)))
+		.all();
+	for (const d of live) {
+		const why = d.doc && (await docStale(d.doc));
+		if (why && claim(d.id, LIVE, "expired")) {
+			changed();
+			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: "expired" });
+			settle({ actionKind: "draft", actionId: d.id, routeId: d.routeId, outcome: "expired", effect: "internal" });
+			log(`云文档评论草稿作废：${why}`, d.id);
 		}
 	}
 }

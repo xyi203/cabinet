@@ -98,6 +98,7 @@ const input = (name: string, placeholder: string, value = "", rows = 1) => ({
 /** 这条消息从哪来，和看板一致：和 张三 的私聊、「订单组」里 张三 @你 */
 export function where(d: Pick<Draft, "chatMode" | "chatName" | "senderName">) {
 	if (d.chatMode === "p2p") return `和 ${d.senderName} 的私聊`;
+	if (d.chatMode === "doc") return `云文档「${d.chatName}」的评论里 ${d.senderName} 找你`;
 	return d.chatMode === "meego" ? `飞书项目「${d.chatName}」里 ${d.senderName} @你` : `「${d.chatName}」里 ${d.senderName} @你`;
 }
 
@@ -166,6 +167,7 @@ export function draftCard(d: Draft, notice = "", mr?: DraftMr, link = BOARD): ob
 	const elements: object[] = [];
 	if (notice) elements.push(text(cut(notice, LIMIT.notice), "red"));
 	if (d.chatMode === "meego" && d.meego?.url) elements.push(md(`[在飞书项目查看](${d.meego.url})`));
+	else if (d.chatMode === "doc" && d.doc?.url) elements.push(md(`[打开文档](${d.doc.url})`));
 	else if (d.context && live) elements.push(panel("前面的消息", [text(cut(d.context.slice(-LIMIT.context), LIMIT.context), "grey")]));
 	elements.push(text(cut(d.text, LIMIT.source)));
 	if (live && d.report) elements.push(panel("**评审报告**（只给你看）", [md(cut(d.report, LIMIT.report))]));

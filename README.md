@@ -5,6 +5,7 @@ Yi 的飞书助理。名字取自内阁「票拟批红」：消息先由它审�
 ## 做什么
 
 - **代回复草稿**：轮询 Yi 的私聊、群里 @Yi、飞书项目评论 @Yi。任务中台把消息分派给对应 agent 起草，再由机器人私聊给 Yi 一张卡片：草稿可以在卡片里直接改了再发，也可以点不回复 / 完成 / 改写 / 回表情 / 发表情包；引用卡片回「发送 / 改写 xxx / 表情 赞 / 完成 / 不回复」（老的「发 / 改 / 不发」也认）或在看板上操作也一样，处理完卡片原地更新成结果。按钮需要开发者后台「事件与回调 → 回调配置」选长连接并订阅「卡片回传交互」。Yi 已经亲自回复过的消息不会起草，已起草的那条会自动作废。话题里的回复按会话拉不到：cabinet 处理过的话题会单独盯（`server/topics.ts`）；没在盯的话题里有人 @Yi，每 `POLL_INTERVAL` 秒用 Yi 的身份搜一次「@我」的消息补上（`server/mentions.ts`，需要 `search:message` 权限）。
+- **云文档评论**：评论或回复通知到 Yi（被 @、Yi 参与的评论串有新回复）时飞书推 `drive.notice.comment_add_v1`，读出评论串起草，确认后以 Yi 的身份回到同一个评论串（全文评论的串接口回不了，另发一条全文评论）。@Yi 的和群里 @ 一样直接去查，没 @ 的照常分诊。需要开发者后台订阅这个事件、开通 `docs:document.comment:read` 和 `docs:document.comment:create`，再到看板重新授权飞书；开了 `drive:drive.metadata:readonly` 才读得到文档标题。文档正文里直接 @Yi（不是评论）没有事件，收不到；事件只推不补拉，cabinet 没在跑时的通知会漏（`server/doc.ts`）。
 - **先批准再起草**：MR 预审、群里 @Yi 的消息、`deep` 档（报错、数据、线上现象这类要查证据的）分诊完直接处理；群里 @Yi 的不等「你在聊」，一般问题也按 deep 档去查（`approval.group`，默认开）。其余的（私聊和飞书项目评论里的寒暄、一般问题）不起草，在看板工作台上显示「等你批准」，点「让助手处理」才开始，也可以直接在输入框里自己回。哪些档位直接处理在 `config/routes.json` 的 `approval.auto` 里配（默认 `["deep"]`，`["*"]` 是全部直接处理），等 `approval.ttl` 秒（默认一天）没批准按跳过收尾。等的时候不占并发名额和聊天锁；你自己回了、对方又接着发了会自动收掉。
 - **告警批处理**：群里机器人 @Yi 的告警不起草回复，按群攒一批（2 分钟没有新告警或满 10 分钟收口）交给 alert agent 一起看，结论私聊给 Yi；同一个群一小时内又来的并进上一批。见 `docs/pipeline.md` §4。
 - **待你处理**：看板上需要你判断的事汇成一页，按「现在 / 尽快 / 有空」排：待确认的草稿、起草失败、告警结论、Watchdog 发现的问题、agent 任务、建议不回的草稿。
@@ -40,7 +41,7 @@ server/          后端（Node 直接跑 TypeScript）
   router/        统一入口：index.ts 分流轮询到的消息和私聊机器人（告警攒批、起草、Yi 亲自回复、记住、指令、问答），board.ts 看板派活和定时跳过
   rules.ts       路由阈值：读 config/routes.json，看板「设置 → 路由规则」能改
   taskstore.ts   Task：一件事，分派时归属、按产出推状态
-  channels/      渠道接口：lark（轮询私聊 / @Yi）、meego（飞书项目）、bot（长连接、卡片回调）；poll / listen / send
+  channels/      渠道接口：lark（轮询私聊 / @Yi）、meego（飞书项目）、doc（云文档评论）、bot（长连接、卡片回调）；poll / listen / send
   cards.ts       卡片按钮的统一入口：草稿、agent 任务、起草失败
   devcard.ts     agent 任务的通知卡片
   lookup.ts      链式召回：agent 按 ID 查消息、分派、草稿、任务、事件流
@@ -51,6 +52,7 @@ server/          后端（Node 直接跑 TypeScript）
   pipeline.ts    四段模型：trigger -> route -> action -> result 的落库与查询（docs/pipeline.md）
   poller.ts      轮询主循环：每轮把各渠道拉一遍
   meego.ts       飞书项目（meegle CLI）
+  doc.ts         云文档评论通知：读评论串、判断是否还要回、发回评论串
   qa.ts          Yi 私聊机器人：提问、草稿指令、追问任务、记住
   dev.ts         agent 任务（dev 在独立 worktree 改代码）
   tasks.ts       看板的任务模型、执行日志

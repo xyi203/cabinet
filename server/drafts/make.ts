@@ -4,7 +4,7 @@ import { PATHS, SESSION_MAX_TOKENS } from "../config.ts";
 import { routeRules } from "../rules.ts";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
-import type { MeegoCard } from "../db/schema.ts";
+import type { DocRef, MeegoCard } from "../db/schema.ts";
 import { expandForward, FORWARD_PLACEHOLDER, getMessage, imageKeys, imagesNote, saveImage, sendTextAsUser } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import {
@@ -21,6 +21,7 @@ import {
 	sessionKey,
 	withTier,
 } from "../agent/router.ts";
+import { docContext } from "../doc.ts";
 import { meegoContext } from "../meego.ts";
 import {
 	decide,
@@ -186,7 +187,7 @@ const sinceLast = (msgs: Message[], sec: number) => msgs.at(-1)!.create_time / 1
  */
 async function waitBeforeDraft(chat: ChatRef, msgs: Message[]) {
 	const { window, delay, p2p } = routeRules().yiActive;
-	if (chat.chat_mode === "meego") return;
+	if (chat.chat_mode === "meego" || chat.chat_mode === "doc") return;
 	let until = chat.chat_mode === "p2p" && p2p > 0 ? sinceLast(msgs, p2p) : 0;
 	if (delay > 0) {
 		try {
@@ -360,7 +361,8 @@ export function draftNow(messageId: string): boolean {
 export async function replyQueued(messageId: string, text: string) {
 	const i = inflight.get(messageId);
 	if (!i) throw new DraftError("这条已经起草完或不在排队了");
-	if (i.chatMode === "meego") throw new DraftError("飞书项目评论还不能在这里直接回，等草稿出来再改");
+	if (i.chatMode === "meego" || i.chatMode === "doc")
+		throw new DraftError(`${i.chatMode === "doc" ? "云文档" : "飞书项目"}评论还不能在这里直接回，等草稿出来再改`);
 	const m = await getMessage(messageId);
 	if (!m) throw new DraftError("读不到原消息，可能已经撤回了");
 	const p2p = i.chatMode === "p2p";
@@ -385,16 +387,21 @@ const replyRefs = (m: Message) => (m.root_id && m.root_id !== m.message_id ? roo
  */
 function triggerOf(chat: ChatRef, m: Message, follow?: string): TriggerInput {
 	const meego = m.meego as MeegoCard | undefined;
+	const doc = m.doc as DocRef | undefined;
 	const refs = [...replyRefs(m), ...(follow ? [follow] : [])];
 	return {
-		channel: chat.chat_mode === "meego" ? "meego" : "lark",
+		channel: chat.chat_mode === "meego" || chat.chat_mode === "doc" ? chat.chat_mode : "lark",
 		externalId: m.message_id,
-		thread: meego ? `meego:${meego.workItemId}` : `lark:${chat.chat_id}${m.thread_id ? `#${m.thread_id}` : ""}`,
+		thread: meego
+			? `meego:${meego.workItemId}`
+			: doc
+				? `doc:${doc.commentId}`
+				: `lark:${chat.chat_id}${m.thread_id ? `#${m.thread_id}` : ""}`,
 		refs: refs.length ? refs : undefined,
 		actorId: m.sender.id,
 		actorName: m.sender.name || m.sender.id,
 		text: m.content,
-		url: meego?.url,
+		url: meego?.url ?? doc?.url,
 		at: m.create_time / 1000,
 	};
 }
@@ -407,7 +414,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 	const last = msgs.at(-1)!;
 	// 没带链接的「已更新，继续 CR」：认出是在催前面哪个 MR 的复审（认不准的留给 Yi 定）
 	const follow: MrFollow | undefined =
-		chat.chat_mode === "meego"
+		chat.chat_mode === "meego" || chat.chat_mode === "doc"
 			? undefined
 			: mrFollowup({
 					thread: triggerOf(chat, last).thread,
@@ -429,6 +436,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 		senderName: last.sender.name || last.sender.id,
 		text: msgs.map((m) => m.content).join("\n"),
 		meego: (last.meego as MeegoCard) ?? null,
+		doc: (last.doc as DocRef) ?? null,
 	};
 	const label = draftLabel(source);
 	const started = now();
@@ -436,8 +444,11 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 	// 发来要预审的 MR：排队、等 Yi、预审之前先回个 Get，对方知道收到了；手动重试不再回。催复审的同样处理
 	const mrMsg = msgs.findLast((m) => MR_RE.test(m.content)) ?? (follow?.ref ? last : undefined);
 	if (mrMsg && !attempt) await ackMr(chat.chat_mode, mrMsg).catch((e) => log("MR 回 Get 失败", e));
-	// 群里 @Yi 的（含话题里的）：Yi 要的是马上去查，不等他聊完，也不等批准
-	const direct = routeRules().approval.group && chat.chat_mode !== "p2p" && chat.chat_mode !== "meego";
+	// 群里 @Yi 的（含话题里的）、文档评论里 @Yi 的：Yi 要的是马上去查，不等他聊完，也不等批准。
+	// 文档评论里没 @Yi、只是他参与的评论串有了新回复，和私聊一样先分诊
+	const direct =
+		routeRules().approval.group &&
+		(chat.chat_mode === "doc" ? Boolean(source.doc?.mention) : chat.chat_mode !== "p2p" && chat.chat_mode !== "meego");
 	const self: Drafting = { msgs, mr: Boolean(mrMsg) };
 	const pass = (first: boolean) =>
 		locks.run(`draft-${chat.chat_id}`, async () => {
@@ -532,6 +543,9 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			if (chat.chat_mode === "meego" && source.meego) {
 				ctx = await meegoContext(source.meego);
 				source.context = ctx.slice(-2000);
+			} else if (chat.chat_mode === "doc" && source.doc) {
+				ctx = await docContext(source.doc);
+				source.context = ctx.slice(-2000);
 			} else {
 				const got = await gatherContext(chat, msgs);
 				const { related, recent } = got;
@@ -569,7 +583,8 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				if (info.tier === "ack" && msgs.some((m) => imageKeys(m.content).length))
 					info = { ...info, tier: "answer", rule: `${info.rule}（带截图，升到 answer）` };
 				// 群里 @Yi 的一般问题也按 deep 档去查
-				if (direct && info.tier === "answer") info = { ...info, tier: "deep", rule: `${info.rule}（群里 @Yi，按 deep 查）` };
+				if (direct && info.tier === "answer")
+					info = { ...info, tier: "deep", rule: `${info.rule}（${chat.chat_mode === "doc" ? "文档评论里" : "群里"} @Yi，按 deep 查）` };
 				// 寒暄确认不需要前文，不接续也不挂订阅
 				// 拿不准是哪个 MR 时不接 MR 的会话：接上就等于替 Yi 挑了一个；认定了的只接这个 MR 的会话
 				const otherMr = follow && (!follow.ref || (sub?.info?.mrIid && `gitlab:${sub.info.mrProject}!${sub.info.mrIid}` !== follow.ref));
@@ -631,6 +646,13 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				hint =
 					"这是飞书项目工作项下的评论，回复会以 Yi 的身份发成一条新评论，只能是文字，不要用【表情】【表情包】；" +
 					`可以用 meegle 只读命令查更多信息，例如 \`meegle workitem get --project-key ${mg.projectKey} --work-item-id ${mg.workItemId}\`。`;
+			} else if (chat.chat_mode === "doc" && source.doc) {
+				const doc = source.doc;
+				ctx = `${ctx}\n\n需要回复的新评论：\n${source.text}`;
+				where = `云文档「${source.chatName}」（${doc.url}）的评论里${doc.mention ? " @Yi" : "回复了 Yi 参与的评论串"}`;
+				hint =
+					`这是云文档里的评论，回复会以 Yi 的身份发${doc.whole ? "成一条新的全文评论" : "到同一个评论串"}，只能是文字，不要用【表情】【表情包】；` +
+					`评论只带了划线的那一段，要看文档全文用 \`lark-cli docs +fetch --doc ${doc.url} --as user\`。`;
 			} else {
 				where = chat.chat_mode === "p2p" ? "私聊" : `群「${source.chatName}」里 @Yi`;
 				hint = stickerHint();
@@ -677,6 +699,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 export function originLabel(chat: Pick<ChatRef, "chat_mode" | "name">, source: Pick<Source, "senderName">) {
 	if (chat.chat_mode === "p2p") return `${source.senderName} 私聊你的消息`;
 	if (chat.chat_mode === "meego") return `${source.senderName} 在飞书项目「${chat.name}」的评论`;
+	if (chat.chat_mode === "doc") return `${source.senderName} 在云文档「${chat.name}」的评论`;
 	return `${source.senderName} 在群「${chat.name}」@你的消息`;
 }
 

@@ -9,7 +9,7 @@ export const drafts = sqliteTable(
 	{
 		id: text("id").primaryKey(),
 		chatId: text("chat_id").notNull(),
-		chatMode: text("chat_mode").notNull(), // p2p / group / meego
+		chatMode: text("chat_mode").notNull(), // p2p / group / meego / doc
 		chatName: text("chat_name").notNull().default(""),
 		replyTo: text("reply_to").notNull(),
 		threadId: text("thread_id"),
@@ -19,6 +19,7 @@ export const drafts = sqliteTable(
 		/** 起草时补齐的上下文（被回复的消息、话题、对方紧挨着发的消息），给 Yi 和改写时用 */
 		context: text("context").notNull().default(""),
 		meego: text("meego", { mode: "json" }).$type<MeegoCard | null>(),
+		doc: text("doc", { mode: "json" }).$type<DocRef | null>(),
 		agent: text("agent"),
 		session: text("session"),
 		route: text("route"),
@@ -207,6 +208,23 @@ export interface MeegoCard {
 	comment: string;
 	projectKey?: string;
 	notifiedAt?: string;
+}
+
+/** 云文档评论通知：通知到 Yi 的那条回复在哪篇文档的哪个评论串里 */
+export interface DocRef {
+	fileToken: string;
+	fileType: string;
+	commentId: string;
+	replyId: string;
+	url: string;
+	/** 读不到标题（没开文档元数据权限）时为空 */
+	title: string;
+	/** 评论划的那段原文；全文评论没有 */
+	quote: string;
+	/** 全文评论：接口不能在评论串里回复，只能另发一条全文评论 */
+	whole: boolean;
+	/** 这条里 @ 了 Yi；否则只是 Yi 参与的评论串有了新回复 */
+	mention: boolean;
 }
 
 export type Draft = typeof drafts.$inferSelect;

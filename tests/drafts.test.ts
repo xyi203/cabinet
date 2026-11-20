@@ -119,3 +119,13 @@ test("轮询连续失败时间隔翻倍，最多 60 秒", async () => {
 		[5, 10, 20, 40, 60, 60],
 	);
 });
+
+test("云文档评论：评论串能订阅接续，草稿发回 doc 渠道", async () => {
+	const { subscribable } = await import("../server/pipeline.ts");
+	const { channelOfDraft } = await import("../server/channels/index.ts");
+	const { docUrl } = await import("../server/doc.ts");
+	assert.deepEqual(subscribable("doc:7706", []), ["doc:7706"]);
+	assert.equal(channelOfDraft({ chatMode: "doc" }).name, "doc");
+	assert.equal(channelOfDraft({ chatMode: "group" }).name, "lark");
+	assert.equal(docUrl("sheet", "abc"), "https://www.feishu.cn/sheets/abc");
+});

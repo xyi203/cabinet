@@ -28,7 +28,7 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 	const [busy, setBusy] = useState(false);
 	const [msg, setMsg] = useState<Msg>(null);
 	const [dispatching, setDispatching] = useState(false);
-	const isMeego = d.chatMode === "meego";
+	const isMeego = d.chatMode === "meego" || d.chatMode === "doc";
 	// 嵌在任务详情里时，上面的时间线已经有原消息、来源和时间
 	const embedded = useContext(Embedded);
 	// 表情、表情包草稿：文字框空着时，「发送」发的就是 AI 建议的那个
@@ -109,10 +109,15 @@ export function DraftDrawer({ draft: d, task, onClose }: { draft: Draft; task?: 
 					打开工作项
 				</a>
 			)}
+			{d.doc && (
+				<a href={d.doc.url} target="_blank" rel="noreferrer">
+					打开文档
+				</a>
+			)}
 			{d.context && (
 				// 前文短就直接展开，长了折起来，免得把回复框挤到下面
 				<details className="ctxwrap" open={d.context.length <= 300}>
-					<summary>{d.chatMode === "meego" ? "工作项里最近的评论" : "前面的聊天"}</summary>
+					<summary>{d.chatMode === "meego" ? "工作项里最近的评论" : d.chatMode === "doc" ? "文档和评论串" : "前面的聊天"}</summary>
 					<blockquote className="ctx">{d.context}</blockquote>
 				</details>
 			)}

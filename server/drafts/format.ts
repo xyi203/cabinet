@@ -89,5 +89,6 @@ export function stickerHint() {
 
 export function draftLabel(s: { chatMode: string; chatName: string; senderName: string }) {
 	if (s.chatMode === "meego") return `飞书项目 · ${s.senderName}`;
+	if (s.chatMode === "doc") return `云文档 · ${s.senderName}`;
 	return s.chatMode === "p2p" ? s.senderName : `${s.chatName} · ${s.senderName}`;
 }

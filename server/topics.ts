@@ -31,7 +31,7 @@ const SLOW = 1800;
  * 从已盯话题里拉到的回复，话题已经在盯，直接跳过
  */
 export function watchTopic(chat: ChatRef, m: Message) {
-	if (chat.chat_mode === "p2p" || chat.chat_mode === "meego") return;
+	if (chat.chat_mode === "p2p" || chat.chat_mode === "meego" || chat.chat_mode === "doc") return;
 	const root = m.root_id ?? m.message_id;
 	if (getKv(watchKey(root), null)) return;
 	const at = m.create_time / 1000;

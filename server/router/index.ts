@@ -1,5 +1,5 @@
 // Router：所有进来的事件先到这里，判断这是哪件事、交给谁（docs/router-worker.md §3、docs/flow.md §3）。
-// 渠道只负责把消息拉回来（lark 轮询、meego 轮询、机器人长连接），这里按固定顺序判断：
+// 渠道只负责把消息拉回来（lark 轮询、meego 轮询、机器人长连接、云文档评论通知），这里按固定顺序判断：
 //   去重 → 过滤（告警、Yi 自己发的、不是找 Yi 的）→ 指令（记住、回复任务通知、草稿指令）→ 交给对应的执行模块
 // 归属（追加到已有的事）在 pipeline.decide → taskstore.assignTask 里做；攒批在 alerts.ts；分诊在 drafts/make.ts 的 route()。
 // 看板派活、定时任务见 router/board.ts。执行（起草、问答、告警批、agent 任务）仍在各自模块；每次判断都经 decide() 落库，就是路由记录
@@ -8,8 +8,10 @@ import { ALERT_ENABLED, OWNER_OPEN_ID } from "../config.ts";
 import { asksYi } from "../drafts/context.ts";
 import { abortIfYiReplied, makeDraft, nudgeApproval } from "../drafts/make.ts";
 import { expireDrafts } from "../drafts/replied.ts";
+import { docMessage } from "../doc.ts";
 import { type ChatRef, inflight } from "../drafts/store.ts";
 import { isHandled, markHandled } from "../handled.ts";
+import type { DocNotice } from "../lark/bot.ts";
 import type { BotEvent, Message } from "../lark/types.ts";
 import { decide } from "../pipeline.ts";
 import { accept, answer, botTrigger, devReply, draftCommand, firstSeen, remember, stripMentions } from "../qa.ts";
@@ -23,7 +25,7 @@ export { cronSkip, routeBoard } from "./board.ts";
 export function routeDraft(chat: ChatRef, msgs: Message[]) {
 	if (!msgs.length) return;
 	log(
-		chat.chat_mode === "meego" ? "待起草（飞书项目）" : "待起草",
+		chat.chat_mode === "meego" ? "待起草（飞书项目）" : chat.chat_mode === "doc" ? "待起草（云文档评论）" : "待起草",
 		chat.chat_id,
 		msgs.map((m) => m.message_id),
 	);
@@ -74,6 +76,17 @@ export function routeChat(chat: ChatRef, msgs: Message[]) {
 export function routeMeego(chat: ChatRef, msgs: Message[]) {
 	for (const m of msgs) queue(chat, m, `飞书项目 · ${m.sender.name}`, m.content);
 	routeDraft(chat, msgs);
+}
+
+/** 云文档评论通知：读出评论内容后交给起草（读评论要调接口，放后台，长连接要 3 秒内确认） */
+export function routeDoc(n: DocNotice) {
+	void docMessage(n)
+		.then((got) => {
+			if (!got) return;
+			queue(got.chat, got.msg, `云文档 · ${got.msg.sender.name}`, got.msg.content);
+			routeDraft(got.chat, [got.msg]);
+		})
+		.catch((e) => log("处理云文档评论通知失败", n.fileToken, n.commentId, e));
 }
 
 /** 机器人长连接收到的消息：只认 Yi 私聊机器人；「记住」→ 指令（回复任务通知、草稿指令）→ 问答 */

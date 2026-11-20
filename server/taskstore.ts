@@ -17,7 +17,7 @@ const CLOSED = new Set(["done", "cancelled"]);
 export const isClosed = (status: string) => CLOSED.has(status);
 
 /** 话题、工作项、MR、机器人话题这类「一件事」的事件流：关闭后重开时间（routeRules().reopen）内再来消息就重开；私聊和群的主线只接没关闭的 */
-const topical = (thread: string) => thread.includes("#") || /^(meego|gitlab):/.test(thread);
+const topical = (thread: string) => thread.includes("#") || /^(meego|doc|gitlab):/.test(thread);
 
 const newId = () => `tsk-${Math.round(now() * 1000).toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 
@@ -373,7 +373,7 @@ export function backfillSkipped(days = 1) {
 		.where(and(isNull(schema.routes.taskId), eq(schema.routes.actionKind, "none"), gte(schema.routes.at, now() - days * 86400)))
 		.orderBy(schema.routes.at)
 		.all()
-		.filter((r) => r.rule.startsWith("跳过：") && r.triggers.length && r.triggers.every((t) => /^(lark|meego):/.test(t)));
+		.filter((r) => r.rule.startsWith("跳过：") && r.triggers.length && r.triggers.every((t) => /^(lark|meego|doc):/.test(t)));
 	const ids = new Set<string>();
 	for (const r of rows) {
 		const taskId = assignTask(r.triggers, { actionKind: "none", keep: true }, r.at);

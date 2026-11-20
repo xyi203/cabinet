@@ -59,7 +59,7 @@ async function rerun(d: Draft, requestId: string, ask: string, memoryQuery: stri
 	const agent = withTier(loadAgents().agents[name] ?? {}, mr ? "mr" : TASK_TIER);
 	// 早于上下文功能的草稿没有存前文，现补
 	let context = d.context;
-	if (!context && d.chatMode !== "meego") {
+	if (!context && d.chatMode !== "meego" && d.chatMode !== "doc") {
 		const orig = await getMessage(d.replyTo).catch(() => undefined);
 		if (orig) context = (await gatherContext({ chat_id: d.chatId, chat_mode: d.chatMode }, [orig])).related;
 	}

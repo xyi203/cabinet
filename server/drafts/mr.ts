@@ -25,7 +25,7 @@ export const MR_ACK_EMOJI = "Get";
  * 不用 Yi 的身份：Yi 回过表情的消息会被当成「已亲自回复」，草稿直接作废。机器人不在这个会话里（别人私聊 Yi）时回不上，只记日志
  */
 export async function ackMr(chatMode: string, m: Pick<Message, "message_id">) {
-	if (chatMode === "meego") return;
+	if (chatMode === "meego" || chatMode === "doc") return;
 	const key = `mrack:${m.message_id}`;
 	if (getKv(key, false)) return;
 	setKv(key, true);
