@@ -243,6 +243,8 @@ export interface Issue {
 
 export interface State {
 	now: number;
+	/** 前端构建版本，变了说明服务重装过，页面要刷新 */
+	build?: string;
 	stats: {
 		requests: number;
 		replied: number;

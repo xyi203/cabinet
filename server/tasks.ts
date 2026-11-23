@@ -1,5 +1,6 @@
 // 看板状态：以「一件事」（tasks 表，见 taskstore.ts）为单位，每件带状态、等 Yi 做什么、时间线和挂着的产出。
 // 还没分派的排队消息、分派前就失败的、记忆冲突，也按同样的形状给出（id 带前缀，不在 tasks 表里）。
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { and, count, desc, eq, gte, inArray, isNull, or } from "drizzle-orm";
@@ -369,6 +370,17 @@ function withMr(drafts: Draft[]) {
 	return drafts.map((d) => (mrs.has(d.id) ? { ...d, mr: mrs.get(d.id) } : d));
 }
 
+/** 前端这一版的标识：构建产物里带哈希的文件名，重新构建才会变（只重启不变）。打开着的页面发现它变了就自己刷新；
+ * 开发模式没有 dist 就是空，页面不比对 */
+const BUILD = (() => {
+	try {
+		const files = readdirSync(path.join(PATHS.web, "client", "assets")).toSorted();
+		return createHash("sha1").update(files.join("\n")).digest("hex").slice(0, 12);
+	} catch {
+		return "";
+	}
+})();
+
 export function dashboardState() {
 	const drafts = db().select().from(schema.drafts).orderBy(desc(schema.drafts.created)).limit(300).all();
 	const records = recentRecords(1000);
@@ -417,6 +429,7 @@ export function dashboardState() {
 		}),
 		issues: watchdogIssues(),
 		quota: quotaNow(),
+		build: BUILD,
 	};
 }
 

@@ -19,7 +19,7 @@ import { RowActions } from "../components/Actions";
 import { Workbench } from "../components/Workbench";
 import { type DevTask, type State, fetchState, post } from "../lib/api";
 import { ago, date, titleOf, waitingOn } from "../lib/format";
-import { useLiveUpdates } from "../lib/live";
+import { useLiveUpdates, useReloadOnNewBuild } from "../lib/live";
 import { pct, span } from "../components/ui";
 import type { QuotaWindow } from "../lib/api";
 
@@ -108,6 +108,8 @@ function Dashboard() {
 	const [connected, setConnected] = useState(true);
 	const { data: state, error } = useQuery({ queryKey: ["state"], queryFn: fetchState, refetchInterval: connected ? 15_000 : 5_000 });
 	useLiveUpdates(useCallback((c: boolean) => setConnected(c), []));
+	const tab0 = search.tab && (TAB_ALIASES[search.tab] ?? search.tab);
+	useReloadOnNewBuild(state?.build, `${view}:${tab0 ?? ""}`, view === "work");
 
 	const go = (v: View, extra: { story?: string; tab?: string; sched?: string; agent?: string } = {}) =>
 		void navigate({ to: "/", search: v === "work" ? {} : { view: v, ...extra } });

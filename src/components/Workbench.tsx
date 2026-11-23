@@ -8,6 +8,7 @@ import { AGENT_NAME, ago, isBare, money, pillOf, requestOf, titleOf, waitingOn }
 import { type Actions, type PickItem, type Target, Choices, actionsOf, draftOf, matchText, targetsOf, useRunner } from "./Choices";
 import { Docked, Embedded } from "./Drawer";
 import { TaskPanel } from "./TaskPanel";
+import { holdReload } from "../lib/live";
 import { toast } from "./Toast";
 
 /** 等你处理里先放要你动手的：审批、发送、拍板、失败，最后是看结论 */
@@ -141,6 +142,12 @@ export function Workbench({
 		...(stickers?.emoji ?? []).map((k) => ({ key: k, kind: "reaction" as const })),
 		...(stickers?.stickers ?? []).map((k) => ({ key: k, kind: "sticker" as const })),
 	];
+	// 改了还没发的草稿：服务重装后先别自动刷新页面
+	const unsentEdit = Object.entries(edits).some(([id, text]) => {
+		const d = s.drafts.find((x) => x.id === id);
+		return !!d && text !== d.text && wait.some((t) => t.drafts.at(-1) === id);
+	});
+	useEffect(() => holdReload("draft-edits", unsentEdit), [unsentEdit]);
 	const draft = cur ? draftOf(cur, s) : undefined;
 	const actions = actionsOf(cur, {
 		s,
@@ -297,6 +304,7 @@ function Dock({
 	const { busy, exec } = useRunner();
 	const [text, setText] = useState("");
 	const [hint, setHint] = useState<string>();
+	useEffect(() => holdReload("dock", !!text.trim()), [text]);
 	// 关掉的卡片：记的是哪件事的哪个状态，状态变了（比如出了新草稿）卡片会重新出来
 	const [closed, setClosed] = useState<string>();
 	const stamp = cur ? `${cur.id}:${cur.status}:${cur.need}:${cur.drafts.at(-1) ?? ""}:${cur.approvals.length}` : "";
