@@ -10,14 +10,16 @@ const RELATED_WINDOW_MS = 10 * 60_000;
 // 对方连着发、Yi 还没回的几条是同一段话：这段时间内的合成一份草稿，不各起一张
 const BURST_WINDOW_MS = 30 * 60_000;
 
-/** 这条消息要不要替 Yi 起草：人发的、不是 Yi 自己；私聊都算，群里要 @Yi（同时 @机器人的归机器人事件） */
+/**
+ * 这条消息要不要替 Yi 起草：人发的、不是 Yi 自己；私聊都算，群里要 @Yi 或 @机器人。
+ * 别人 @机器人 和 @Yi 一样起草、等 Yi 审核后再发（机器人不直接回）；Yi 自己 @机器人 的走机器人事件马上执行
+ */
 export function asksYi(chatMode: string, m: Message): boolean {
 	const mentions = new Set(m.mentions.map((x) => x.id));
 	return (
 		m.sender.sender_type === "user" &&
 		m.sender.id !== OWNER_OPEN_ID &&
-		!mentions.has(BOT_OPEN_ID) &&
-		(chatMode === "p2p" || mentions.has(OWNER_OPEN_ID))
+		(chatMode === "p2p" || mentions.has(OWNER_OPEN_ID) || mentions.has(BOT_OPEN_ID))
 	);
 }
 

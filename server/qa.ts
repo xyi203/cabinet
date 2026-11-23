@@ -30,10 +30,13 @@ export function firstSeen(id: string) {
 	return true;
 }
 
-export function accept(ev: BotEvent): boolean {
-	if (ev.senderType !== "user" || ev.senderId === BOT_OPEN_ID) return false;
-	// 只认 Yi 私聊机器人；群里 @机器人问答已下线（docs/redesign.md）
-	return ev.chatType === "p2p" && ev.senderId === OWNER_OPEN_ID;
+export function accept(ev: Pick<BotEvent, "chatType" | "senderType" | "senderId" | "mentions">): boolean {
+	if (ev.senderType !== "user" || ev.senderId !== OWNER_OPEN_ID) return false;
+	if (ev.chatType === "p2p") return true;
+	// Yi 自己在群里 @机器人 是给助手的指令，马上执行，回在原话题里；别人 @机器人 的不在这里直接回，
+	// 由轮询那一路当成找 Yi 的消息起草、等 Yi 审核（drafts/context.ts 的 asksYi）。
+	// 要真的 @ 了机器人：应用要是开了收群里全部消息，Yi 在群里说的每句话都会推过来
+	return ev.mentions.some((m) => m.id === BOT_OPEN_ID);
 }
 
 export function stripMentions(ev: Pick<BotEvent, "content" | "mentions">) {
@@ -234,7 +237,7 @@ export async function answer(ev: BotEvent, attempt?: string) {
 					prompt: await buildPrompt(ev, text),
 					agent,
 					agentName,
-					origin: { label: "你私聊机器人的提问" },
+					origin: { label: ev.chatType === "p2p" ? "你私聊机器人的提问" : "你在群里 @机器人的指令" },
 					label,
 					memory: { query: text, scope: { personId: ev.senderId === OWNER_OPEN_ID ? undefined : ev.senderId, chatId: ev.chatId } },
 				});

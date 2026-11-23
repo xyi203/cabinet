@@ -4,7 +4,7 @@
 // 归属（追加到已有的事）在 pipeline.decide → taskstore.assignTask 里做；攒批在 alerts.ts；分诊在 drafts/make.ts 的 route()。
 // 看板派活、定时任务见 router/board.ts。执行（起草、问答、告警批、agent 任务）仍在各自模块；每次判断都经 decide() 落库，就是路由记录
 import { addAlert, batching, isAlert } from "../alerts.ts";
-import { ALERT_ENABLED, OWNER_OPEN_ID } from "../config.ts";
+import { ALERT_ENABLED, BOT_OPEN_ID, OWNER_OPEN_ID } from "../config.ts";
 import { asksYi } from "../drafts/context.ts";
 import { abortIfYiReplied, makeDraft, nudgeApproval } from "../drafts/make.ts";
 import { expireDrafts } from "../drafts/replied.ts";
@@ -70,7 +70,8 @@ export function routeChat(chat: ChatRef, msgs: Message[]) {
 				text: m.content,
 				at: m.create_time / 1000,
 			});
-			if (m.sender.id === OWNER_OPEN_ID) {
+			// Yi @机器人 是给助手下指令（机器人长连接那一路去执行），不是在回对方，不算亲自回复
+			if (m.sender.id === OWNER_OPEN_ID && !m.mentions.some((x) => x.id === BOT_OPEN_ID)) {
 				expireDrafts(chat, m);
 				abortIfYiReplied(chat, m);
 			}
@@ -99,7 +100,7 @@ export function routeDoc(n: DocNotice) {
 		.catch((e) => log("处理云文档评论通知失败", n.fileToken, n.commentId, e));
 }
 
-/** 机器人长连接收到的消息：只认 Yi 私聊机器人；「记住」→ 指令（回复任务通知、草稿指令）→ 问答 */
+/** 机器人长连接收到的消息：只认 Yi 私聊机器人、Yi 在群里 @机器人；「记住」→ 指令（私聊里回复任务通知、草稿指令）→ 问答 */
 export function routeBot(ev: BotEvent) {
 	if (!ev.messageId || !firstSeen(ev.messageId) || !accept(ev)) return;
 	log("收到", ev.chatId, ev.messageId, stripMentions(ev).slice(0, 80));
