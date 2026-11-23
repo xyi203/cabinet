@@ -5,7 +5,7 @@ import { routeRules } from "../rules.ts";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, deleteKv, getKv, listKv, schema, setKv } from "../db/index.ts";
 import type { DocRef, MeegoCard } from "../db/schema.ts";
-import { expandForward, FORWARD_PLACEHOLDER, getMessage, imageKeys, imagesNote, saveImage, sendTextAsUser } from "../lark/bot.ts";
+import { expandForward, FORWARD_PLACEHOLDER, imageKeys, imagesNote, saveImage } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
 import {
 	ASSISTANT,
@@ -106,10 +106,12 @@ export async function makeDraft(chat: ChatRef, msgs: Message[], onDone?: (ids: s
 			inflight.delete(m.message_id);
 			dismissed.delete(m.message_id);
 			approved.delete(m.message_id);
+			prompted.delete(m.message_id);
 			// 进程退出打断的要留着：重启接回时还得认这个标记
 			if (!interrupted) {
 				deleteKv(dismissKey(m.message_id));
 				deleteKv(approvedKey(m.message_id));
+				deleteKv(askKey(m.message_id));
 			}
 		}
 		changed();
@@ -384,26 +386,27 @@ export function draftNow(messageId: string): boolean {
 }
 
 /**
- * 还没起草的飞书消息（排队、你在聊先等着）：Yi 在看板上自己写一句，以他的身份直接回，和他在飞书里亲自回一样。
- * 不唤醒等待：等待循环下次检查（或轮到起草前）会看到这条回复，按「Yi 已亲自回复」跳过起草；
- * 立刻唤醒的话，起草前那次检查万一还读不到刚发的消息，就会白起草一份
+ * 还没起草的消息（排队、在等批准、你在聊先等着）：Yi 在看板上交代一句（怎么回、先去查什么），记在消息上并立即起草。
+ * 起草时带上这句话；草稿照样要他审过才发。以前这里是把他写的原样以他的身份发出去，输入框一时是指令、一时是回复，容易误发
  */
-export async function replyQueued(messageId: string, text: string) {
-	const i = inflight.get(messageId);
-	if (!i) throw new DraftError("这条已经起草完或不在排队了");
-	if (i.chatMode === "meego" || i.chatMode === "doc")
-		throw new DraftError(`${i.chatMode === "doc" ? "云文档" : "飞书项目"}评论还不能在这里直接回，等草稿出来再改`);
-	const m = await getMessage(messageId);
-	if (!m) throw new DraftError("读不到原消息，可能已经撤回了");
-	const p2p = i.chatMode === "p2p";
-	const target = p2p ? { chatId: i.chatId } : { replyTo: messageId, inThread: Boolean(m.thread_id) };
-	// 群里和草稿发出时一样 @ 对方；uuid 带时间，同一条消息回第二句不会被飞书当重复请求去重
-	await sendTextAsUser(
-		target,
-		p2p ? text : `<at user_id="${m.sender.id}"></at> ${text}`,
-		`q-${messageId}-${Date.now().toString(36)}`.slice(0, 50),
-	);
-	log("Yi 在看板上直接回复了排队的消息", i.chatId, messageId);
+const askKey = (mid: string) => `draft-ask:${mid}`;
+const askOf = (msgs: Message[]) =>
+	msgs
+		.map((m) => getKv<string | null>(askKey(m.message_id), null))
+		.filter(Boolean)
+		.join("\n");
+
+/** 起草 prompt 已经拼好的消息：这之后交代的话赶不上这一轮 */
+const prompted = new Set<string>();
+
+export function draftWithAsk(messageId: string, text: string): "started" | "late" {
+	if (!inflight.has(messageId)) throw new DraftError("这条已经起草完或不在排队了");
+	if (prompted.has(messageId)) return "late";
+	setKv(askKey(messageId), text);
+	log("Yi 交代了怎么处理，立即起草", messageId);
+	// 在等（排队等 deep、等批准）的叫醒它；在排队等名额的轮到时会带上这句话
+	draftNow(messageId);
+	return "started";
 }
 
 /** 同一批消息默认同一个 requestId，进程重启后接回原来那次运行；手动重试带 attempt，换一个 */
@@ -625,6 +628,9 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				// 群里 @Yi 的一般问题也按 deep 档去查
 				if (direct && info.tier === "answer")
 					info = { ...info, tier: "deep", rule: `${info.rule}（${chat.chat_mode === "doc" ? "文档评论里" : "群里"} @Yi，按 deep 查）` };
+				// Yi 交代了要做的事（去查库、捞日志……）：寒暄、一般档没有工具或查得浅，按 deep 档去做
+				if (askOf(msgs) && (info.tier === "ack" || info.tier === "answer"))
+					info = { ...info, tier: "deep", rule: `${info.rule}（Yi 交代了怎么处理，按 deep 做）` };
 				// 寒暄确认不需要前文，不接续也不挂订阅
 				// 拿不准是哪个 MR 时不接 MR 的会话：接上就等于替 Yi 挑了一个；认定了的只接这个 MR 的会话
 				// 几个 MR 各一份时同理：只接这份那个 MR 的会话
@@ -712,6 +718,12 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				extra +=
 					`\n\n对方像是改完了在催复审，但没带链接，最近在这里提过的 MR 不止一个：\n${follow.candidates.map((r) => `- ${parseMrRef(r)?.url ?? r}`).join("\n")}\n` +
 					"消息里没点明是哪个（仓库名、MR 编号）就不要自己挑一个审：只输出一行 `【无需回复】要你拍板：对方说的是哪个 MR`，候选写进【备注】。";
+			const ask = askOf(msgs);
+			for (const m of msgs) prompted.add(m.message_id);
+			if (ask)
+				extra +=
+					`\n\nYi 看过这条消息，交代了：「${ask}」\n按他说的做（要查库、捞日志、看代码的先查清楚再写）；` +
+					"他写的像是要回给对方的原话，就照他的意思写成回复。草稿还要他审过才发。";
 			// 链式召回的起点：这条消息和它所在事件流的 ID，需要以前的来龙去脉时用 lookup 查
 			const ids = `（这条消息的 ID：${triggerIds.at(-1)}；所在事件流：thread:${thread}${refs.map((r) => `；提到 ${r}`).join("")}）`;
 			// Yi 在受众页给这个人 / 这个群设的口径

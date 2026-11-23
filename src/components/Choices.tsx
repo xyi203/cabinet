@@ -306,15 +306,17 @@ export function actionsOf(t: TaskView | undefined, c: Ctx): Actions {
 					: []),
 				{ ...done, label: "不用做了" },
 			],
-			// 还没起草的飞书消息：输入框里写的就是你的回复，原样以你的身份回给对方，不再转成助手任务
-			typeIn:
-				t.id.startsWith("q:") && t.source === "lark"
-					? {
-							hint: "或者自己回，回车以你的身份直接回复这条消息",
-							advance: true,
-							run: (v) => post("/api/queue/reply", { id: t.id.slice(2), text: v }).then(() => "已发送"),
-						}
-					: undefined,
+			// 还没起草的消息：输入框和别处一样是跟助手说话，写的是怎么处理（怎么回、先去查什么），带着它立即起草，草稿你审过才发
+			typeIn: t.id.startsWith("q:")
+				? {
+						hint: "跟助手说怎么回、先去查什么，它马上起草，草稿你审过才发",
+						advance: true,
+						run: (v) =>
+							post<{ state: string }>("/api/queue/ask", { id: t.id.slice(2), text: v }).then((r) =>
+								r.state === "started" ? "交给助手了，草稿好了会回到「等你」" : "已经在起草了，这句话赶不上这一轮，草稿出来后在草稿上接着说",
+							),
+					}
+				: undefined,
 			slash: [],
 		};
 	// 办完的事上接着说：接着原来的会话做，不另开没有前文的新任务（Yi 在一件办完的事上追问「去查一下 DB 的数据」，

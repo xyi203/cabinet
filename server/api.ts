@@ -39,7 +39,7 @@ import { type Kind, listStickers, resolveSticker } from "./drafts/format.ts";
 import { DraftError, getDraft, LIVE } from "./drafts/store.ts";
 import { LarkError, authorizeUrl, exchangeCode, saveImage, userAuthStatus } from "./lark/bot.ts";
 import { lastPoll, pollNow } from "./poller.ts";
-import { dismissDraft, draftNow, replyQueued } from "./drafts/make.ts";
+import { dismissDraft, draftNow, draftWithAsk } from "./drafts/make.ts";
 import { abortRun, conversationTranscript, running } from "./agent/driver.ts";
 import { modelOptions } from "./agent/models.ts";
 import { closeTask, devDiff, discardDev, dispatch, getDevTask, listRepos, messageDev, pushDev, stopDev } from "./dev.ts";
@@ -377,17 +377,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		pollNow();
 		return send(res, 200, { ok: true, skipped });
 	}
-	// 自己回：还没起草的飞书消息，以 Yi 的身份直接回复原消息（私聊发到会话里）
-	if (p === "/api/queue/reply") {
+	// 还没起草的消息：Yi 交代一句怎么处理，带着这句话立即起草（不直接发给对方）
+	if (p === "/api/queue/ask") {
 		const text = String(body.text ?? "").trim();
-		if (!text) return send(res, 409, { error: "回复是空的，写点什么再发" });
+		if (!text) return send(res, 409, { error: "想让助手怎么处理？" });
 		try {
-			await replyQueued(String(body.id ?? ""), text);
-			return send(res, 200, { ok: true });
+			return send(res, 200, { ok: true, state: draftWithAsk(String(body.id ?? ""), text) });
 		} catch (e) {
 			if (e instanceof DraftError) return send(res, 409, { error: e.message });
-			log("直接回复失败", body.id, e);
-			return send(res, 500, { error: String((e as Error).message).slice(0, 300) });
+			throw e;
 		}
 	}
 	// 不用起草：还在等、排队或正在起草的消息直接记成跳过
