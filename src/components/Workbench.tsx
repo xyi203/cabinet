@@ -54,6 +54,7 @@ const FILTERS: Array<[Filter, string]> = [
 	["queue", "排队"],
 	["done", "完成"],
 ];
+const DOCK_KEY = "cabinet:dock";
 /** 今天完成默认只露这几条，和 Claude 侧栏一样不让历史把正在办的事挤下去 */
 const DONE_SHOWN = 5;
 
@@ -302,9 +303,22 @@ function Dock({
 	onNext: () => void;
 }) {
 	const { busy, exec } = useRunner();
-	const [text, setText] = useState("");
+	// 输入框里的字存在这个标签页里（sessionStorage），页面刷新（比如服务重装后自动刷新）后还在；发出去就清掉。
+	// 工作台要等拿到状态才在浏览器里渲染，服务端渲染不到这里，初值可以直接读
+	const [text, setText] = useState(() => {
+		try {
+			return sessionStorage.getItem(DOCK_KEY) ?? "";
+		} catch {
+			return "";
+		}
+	});
+	useEffect(() => {
+		try {
+			if (text) sessionStorage.setItem(DOCK_KEY, text);
+			else sessionStorage.removeItem(DOCK_KEY);
+		} catch {}
+	}, [text]);
 	const [hint, setHint] = useState<string>();
-	useEffect(() => holdReload("dock", !!text.trim()), [text]);
 	// 关掉的卡片：记的是哪件事的哪个状态，状态变了（比如出了新草稿）卡片会重新出来
 	const [closed, setClosed] = useState<string>();
 	const stamp = cur ? `${cur.id}:${cur.status}:${cur.need}:${cur.drafts.at(-1) ?? ""}:${cur.approvals.length}` : "";
