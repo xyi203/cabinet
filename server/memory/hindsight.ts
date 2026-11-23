@@ -19,7 +19,9 @@ async function call<T>(method: string, path: string, body?: unknown, timeout = 3
 		});
 		text = await res.text();
 	} catch (e) {
-		markDown("hindsight", String((e as Error).message));
+		// fetch 只说 fetch failed，ECONNREFUSED / ENOTFOUND 这类底层原因在 cause 里
+		const code = (e as { cause?: { code?: string } }).cause?.code;
+		markDown("hindsight", `${(e as Error).message}${code ? `（${code}）` : ""}`);
 		throw e;
 	}
 	// 4xx 是请求的问题，服务本身是好的；只有连不上和 5xx 算挂了

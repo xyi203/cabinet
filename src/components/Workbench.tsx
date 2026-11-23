@@ -1,6 +1,6 @@
 // 工作台（docs/router-worker.md §5.1），照 Claude 桌面端排：左边是紧凑的索引——正在运行 / 等你 / 排队 / 今天完成，一行一件事，顶上按状态筛选；
 // 右边是选中那件事的详情（时间线、草稿就地改）；底部是常驻输入框，上面浮着这件事的选项卡（Claude 式编号选项，Choices.tsx），
-// 办完自动跳到下一件等你的事。卡片关掉或没选中事时，输入框里说的话会派给助手当新任务
+// 办完自动跳到下一件等你的事。卡片关掉或没选中事时，输入框里说的话会派给助手当新任务，派出后右边切到这件事
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type State, type TaskView, createAgentTask, fetchDispatch, fetchStickers, pollNow } from "../lib/api";
@@ -106,6 +106,14 @@ export function Workbench({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
+	// 输入框派出去的活：接口回的是 agent 任务 id，看板上那件事要等状态刷新后才有，出现了就打开它
+	const [created, setCreated] = useState<string>();
+	const createdItem = created ? all.find((t) => t.devTasks.includes(created))?.id : undefined;
+	useEffect(() => {
+		if (!createdItem) return;
+		setCreated(undefined);
+		onSelect(createdItem);
+	}, [createdItem, onSelect]);
 	const nextWaiting = () => wait.find((t) => t.id !== cur?.id)?.id;
 	const next = () => onSelect(nextWaiting() ?? cur?.id);
 	useEffect(() => {
@@ -232,6 +240,7 @@ export function Workbench({
 					s={s}
 					actions={actions}
 					inputRef={inputRef}
+					onCreated={setCreated}
 					onAdvance={next}
 					onNext={() => {
 						const n = nextWaiting();
@@ -272,6 +281,7 @@ function Dock({
 	s,
 	actions,
 	inputRef,
+	onCreated,
 	onAdvance,
 	onNext,
 }: {
@@ -279,6 +289,8 @@ function Dock({
 	s: State;
 	actions: Actions;
 	inputRef: React.MutableRefObject<HTMLTextAreaElement | null>;
+	/** 派出了新活（agent 任务 id） */
+	onCreated: (devId: string) => void;
 	onAdvance: () => void;
 	onNext: () => void;
 }) {
@@ -323,7 +335,16 @@ function Dock({
 		const input = follow
 			? { agent: assistant, request: requestOf(follow), instructions: v, title: v, task: follow.id }
 			: { agent: assistant, request: v };
-		if (await exec(() => createAgentTask(input).then(() => "已交给助手，在「正在运行」看进度"))) setText("");
+		let devId = "";
+		const ok = await exec(() =>
+			createAgentTask(input).then((t) => {
+				devId = t.id;
+				return "已交给助手";
+			}),
+		);
+		if (!ok) return;
+		setText("");
+		onCreated(devId);
 	};
 	return (
 		<div className="px-8 pb-6">
