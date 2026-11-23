@@ -10,6 +10,7 @@ import {
 	type TaskView,
 	deleteSchedule,
 	endSchedule,
+	fetchModels,
 	fetchScheduleRuns,
 	fetchSchedules,
 	runSchedule,
@@ -17,13 +18,24 @@ import {
 } from "../lib/api";
 import { AGENT_NAME, hm, money, time, waitingOn, when } from "../lib/format";
 import { confirmDialog } from "./Confirm";
+import { EFFORT, fitEffort } from "./ModelPicker";
+import { type ParsedWhen, WEEK, humanCron, nextRuns, parseOneLine, whenOf } from "../lib/when";
 import { Drawer } from "./Drawer";
 import { Conclusion } from "./AgentUi";
 import { dur } from "./ui";
 import { toast } from "./Toast";
 
 /** until：结束时间（datetime-local 的值，空 = 不自动停）；fixed：按时间点跑的任务原来的说明，时间一栏没改就沿用原来的时间点 */
-type Edit = Pick<Schedule, "name" | "agent" | "prompt"> & { id: string; at: string; until: string; until0: string; fixed?: string };
+type Edit = Pick<Schedule, "name" | "agent" | "prompt"> & {
+	id: string;
+	at: string;
+	until: string;
+	until0: string;
+	fixed?: string;
+	/** 空串 = 跟着助手的默认 */
+	model: string;
+	thinking: string;
+};
 
 /** 秒 ↔ datetime-local 输入框的值（本地时间） */
 const toLocal = (t: number) => new Date(t * 1000).toLocaleString("sv-SE", { hour12: false }).slice(0, 16).replace(" ", "T");
@@ -37,89 +49,58 @@ const editOf = (s: Schedule): Edit => ({
 	until: s.until != null ? toLocal(s.until) : "",
 	until0: s.until != null ? toLocal(s.until) : "",
 	fixed: s.times?.length ? s.cron : undefined,
+	model: s.model ?? "",
+	thinking: s.thinking ?? "",
 });
 
-const WEEK = "日一二三四五六";
-const pad = (n: number) => String(n).padStart(2, "0");
-
-/** 常见的几种 cron 说成人话；认不出的原样给 */
-export function humanCron(cron: string): string {
-	const [mi, h, dom, mon, dow] = cron.trim().split(/\s+/);
-	if (dom !== "*" || mon !== "*") return cron;
-	if (/^\*\/\d+$/.test(mi) && h === "*" && dow === "*") return `每 ${mi.slice(2)} 分钟`;
-	if (mi === "0" && /^\*\/\d+$/.test(h) && dow === "*") return `每 ${h.slice(2)} 小时`;
-	if (/^\d+$/.test(mi) && h === "*" && dow === "*") return +mi ? `每小时第 ${+mi} 分钟` : "每小时整点";
-	if (!/^\d+$/.test(mi) || !/^\d+(,\d+)*$/.test(h)) return cron;
-	const at = h
-		.split(",")
-		.map((x) => `${pad(+x)}:${pad(+mi)}`)
-		.join("、");
-	if (dow === "*") return `每天 ${at}`;
-	if (dow === "1-5") return `每个工作日 ${at}`;
-	if (/^\d(,\d)*$/.test(dow))
-		return `每周${dow
-			.split(",")
-			.map((d) => WEEK[+d % 7])
-			.join("、")} ${at}`;
-	return cron;
+/**
+ * 定时任务用哪个模型：默认跟着助手的配置（按 deep 档跑）；选了模型再出思考强度，只列这个模型支持的几档。
+ * 值是空串时保存成「默认」
+ */
+function ModelChoice({
+	id,
+	model,
+	thinking,
+	onChange,
+}: {
+	id: string;
+	model: string;
+	thinking: string;
+	onChange: (model: string, thinking: string) => void;
+}) {
+	const { data: models } = useQuery({ queryKey: ["models"], queryFn: fetchModels, staleTime: 600_000 });
+	const levels = models?.find((m) => m.id === model)?.levels ?? [];
+	return (
+		<div className="at">
+			<select
+				id={id}
+				value={model}
+				onChange={(e) => {
+					const next = models?.find((m) => m.id === e.target.value);
+					onChange(e.target.value, e.target.value ? fitEffort(next?.levels ?? [], thinking || "medium") : "");
+				}}
+			>
+				<option value="">跟着助手的默认</option>
+				{/* 存着的模型不在列表里了（下线、改名）也照样显示出来，保存时后端会提示 */}
+				{model && models && !models.some((m) => m.id === model) && <option value={model}>{model}</option>}
+				{models?.map((m) => (
+					<option key={m.id} value={m.id}>
+						{m.name}
+					</option>
+				))}
+			</select>
+			{model && levels.length > 1 && (
+				<select value={thinking} aria-label="思考强度" title="越高想得越久、越贵" onChange={(e) => onChange(model, e.target.value)}>
+					{levels.map((l) => (
+						<option key={l} value={l}>
+							思考强度：{EFFORT[l] ?? l}
+						</option>
+					))}
+				</select>
+			)}
+		</div>
+	);
 }
-
-function field(f: string, v: number): boolean {
-	if (f === "*") return true;
-	return f.split(",").some((p) => {
-		if (p.startsWith("*/")) return v % +p.slice(2) === 0;
-		if (p.includes("-")) {
-			const [a, b] = p.split("-").map(Number);
-			return v >= a && v <= b;
-		}
-		return +p === v || (p === "7" && v === 0);
-	});
-}
-
-/** 预览用：接下来 n 次触发时间。只看分、时、周，够覆盖 parseOneLine 生成的写法；日、月有限定的不要拿来预览 */
-export function nextRuns(cron: string, n: number, from: number): Date[] {
-	const [mi, h, , , dow] = cron.trim().split(/\s+/);
-	const out: Date[] = [];
-	const d = new Date(from);
-	d.setSeconds(0, 0);
-	for (let i = 0; i < 31 * 1440 && out.length < n; i++) {
-		d.setMinutes(d.getMinutes() + 1);
-		if (field(mi, d.getMinutes()) && field(h, d.getHours()) && field(dow, d.getDay())) out.push(new Date(d));
-	}
-	return out;
-}
-
-/** 一句话 → 名字 + cron。认「每天 / 每个工作日 / 每周X」+「N 点（M 分 / 半）」，「每 N 分钟 / 小时」；认不出返回 null */
-export function parseOneLine(text: string): { name: string; cron: string } | null {
-	let cron: string | undefined;
-	const every = /每\s*(\d+)\s*(分钟|小时)/.exec(text);
-	if (every) {
-		const n = +every[1];
-		// */0 不是合法 cron；超过一个周期的（每 90 分钟）cron 表达不了，会被当成每小时一次，不如说没认出
-		if (n < 1 || n > (every[2] === "分钟" ? 59 : 23)) return null;
-		cron = every[2] === "分钟" ? `*/${n} * * * *` : `0 */${n} * * *`;
-	} else {
-		const m = /(\d{1,2})\s*[点:：]\s*(半|\d{1,2})?/.exec(text);
-		if (!m) return null;
-		let h = +m[1];
-		const mi = m[2] === "半" ? 30 : m[2] ? +m[2] : 0;
-		if (/下午|晚上/.test(text) && h < 12) h += 12;
-		if (h > 23 || mi > 59) return null;
-		const w = /每周([一二三四五六日天])/.exec(text);
-		const dow = /工作日/.test(text) ? "1-5" : w ? String(w[1] === "天" ? 0 : WEEK.indexOf(w[1])) : "*";
-		cron = `${mi} ${h} * * ${dow}`;
-	}
-	const name =
-		text
-			.replace(/每天|每个?工作日|每周[一二三四五六日天]|每\s*\d+\s*(分钟|小时)|上午|下午|晚上|\d{1,2}\s*[点:：]\s*(半|\d{1,2}\s*分?)?/g, "")
-			.replace(/^[，,。\s]+/, "")
-			.slice(0, 30) || "定时任务";
-	return { name, cron };
-}
-
-/** 编辑时的「时间」：5 段 cron 原样用，否则当一句话解析；认不出返回 null */
-const looksLikeCron = (v: string) => /^[\d*,/-]+(\s+[\d*,/-]+){4}$/.test(v.trim());
-const cronOf = (v: string) => (looksLikeCron(v) ? v.trim() : (parseOneLine(v)?.cron ?? null));
 
 /** 预览里的触发时间：今天、明天直接说；再往后带上星期几，方便核对「工作日」「每周X」 */
 function runAt(d: Date, now: number) {
@@ -177,7 +158,8 @@ export function Schedules({
 	const { data: list } = useQuery({ queryKey: ["schedules"], queryFn: fetchSchedules, refetchInterval: 30_000 });
 	const [edit, setEdit] = useState<Edit | null>(null);
 	const [line, setLine] = useState("");
-	const [parsed, setParsed] = useState<{ name: string; cron: string } | null | undefined>(undefined);
+	const [parsed, setParsed] = useState<ParsedWhen | null | undefined>(undefined);
+	const [pick, setPick] = useState({ model: "", thinking: "" });
 	const [busy, setBusy] = useState(false);
 	// 开发任务要仓库和分支，不能定时跑
 	const choices = agents.filter((a) => a.name !== "dev");
@@ -234,7 +216,9 @@ export function Schedules({
 	);
 
 	function editRow(e: Edit) {
-		const cron = e.fixed && e.at.trim() === e.fixed ? e.fixed : cronOf(e.at);
+		// 按时间点跑的任务时间一栏没改：沿用原来的时间点（不传 times，后端看 cron 没变就留着）
+		const w = e.fixed && e.at.trim() === e.fixed ? { cron: e.fixed } : whenOf(e.at, now * 1000);
+		const cron = w && !w.past ? w.cron : null;
 		// 没动结束时间就不传：输入框只到分钟，原样传回去会把秒抹掉，已过期的也会被当成新设的结束时间
 		const until = e.until === e.until0 ? undefined : fromLocal(e.until);
 		return (
@@ -251,7 +235,11 @@ export function Schedules({
 							placeholder="每天 9 点，或 5 段 cron"
 							title="可以写「每个工作日 10 点」这样的话，也可以写 5 段 cron：分 时 日 月 周"
 						/>
-						{cron ? (
+						{w?.past ? (
+							<span className="bad">这个时间已经过了</span>
+						) : w?.times ? (
+							<span>{w.cron}，跑完自动结束</span>
+						) : cron ? (
 							cron !== e.at.trim() || humanCron(cron) !== cron ? (
 								<span>{humanCron(cron)}</span>
 							) : null
@@ -288,6 +276,13 @@ export function Schedules({
 							</select>
 						</>
 					)}
+					<label htmlFor="sedit-model">模型</label>
+					<ModelChoice
+						id="sedit-model"
+						model={e.model}
+						thinking={e.thinking}
+						onChange={(model, thinking) => setEdit({ ...e, model, thinking })}
+					/>
 					<label htmlFor="sedit-prompt">提示词</label>
 					<textarea id="sedit-prompt" value={e.prompt} onChange={(x) => setEdit({ ...e, prompt: x.target.value })} />
 					<div className="oa">
@@ -297,7 +292,22 @@ export function Schedules({
 							onClick={async () => {
 								if (
 									cron &&
-									(await act(() => saveSchedule({ id: e.id, name: e.name, cron, agent: e.agent, prompt: e.prompt, until }), "已保存"))
+									(await act(
+										() =>
+											saveSchedule({
+												id: e.id,
+												name: e.name,
+												cron,
+												// 改成只跑一次的给新的时间点；改回 cron 的不传，后端看 cron 变了会清掉原来的时间点
+												times: w?.times,
+												agent: e.agent,
+												prompt: e.prompt,
+												until,
+												model: e.model,
+												thinking: e.thinking,
+											}),
+										"已保存",
+									))
 								)
 									setEdit(null);
 							}}
@@ -347,6 +357,12 @@ export function Schedules({
 					<div className="meta">
 						<Cron cron={s.cron} />
 						{s.agent !== "assistant" && <span>交给{AGENT_NAME[s.agent] ?? s.agent}</span>}
+						{s.model && (
+							<span title="到点用这个模型跑">
+								<span className="code">{s.model}</span>
+								{s.thinking ? ` · ${EFFORT[s.thinking] ?? s.thinking}` : ""}
+							</span>
+						)}
 						{s.enabled && s.nextRun && <span className="num">下次 {when(s.nextRun, now)}</span>}
 						{s.until != null &&
 							(s.enabled ? (
@@ -414,7 +430,7 @@ export function Schedules({
 		);
 	}
 
-	const preview = parsed ? nextRuns(parsed.cron, 3, now * 1000) : [];
+	const preview = parsed?.times ? parsed.times.map((t) => new Date(t * 1000)) : parsed ? nextRuns(parsed.cron, 3, now * 1000) : [];
 	return (
 		<>
 			<div className="newbox">
@@ -429,7 +445,10 @@ export function Schedules({
 					placeholder="比如：每个工作日上午 10 点，查一下昨天合进 develop 但还没发布的 MR"
 				/>
 				{parsed === null && (
-					<div className="bad">没认出时间，可以写成「每天 9 点」「每个工作日下午 3 点半」「每周五 17 点」「每 30 分钟」</div>
+					<div className="bad">
+						没认出时间，可以写成「每天 9 点」「每周一三五下午 3 点半」「每月 1 号 10 点」「每 30 分钟」，只跑一次的写「明天 9 点」「周五 15
+						点」「30 分钟后」
+					</div>
 				)}
 				{parsed && (
 					<div className="preview">
@@ -442,12 +461,24 @@ export function Schedules({
 						/>
 						<span>时间</span>
 						<Cron cron={parsed.cron} />
-						<span>接下来</span>
-						<span className="runs num">
-							{preview.map((d) => (
-								<span key={d.getTime()}>{runAt(d, now)}</span>
-							))}
-						</span>
+						<span>{parsed.times ? "跑一次" : "接下来"}</span>
+						{parsed.past ? (
+							<span className="bad">这个时间已经过了，换个时间</span>
+						) : (
+							<span className="runs num">
+								{preview.map((d) => (
+									<span key={d.getTime()}>{runAt(d, now)}</span>
+								))}
+								{parsed.times && <span>跑完自动结束</span>}
+							</span>
+						)}
+						<label htmlFor="cron-model">模型</label>
+						<ModelChoice
+							id="cron-model"
+							model={pick.model}
+							thinking={pick.thinking}
+							onChange={(model, thinking) => setPick({ model, thinking })}
+						/>
 						<span>结果</span>
 						<span>有结论放进工作台，和上次比没变化就不打扰你</span>
 					</div>
@@ -456,28 +487,32 @@ export function Schedules({
 					{parsed ? (
 						<button
 							className="btn pri sm"
-							disabled={busy || !parsed.name.trim()}
+							disabled={busy || !parsed.name.trim() || parsed.past}
 							onClick={async () => {
 								const ok = await act(
 									() =>
 										saveSchedule({
 											name: parsed.name.trim(),
 											cron: parsed.cron,
+											times: parsed.times,
 											agent: choices.find((a) => a.name === "assistant")?.name ?? choices[0]?.name ?? "assistant",
 											prompt: line.trim(),
+											model: pick.model,
+											thinking: pick.thinking,
 										}),
 									preview[0] ? `已创建，下次 ${runAt(preview[0], now)}` : "已创建",
 								);
 								if (ok) {
 									setLine("");
 									setParsed(undefined);
+									setPick({ model: "", thinking: "" });
 								}
 							}}
 						>
 							创建
 						</button>
 					) : (
-						<button className="btn sm" disabled={!line.trim()} onClick={() => setParsed(parseOneLine(line))}>
+						<button className="btn sm" disabled={!line.trim()} onClick={() => setParsed(parseOneLine(line, now * 1000))}>
 							预览
 						</button>
 					)}

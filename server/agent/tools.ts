@@ -114,17 +114,39 @@ export const showUiTool = defineTool({
 	},
 });
 
-// 新建定时任务：守卫一律判成「要审批」，由 approvals.ts 在 Yi 批准后建；这里的 execute 不会被走到
+// 定时任务：list 只读、直接执行；其余守卫判成「要审批」，由 approvals.ts 在 Yi 批准后执行（scheduletool.ts），这里不会走到
 export const scheduleTool = defineTool({
 	name: "schedule",
 	description:
-		"Yi 让你定期做某件事时（「每天 9 点…」「每周一…」），新建一个定时任务：到点交给助手按 prompt 跑一次，结论私聊 Yi。" +
-		"会先发审批卡片给 Yi，批准后才生效。cron 是 5 段「分 时 日 月 周」，本机时区，例如每个工作日 9 点是 `0 9 * * 1-5`。" +
+		"管理定时任务：到点交给助手按 prompt 跑一次，结论私聊 Yi。action 默认 create。" +
+		"list：列出现有的定时任务和 id（只读，直接返回）；Yi 要改、停、删某个定时任务时先 list 找到 id。" +
+		"create：新建，要 name、prompt，再给 cron（重复跑）或 at（只跑一次 / 几次）二选一。" +
+		"update：改已有的，要 id，只传要改的字段（name、cron 或 at、prompt、until、model、thinking），没传的不动。" +
+		"pause / resume / end / delete：暂停、恢复、结束（不再跑，记录留着）、删除，只要 id。" +
+		"除了 list 都会先发审批卡片给 Yi，批准后才生效；不要换个写法重复提交。" +
+		"cron 是 5 段「分 时 日 月 周」，本机时区，例如每个工作日 9 点是 `0 9 * * 1-5`、每月 1 号 10 点是 `0 10 1 * *`。" +
+		"「今天 18 点看一次」「明天 9 点提醒我」这种只跑一次的用 at，写本机时间 `YYYY-MM-DD HH:mm`，几次用逗号隔开，跑完自动结束，不要用 cron 凑。" +
 		"prompt 写清到点要做什么、看哪些数据、结论要什么样，要能脱离这次对话独立看懂。" +
-		"只跑有限几次的（「今天 19:25、20:25 各看一次」）一定给 until（本机时间 `YYYY-MM-DD HH:mm`，写最后一次之后），到点自动停用，不用让 Yi 手动删；" +
-		"不给的话日和月写死的 cron 每年这一天都会再跑。",
-	parameters: obj({ name: str(), cron: str(), prompt: str(), until: opt(str()) }),
-	execute: async () => {
-		throw new Error("新建定时任务需要 Yi 审批，不能直接执行");
+		"按 cron 只跑有限几天的给 until（本机时间 `YYYY-MM-DD HH:mm`，写最后一次之后），到点自动停用；不给的话日和月写死的 cron 每年这一天都会再跑。" +
+		"Yi 指定了模型（「用 codex 6.2 sol」「用 opus」）就给 model，写模型 id（如 `codex/gpt-6.2-sol`、`claude/claude-opus-5-5`），到点直接用这个模型跑，" +
+		"不要在 prompt 里让自己再去调 codex exec；update 时 model 写 default 是回到助手默认。thinking 是思考强度（low / medium / high / xhigh / max）。" +
+		"都不给就用助手的默认配置。id 写错、模型写错会退回并说明。",
+	parameters: obj({
+		action: opt(str()),
+		id: opt(str()),
+		name: opt(str()),
+		cron: opt(str()),
+		at: opt(str()),
+		prompt: opt(str()),
+		until: opt(str()),
+		model: opt(str()),
+		thinking: opt(str()),
+	}),
+	execute: async (args) => {
+		if ((args.action ?? "").trim() === "list") {
+			const { listScheduleText } = await import("../scheduletool.ts");
+			return text(listScheduleText());
+		}
+		throw new Error("改定时任务需要 Yi 审批，不能直接执行");
 	},
 });

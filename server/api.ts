@@ -335,6 +335,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 						enabled: body.enabled === undefined ? undefined : Boolean(body.enabled),
 						// 结束时间：不传不动，传 null 清掉
 						until: body.until === undefined ? undefined : body.until == null ? null : Number(body.until),
+						// 按时间点跑（只跑一次、几次）：给了就不解析 cron，cron 当说明
+						times: Array.isArray(body.times) ? body.times.map(Number).filter((x: number) => Number.isFinite(x)) : undefined,
+						// 模型、思考强度：不传不动，传空串或 null 回到默认
+						model: body.model === undefined ? undefined : body.model ? String(body.model) : null,
+						thinking: body.thinking === undefined ? undefined : body.thinking ? String(body.thinking) : null,
 					}),
 				});
 			if (schedM[2] === "run") return send(res, 200, { ok: true, task: await runNow(schedM[1]) });

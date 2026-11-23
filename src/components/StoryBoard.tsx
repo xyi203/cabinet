@@ -4,7 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { type DevTask, type Schedule, type State, type Story, fetchRepos, fetchSchedules, post, runSchedule } from "../lib/api";
 import { AGENT_NAME, ago, ticketUrl, time, waitingOn, when } from "../lib/format";
 import { Drawer, type Msg, MsgLine } from "./Drawer";
-import { humanCron } from "./Schedules";
+import { humanCron } from "../lib/when";
 
 /** 需求任务的四个阶段，加一个「不再跟进」收起来 */
 const STAGES: Array<[string, string]> = [

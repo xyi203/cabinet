@@ -570,9 +570,13 @@ export class Guard {
 			case "show_ui":
 				// 只把报告暂存给看板显示，不碰外部
 				return ALLOW;
-			case "schedule":
-				// 新建定时任务：到点会以 Yi 的名义跑 agent，算写操作
-				return approve("新建定时任务");
+			case "schedule": {
+				// 列出是只读的；新建、修改、停、删都算写操作（到点会以 Yi 的名义跑 agent）
+				const action = String(input.action ?? "").trim() || "create";
+				if (action === "list") return ALLOW;
+				const verb = { create: "新建", update: "修改", pause: "暂停", resume: "恢复", end: "结束", delete: "删除" }[action];
+				return approve(`${verb ?? "改"}定时任务`);
+			}
 			case "lookup":
 				// 只读，但能看到私聊和草稿：只给结果先经 Yi 过目的会话
 				return this.lookup ? ALLOW : deny("这个会话不能用 lookup");

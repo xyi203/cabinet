@@ -2254,7 +2254,8 @@ pre.cmd {
 	align-items: center;
 	gap: 4px 12px;
 }
-.sedit .at input {
+.sedit .at input,
+.sedit .at select {
 	flex: 0 1 240px;
 }
 .sedit .at span {
@@ -2324,6 +2325,22 @@ pre.cmd {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0 16px;
+}
+/* 新建预览里的模型选择：和编辑表单里的一样 */
+.preview .at {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 8px;
+}
+.preview select {
+	min-width: 0;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--panel);
+	color: var(--text);
+	padding: 4px 10px;
+	font: inherit;
 }
 
 /* 需求卡片 */

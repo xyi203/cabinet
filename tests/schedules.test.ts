@@ -7,6 +7,7 @@ const { CronError, nextRun, parseCron, saveSchedule, listSchedules, deleteSchedu
 const { DraftError } = await import("../server/drafts/store.ts");
 
 const at = (s: string) => new Date(s).getTime() / 1000;
+const local = (t: number) => new Date(t * 1000).toLocaleString("sv-SE", { hour12: false }).slice(0, 16);
 const fmt = (t: number | undefined) => (t ? new Date(t * 1000).toLocaleString("sv-SE", { hour12: false }).slice(0, 16) : "");
 
 test("cron：工作日 9 点、每两小时、月底不存在的日子跳过", () => {
@@ -229,4 +230,89 @@ test("定时页结束巡检任务：工单上记成手动停止，之后全量�
 	assert.equal(x.enabled, false);
 	// 已经停过的再点一次：只结束定时任务，不报「没在巡检」
 	endScheduleById(ab.id);
+});
+
+test("定时任务的模型：保存时就校验，传空回到助手的默认", () => {
+	assert.throws(
+		() => saveSchedule({ name: "x", cron: "0 12 * * *", agent: "assistant", prompt: "看看", model: "codex/没有这个" }),
+		/没有模型/,
+	);
+	assert.throws(
+		() =>
+			saveSchedule({
+				name: "x",
+				cron: "0 12 * * *",
+				agent: "assistant",
+				prompt: "看看",
+				model: "claude/claude-sonnet-5-5",
+				thinking: "超高",
+			}),
+		/不支持/,
+	);
+	const s = saveSchedule({
+		name: "午报",
+		cron: "0 12 * * *",
+		agent: "assistant",
+		prompt: "看看",
+		model: "claude/claude-sonnet-5-5",
+		thinking: "high",
+	});
+	assert.equal(s.thinking, "high");
+	const back = saveSchedule({ id: s.id, name: s.name, cron: s.cron, agent: "assistant", prompt: "看看", model: "", thinking: "" });
+	assert.equal(back.model, null);
+	assert.equal(back.thinking, null);
+	deleteSchedule(s.id);
+});
+
+test("schedule 工具：只跑一次用 at，跑完自动归到已结束", async () => {
+	const { checkSchedule, executeSchedule } = await import("../server/scheduletool.ts");
+	const soon = Math.ceil(Date.now() / 60_000) * 60 + 120;
+	const args = { name: "提醒", prompt: "提醒我开会", at: local(soon) };
+	assert.equal(checkSchedule(args), undefined);
+	assert.match(checkSchedule({ ...args, cron: "0 9 * * *" }) ?? "", /只给一个/);
+	assert.match(checkSchedule({ ...args, at: "明天 9 点" }) ?? "", /YYYY-MM-DD HH:mm/);
+	assert.match(checkSchedule({ ...args, at: "2020-01-01 09:00" }) ?? "", /都已经过了/);
+	assert.match(executeSchedule(args), /已建定时任务/);
+	const s = listSchedules().find((x) => x.name === "提醒")!;
+	assert.deepEqual(s.times, [soon]);
+	assert.match(s.cron, /^一次 /);
+	await due(soon + 1);
+	const after = listSchedules().find((x) => x.id === s.id)!;
+	assert.equal(after.enabled, false);
+	assert.ok(after.until != null && after.until <= soon + 1, "最后一次跑完记上结束时间，看板归到已结束");
+	deleteSchedule(s.id);
+});
+
+test("schedule 工具：list 看得到 id，改、暂停、恢复、结束、删除都按 id", async () => {
+	const { checkSchedule, executeSchedule, listScheduleText, describeSchedule } = await import("../server/scheduletool.ts");
+	const s = saveSchedule({ name: "午报", cron: "0 12 * * *", agent: "assistant", prompt: "看看昨天的告警" });
+	assert.match(listScheduleText(), new RegExp(`${s.id}「午报」启用`));
+	assert.match(checkSchedule({ action: "pause", id: "cron-0" }) ?? "", /没有定时任务 cron-0/);
+	assert.match(checkSchedule({ action: "jump", id: s.id }) ?? "", /action 只能是/);
+	// 只改给了的字段：改时间和模型，内容不动
+	const upd = { action: "update", id: s.id, cron: "0 13 * * 1-5", model: "claude/claude-sonnet-5-5" };
+	assert.equal(checkSchedule(upd), undefined);
+	assert.match(describeSchedule(upd), /修改定时任务「午报」/);
+	executeSchedule(upd);
+	let cur = listSchedules().find((x) => x.id === s.id)!;
+	assert.equal(cur.cron, "0 13 * * 1-5");
+	assert.equal(cur.prompt, "看看昨天的告警");
+	assert.equal(cur.model, "claude/claude-sonnet-5-5");
+	executeSchedule({ action: "update", id: s.id, model: "default" });
+	assert.equal(listSchedules().find((x) => x.id === s.id)!.model, null);
+	executeSchedule({ action: "pause", id: s.id });
+	assert.equal(listSchedules().find((x) => x.id === s.id)!.enabled, false);
+	executeSchedule({ action: "resume", id: s.id });
+	cur = listSchedules().find((x) => x.id === s.id)!;
+	assert.equal(cur.enabled, true);
+	assert.ok(cur.nextRun);
+	executeSchedule({ action: "end", id: s.id });
+	assert.match(listScheduleText(), /「午报」已结束/);
+	// 已结束的恢复：清掉结束时间，不然下一轮检查又把它停了
+	executeSchedule({ action: "resume", id: s.id });
+	cur = listSchedules().find((x) => x.id === s.id)!;
+	assert.equal(cur.enabled, true);
+	assert.equal(cur.until, null);
+	assert.match(executeSchedule({ action: "delete", id: s.id }), /已删除定时任务「午报」/);
+	assert.ok(!listSchedules().some((x) => x.id === s.id));
 });

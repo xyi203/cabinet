@@ -9,7 +9,7 @@ import { cronSkip } from "./router/board.ts";
 import { db, getKv, schema, setKv } from "./db/index.ts";
 import type { AgentUi } from "./a2ui/surface.ts";
 import type { DevTask, Schedule } from "./db/schema.ts";
-import { NO_CHANGE, PATROL_OK, dispatch, getDevTask } from "./dev.ts";
+import { NO_CHANGE, PATROL_OK, checkModel, dispatch, getDevTask } from "./dev.ts";
 import { DraftError } from "./drafts/store.ts";
 import { decide, receive } from "./pipeline.ts";
 import { log, now } from "./util.ts";
@@ -83,7 +83,7 @@ export function listSchedules(): Schedule[] {
 	return db().select().from(schema.schedules).all();
 }
 
-const getSchedule = (id: string) => db().select().from(schema.schedules).where(eq(schema.schedules.id, id)).get();
+export const getSchedule = (id: string) => db().select().from(schema.schedules).where(eq(schema.schedules.id, id)).get();
 
 export interface ScheduleInput {
 	id?: string;
@@ -99,6 +99,50 @@ export interface ScheduleInput {
 	patrol?: boolean;
 	/** 按时间点跑（unix 秒）：给了就不解析 cron，cron 当说明；不给时 cron 没改就沿用原来的时间点 */
 	times?: number[] | null;
+}
+
+/** 按时间点跑的任务在列表上的说明（存在 cron 一栏）：一次 11月24日 12:00 / 3 次：11月24日 12:00、… */
+const monthDay = (t: number) => {
+	const d = new Date(t * 1000);
+	return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+
+export function describeTimes(times: number[]): string {
+	return times.length === 1 ? `一次 ${monthDay(times[0])}` : `${times.length} 次：${times.map(monthDay).join("、")}`;
+}
+
+/** 修改已有的定时任务：只改给了的字段，其余沿用；cron 和时间点二选一（给了 times 就按时间点跑） */
+export function updateSchedule(
+	id: string,
+	patch: Partial<Pick<ScheduleInput, "name" | "cron" | "prompt" | "until" | "model" | "thinking" | "times">>,
+): Schedule {
+	const old = getSchedule(id);
+	if (!old) throw new DraftError(`没有定时任务 ${id}`);
+	const times = patch.times?.length ? patch.times : undefined;
+	return saveSchedule({
+		id,
+		name: patch.name ?? old.name,
+		cron: times ? describeTimes(times) : (patch.cron ?? old.cron),
+		agent: old.agent,
+		prompt: patch.prompt ?? old.prompt,
+		until: patch.until,
+		model: patch.model,
+		thinking: patch.thinking,
+		// 改成 cron 了就不再按原来的时间点跑
+		times: times ?? (patch.cron ? null : undefined),
+	});
+}
+
+/**
+ * 暂停 / 恢复。恢复一个已经过了结束时间的（已结束）就清掉结束时间，不然下一轮检查又把它停了；
+ * 按时间点跑、时间点都过了的恢复不了
+ */
+export function setScheduleEnabled(id: string, enabled: boolean): Schedule {
+	const old = getSchedule(id);
+	if (!old) throw new DraftError(`没有定时任务 ${id}`);
+	if (enabled && old.times?.length && !old.times.some((x) => x > now())) throw new DraftError("它的时间点都已经过了，改个时间再启用");
+	const expired = old.until != null && old.until <= now();
+	return saveSchedule({ ...old, enabled, until: enabled && expired ? null : undefined, times: undefined });
 }
 
 /** 下一次运行：按时间点的取下一个，按 cron 的算出来；没有了返回 undefined */
@@ -129,9 +173,15 @@ export function saveSchedule(input: ScheduleInput): Schedule {
 		} catch (e) {
 			throw new DraftError((e as Error).message);
 		}
+	// 这次新给的时间点（只跑一次 / 几次）至少要有一个在以后，不然建出来就是个不会跑的任务
+	if (input.times?.length && !input.times.some((x) => x > now())) throw new DraftError("给的时间都已经过了");
 	const agent = loadAgents().agents[input.agent];
 	if (!agent) throw new DraftError(`没有 agent ${input.agent}`);
 	if (input.agent === "dev") throw new DraftError("开发任务要选仓库和分支，不能定时跑；换一个只读 agent");
+	// 模型、思考强度：不传沿用原来的，传空（null / ""）清掉、回到助手配置里的默认；保存时就校验，不等到点才跑失败
+	const model = input.model !== undefined ? input.model || null : (old?.model ?? null);
+	const thinking = input.thinking !== undefined ? input.thinking || null : (old?.thinking ?? null);
+	checkModel(model ?? undefined, thinking ?? undefined);
 	const t = now();
 	const enabled = input.enabled ?? true;
 	const next = enabled ? (upcoming({ cron: input.cron, times }, t) ?? null) : null;
@@ -145,8 +195,8 @@ export function saveSchedule(input: ScheduleInput): Schedule {
 		nextRun: next,
 		lastRun: old?.lastRun ?? null,
 		lastTask: old?.lastTask ?? null,
-		model: input.model ?? old?.model ?? null,
-		thinking: input.thinking ?? old?.thinking ?? null,
+		model,
+		thinking,
 		until: input.until !== undefined ? input.until : (old?.until ?? null),
 		times,
 		patrol: input.patrol ?? old?.patrol ?? false,
@@ -402,10 +452,12 @@ export async function due(t = now()) {
 		}
 		// 下一次已经过了结束时间，这次就是最后一次：当场停用，不留一个 nextRun 挂到明年
 		if (next != null && s.until != null && next > s.until) next = null;
+		// 按时间点跑的（只跑一次、几次）这是最后一次：记上结束时间，看板归到「已结束」而不是「已暂停」
+		const ended = next == null && Boolean(s.times?.length) && s.until == null;
 		// 先推进下一次，再跑：跑的时候出错也不会每 30 秒重试一遍
 		db()
 			.update(schema.schedules)
-			.set({ nextRun: next, enabled: next != null })
+			.set({ nextRun: next, enabled: next != null, ...(ended ? { until: t } : {}) })
 			.where(eq(schema.schedules.id, s.id))
 			.run();
 		try {

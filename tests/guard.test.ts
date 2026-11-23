@@ -353,3 +353,12 @@ test("取代码跑单测：clone、worktree 只能放 /tmp/cabinet-work，那里
 	deny("git archive --remote=git@x:a/b.git HEAD");
 	assert.equal(g.check("read", { path: path.join(WORK_TMP, "x.go") }, repo), undefined, "临时副本里的代码能用 read 工具看");
 });
+
+test("schedule：list 只读直接放行，其余要审批且说清是哪种改动", () => {
+	assert.equal(g.verdict("schedule", { action: "list" }, repo).kind, "allow");
+	const create = g.verdict("schedule", { name: "x", cron: "0 9 * * *", prompt: "看看" }, repo);
+	assert.equal(create.kind, "approve");
+	assert.equal(create.kind === "approve" && create.reason, "新建定时任务");
+	const pause = g.verdict("schedule", { action: "pause", id: "cron-1" }, repo);
+	assert.equal(pause.kind === "approve" && pause.reason, "暂停定时任务");
+});

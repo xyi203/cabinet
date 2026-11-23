@@ -184,3 +184,14 @@ test("私聊机器人提问发起的审批挂不到任务：看板单列一行�
 	await decideApproval(id, "reject");
 	assert.ok(!taskViews([]).some((x) => x.id === `apv:${id}`));
 });
+
+test("schedule 工具：模型写错时退回并列出可选的，审批卡片上写明模型", async () => {
+	const { checkSchedule, describe } = await import("../server/approvals.ts");
+	const base = { name: "午报", cron: "0 12 * * *", prompt: "看看" };
+	assert.match(checkSchedule({ ...base, model: "codex/gpt-9" }) ?? "", /没有模型 codex\/gpt-9。可选的模型：.*claude\/claude-sonnet-5-5/);
+	assert.equal(checkSchedule({ ...base, model: "claude/claude-sonnet-5-5", thinking: "high" }), undefined);
+	assert.match(
+		describe({ tool: "schedule", args: { ...base, model: "claude/claude-sonnet-5-5", thinking: "high" } }),
+		/模型：claude\/claude-sonnet-5-5，思考强度 high/,
+	);
+});

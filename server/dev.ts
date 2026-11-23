@@ -127,8 +127,8 @@ export function quietRound(task: Pick<DevTask, "patrol">, text: string): boolean
 	return (task.patrol && head.startsWith(PATROL_OK)) || head.startsWith(NO_CHANGE);
 }
 
-/** 校验新建时选的模型和思考强度 */
-function checkModel(model?: string, thinking?: string) {
+/** 校验新建时选的模型和思考强度（定时任务保存时也用） */
+export function checkModel(model?: string, thinking?: string) {
 	if (!model && !thinking) return;
 	const opt = model ? modelOptions().find((m) => m.id === model) : undefined;
 	if (model && !opt) throw new DraftError(`没有模型 ${model}`);

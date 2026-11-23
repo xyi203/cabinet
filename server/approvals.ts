@@ -7,7 +7,6 @@ import { and, desc, eq, inArray, lt } from "drizzle-orm";
 import { guardFor, setApprovalHandler, type ApprovalHandler } from "./agent/driver.ts";
 import { type Learn, rememberRead, tokenize } from "./agent/guard.ts";
 import { callMcp } from "./agent/mcp.ts";
-import { ASSISTANT, loadAgents } from "./agent/router.ts";
 import { changed } from "./bus.ts";
 import { OWNER_OPEN_ID } from "./config.ts";
 import { db, schema } from "./db/index.ts";
@@ -15,7 +14,7 @@ import type { Approval } from "./db/schema.ts";
 import { messageDev } from "./dev.ts";
 import { applyDraftAction } from "./drafts/actions.ts";
 import { queuePatch, sendCardToUserAsBot } from "./lark/bot.ts";
-import { CronError, nextRun, parseCron, saveSchedule } from "./schedules.ts";
+import { checkSchedule, describeSchedule, executeSchedule } from "./scheduletool.ts";
 import { ticketsCreated } from "./stories.ts";
 import { execFile } from "node:child_process";
 import { footnote } from "./drafts/card.ts";
@@ -35,40 +34,8 @@ export function pendingApprovals(): Approval[] {
 
 const fmt = (t: number) => when(t);
 
-/** schedule 工具的 until：本机时间「YYYY-MM-DD HH:mm」→ unix 秒；没给是 undefined，格式不对是 NaN */
-export function scheduleUntil(args: Record<string, unknown>): number | undefined {
-	const v = String(args.until ?? "").trim();
-	if (!v) return;
-	const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/.exec(v);
-	return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() / 1000 : Number.NaN;
-}
-
-/** 定时任务的参数：名字、cron、内容都要有，cron 要能解析，给了结束时间要晚于现在 */
-export function checkSchedule(args: Record<string, unknown>): string | undefined {
-	const name = String(args.name ?? "").trim();
-	const prompt = String(args.prompt ?? "").trim();
-	if (!name || !prompt) return "定时任务要有名字（name）和要做的事（prompt）";
-	try {
-		parseCron(String(args.cron ?? ""));
-	} catch (e) {
-		return `cron 写得不对：${(e as CronError).message}。格式是 5 段「分 时 日 月 周」，例如 0 9 * * 1-5`;
-	}
-	const until = scheduleUntil(args);
-	if (until !== undefined && !(until > now())) return "until 要写成晚于现在的本机时间，格式 YYYY-MM-DD HH:mm";
-}
-
-/** 接下来几次运行时间 */
-export function nextRuns(cron: string, n = 3, from = now()): number[] {
-	const out: number[] = [];
-	let t = from;
-	for (let i = 0; i < n; i++) {
-		const next = nextRun(cron, t);
-		if (!next) break;
-		out.push(next);
-		t = next;
-	}
-	return out;
-}
+// 定时任务工具的解析、校验、卡片描述、执行都在 scheduletool.ts；这里留着老的导出名
+export { checkSchedule, nextRuns, scheduleUntil } from "./scheduletool.ts";
 
 /** 这条审批能不能「执行并以后放行」：只有没登记的 skill 脚本 / 子命令可以，规则里明确是写操作的不行 */
 export function learnOf(a: Pick<Approval, "tool" | "args" | "convId" | "cwd">): Learn | undefined {
@@ -82,21 +49,7 @@ export const learnText = (l: Learn) => (l.isNew ? `新建规则 ${l.rule}，放�
 /** 卡片上「要执行什么」 */
 export function describe(a: Pick<Approval, "tool" | "args">): string {
 	if (a.tool === "bash") return "```\n" + String(a.args.command ?? "") + "\n```";
-	if (a.tool === "schedule") {
-		const until = scheduleUntil(a.args);
-		const runs = nextRuns(String(a.args.cron))
-			.filter((t) => until === undefined || t <= until)
-			.map(fmt)
-			.join("、");
-		return [
-			`新建定时任务「${a.args.name}」`,
-			`- cron：\`${a.args.cron}\`（接下来：${runs || "算不出"}）`,
-			until !== undefined ? `- 结束：${fmt(until)}，之后自动停用` : "",
-			`- 到点交给助手做：${a.args.prompt}`,
-		]
-			.filter(Boolean)
-			.join("\n");
-	}
+	if (a.tool === "schedule") return describeSchedule(a.args);
 	// 发布工单的 params 是多行文字，JSON 里只剩一串 \n，审批时看不清要写进去的内容
 	const { params, ...rest } = a.args as { params?: unknown };
 	const lines = Array.isArray(params)
@@ -256,16 +209,7 @@ export function run(cmd: string, args: string[], cwd: string): Promise<string> {
 
 /** 按记录执行：执行前按会话当前策略复核，仍判成「要审批」才执行 */
 async function execute(a: Approval): Promise<string> {
-	if (a.tool === "schedule") {
-		const s = saveSchedule({
-			name: String(a.args.name),
-			cron: String(a.args.cron),
-			prompt: String(a.args.prompt),
-			agent: loadAgents().router.agent ?? ASSISTANT,
-			until: scheduleUntil(a.args) ?? null,
-		});
-		return `已建定时任务 ${s.id}「${s.name}」，下次运行 ${s.nextRun ? fmt(s.nextRun) : "无"}`;
-	}
+	if (a.tool === "schedule") return executeSchedule(a.args);
 	const g = a.convId != null ? guardFor(a.convId) : undefined;
 	if (!g) throw new ApprovalError("找不到发起这次调用的会话权限，不执行");
 	const args = { ...a.args };

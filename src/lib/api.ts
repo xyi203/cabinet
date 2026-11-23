@@ -444,7 +444,9 @@ export interface Schedule {
 	nextRun: number | null;
 	lastRun: number | null;
 	lastTask: string | null;
+	/** 到点用的模型和思考强度；空是跟着助手配置里的默认 */
 	model?: string | null;
+	thinking?: string | null;
 	/** 到这个时间自动停（巡检用） */
 	until?: number | null;
 	/** 发布工单巡检建的定时任务 */
