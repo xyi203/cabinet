@@ -48,6 +48,15 @@ export function renderCard(raw: any, mentions: Mention[]): string {
 				return "---";
 			case "img":
 				return "[图片]";
+			case "list":
+				// 无序 / 有序列表：items 各自一行，按 level 缩进
+				return (p.items ?? [])
+					.map((it: any, i: number) => `${"  ".repeat(it.level ?? 0)}${it.type === "ol" ? `${i + 1}.` : "-"} ${render(it.elements ?? [])}`)
+					.join("\n");
+			case "collapsible_panel": {
+				// 折叠面板（告警卡的「证据」这类）：标题和里面的内容都要，折着的才是细节
+				return [render(p.header?.title), blocks(p.elements ?? [])].filter(Boolean).join("\n");
+			}
 			default:
 				return blocks(p.elements ?? p.columns ?? []);
 		}
@@ -58,8 +67,12 @@ export function renderCard(raw: any, mentions: Mention[]): string {
 			.filter((s) => s !== "")
 			.join("\n");
 
-	const title = card.header?.property?.title?.property?.content ?? "";
-	return `<card title="${title}">\n${blocks(card.body?.elements ?? [])}\n</card>`;
+	const head = card.header?.property ?? {};
+	const title = head.title?.property?.content ?? "";
+	const subtitle = head.subtitle?.property?.content ?? "";
+	// 新版卡片（schema 2.0，告警卡这类）正文在 body.property.elements；旧版在 body.elements
+	const body = card.body?.property?.elements ?? card.body?.elements ?? [];
+	return `<card title="${title}"${subtitle ? ` subtitle="${subtitle}"` : ""}>\n${blocks(body)}\n</card>`;
 }
 
 /** 卡片附带的 @ 用户：名字 -> 飞书 user_id。飞书项目评论里 @人要用它（meegle 输出的 lark_user_id 丢了精度） */

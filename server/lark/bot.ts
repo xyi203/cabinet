@@ -542,13 +542,18 @@ async function tryIdentities<T>(
 	log(`${what}失败`, errors.join(" | "));
 }
 
-// 机器人默认没有读话题的权限，也不在 Yi 的大多数会话里：先 bot 后 user
-export const threadContext = async (threadId: string, n: number) =>
-	formatMessages(
-		(
-			(await tryIdentities((as) => listMessages({ threadId }, { order: "desc", pageSize: n, as }), ["bot", "user"], "读取话题")) ?? []
-		).toReversed(),
-	);
+// 机器人默认没有读话题的权限，也不在 Yi 的大多数会话里：先 bot 后 user。
+// 话题的主消息（告警卡、提问）是整件事的来由：用户身份列话题时不返回它、话题长了也会被最近 n 条挤掉，单独补在最前
+export const threadContext = async (threadId: string, n: number, rootId?: string) => {
+	const msgs = (
+		(await tryIdentities((as) => listMessages({ threadId }, { order: "desc", pageSize: n, as }), ["bot", "user"], "读取话题")) ?? []
+	).toReversed();
+	if (rootId && !msgs.some((m) => m.message_id === rootId)) {
+		const root = await tryIdentities((as) => getMessage(rootId, as), ["bot", "user"], "读取话题主消息");
+		if (root) msgs.unshift(root);
+	}
+	return formatMessages(msgs);
+};
 
 export const quotedMessage = async (messageId: string) => {
 	const m = await tryIdentities((as) => getMessage(messageId, as), ["bot", "user"], "读取引用消息");

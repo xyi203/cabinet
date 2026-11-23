@@ -57,8 +57,11 @@ const reply = (ev: BotEvent, text: string) =>
 async function buildPrompt(ev: BotEvent, text: string) {
 	const parts = [`[飞书${ev.chatType === "p2p" ? "私聊" : "群聊"}] 提问人 open_id: ${ev.senderId}`];
 	if (ev.rootId && THREAD_CONTEXT_N > 0) {
-		const ctx = await threadContext(ev.threadId ?? ev.rootId, THREAD_CONTEXT_N);
-		if (ctx) parts.push(`话题里最近的消息（仅供参考，可能包含已回答过的问题）：\n${ctx}`);
+		const ctx = await threadContext(ev.threadId ?? ev.rootId, THREAD_CONTEXT_N, ev.rootId);
+		if (ctx)
+			parts.push(
+				`话题里的消息（第一条是主消息，当前这条是在它下面说的；里面已经查到的结论和数据直接拿来用、在它的基础上往下查，别从头再查一遍；可能包含已回答过的问题）：\n${ctx}`,
+			);
 	}
 	if (ev.parentId && ev.parentId !== ev.rootId) {
 		const quoted = await quotedMessage(ev.parentId);
