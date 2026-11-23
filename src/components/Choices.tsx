@@ -1,6 +1,6 @@
 // 一件事现在能做什么，只在这里定义一次，形式照 Claude 的选择提示：编号选项（1 / 2 / 3、↑ ↓ 回车、Esc 选否定的那项），
-// 工作台底部常驻的输入框是最后一项——打字发出就用你写的（草稿：原样以你的身份发出；审批：当拒绝理由；agent 任务：追问 / 插话）。
-// 「/改写 xxx」让助手按意见重写草稿。
+// 工作台底部常驻的输入框是最后一项——打字发出就用你写的（草稿：交给助手按指示改写或先去查，出新一版草稿，不直接发给对方；
+// 审批：当拒绝理由；agent 任务：追问 / 插话）。「/改写 xxx」和直接打字一样。
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { type Draft, type State, type TaskView, post } from "../lib/api";
@@ -180,8 +180,13 @@ export function actionsOf(t: TaskView | undefined, c: Ctx): Actions {
 		);
 		return {
 			options,
-			// 输入框里写的就是要发的：原样以你的身份发出，不用助手的稿
-			typeIn: { hint: `或者自己写，回车直接发到${where}`, advance: true, run: (v) => send(v, "text") },
+			// 输入框是跟助手说话的（和 Claude 一样）：写的是给助手的指令（改成什么样、先去查什么），助手做完出新一版草稿回到「等你」。
+			// 不再把输入框的字直接发给对方——Yi 打了一句「去查一下 db 数据」想让助手查，结果被原样发了出去。自己写回复改上面的草稿框再点发送
+			typeIn: {
+				hint: `跟助手说要怎么改、先去查什么，它会出新一版草稿；自己写回复就改上面的草稿框再发到${where}`,
+				advance: true,
+				run: (v) => post(`/api/drafts/${d.id}/revise`, { text: v }).then(() => "交给助手了，新草稿好了会回到「等你」"),
+			},
 			slash: [
 				{
 					cmd: "/改写",

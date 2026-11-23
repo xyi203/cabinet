@@ -170,7 +170,7 @@ export async function followUpDraft(id: string, key: string, about: string): Pro
 export type Action = "send" | "discard" | "revise" | "complete";
 
 /** 「发 / 不发 / 改 / 完成」的唯一实现，飞书私聊和看板共用。
- * send：arg 非空时用 (kind, arg) 替换草稿再发（看板里手改过的文字、指定的表情或表情包）；revise：arg 是修改意见 */
+ * send：arg 非空时用 (kind, arg) 替换草稿再发（看板里手改过的文字、指定的表情或表情包）；revise：arg 是 Yi 的指示（改写意见，或先去查什么） */
 export async function applyDraftAction(id: string, action: Action, arg = "", kind: Kind = "text", to: Target = "reply"): Promise<string> {
 	arg = arg.trim();
 	if (action === "send" && arg && kind !== "text") {
@@ -210,8 +210,10 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 			const { text, context } = await rerun(
 				d,
 				`revise:${id}`,
-				`${mr ? mrRevision(d.report, mr.ledger) : stickerHint()}\n\nYi 的修改意见：${arg}\n\n（当前草稿的 ID：draft:${id}）\n\n${
-					mr ? "请按意见重写，按 MR 预审的输出格式完整输出（回复、【评审报告】、【MR评论】三段都要有）。" : "请按意见重写，只输出新的草稿。"
+				`${mr ? mrRevision(d.report, mr.ledger) : stickerHint()}\n\nYi 的指示：${arg}\n\n（当前草稿的 ID：draft:${id}）\n\n${
+					mr
+						? "请按指示重写，按 MR 预审的输出格式完整输出（回复、【评审报告】、【MR评论】三段都要有）。"
+						: "指示可能是改写意见，也可能是让你先去查什么、补什么数据（查库、捞日志、看代码）：要查的先查清楚，再按指示和查到的结果重写，只输出新的草稿。"
 				}`,
 				`${d.text}\n${arg}`,
 			);
