@@ -187,12 +187,17 @@ function view(input: typeof schema.tasks.$inferSelect, o: Outputs, trs: Array<ty
 		// 失败记录没了也别只写「这次处理失败了」：时间线上最后一次失败的原因还在
 		if (row.need === "retry" && !error && lastResult?.outcome === "failed") error = lastResult.detail;
 	}
+	// 办完 / 等你的事在起草的会话里又跑起来了（接着追问、到期复查、复审）：任务行没改状态，看板上按进行中显示，不然看不出它在查
+	const rerunId =
+		row.status !== "in_progress" && draft?.session
+			? [...running].find(([, r]) => r.sessionId && r.sessionId === draft.session)?.[0]
+			: undefined;
 	const runId =
 		dev && (dev.status === "running" || dev.status === "pushing")
 			? `dev-${dev.id}`
 			: row.status === "in_progress"
 				? [...running].find(([, r]) => r.sessionId && r.sessionId === last?.session)?.[0]
-				: undefined;
+				: rerunId;
 	const label =
 		first?.channel === "cron"
 			? "" // 标题就是「定时 · <名字>」
@@ -208,8 +213,8 @@ function view(input: typeof schema.tasks.$inferSelect, o: Outputs, trs: Array<ty
 		title: dev && (row.source === "board" || row.source === "cron" || row.source === "alert") ? dev.title : row.title,
 		source: row.source,
 		label,
-		status: row.status as TaskStatus,
-		need: row.need as Need | null,
+		status: (rerunId ? "in_progress" : row.status) as TaskStatus,
+		need: (rerunId ? null : row.need) as Need | null,
 		worker: last?.agent ?? null,
 		tier: last?.info?.tier ?? (last?.actionKind === "dev" ? "task" : null),
 		created: row.created,
