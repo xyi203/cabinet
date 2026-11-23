@@ -89,6 +89,8 @@ export async function recall(query: string, tags: string[], maxTokens: number): 
 		query,
 		types: ["world", "experience", "observation"],
 		prefer_observations: true,
+		// 重排在容器里用 CPU 跑，默认档 300 个候选在 2 核上要 26 秒以上，会撞 30 秒超时；low 档 80 个约 9 秒
+		budget: "low",
 		max_tokens: maxTokens,
 		...(tags.length ? { tags, tags_match: "any_strict" } : {}),
 	});
