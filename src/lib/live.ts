@@ -38,23 +38,20 @@ export function useLiveSteps(runId?: string): Step[] | undefined {
 	return runId && complete.has(runId) ? steps.get(runId) : undefined;
 }
 
-/** 页面上还有没发出去的字：key → 有没有。有就先不自动刷新 */
-const holds = new Map<string, boolean>();
-export const holdReload = (key: string, on: boolean) => void holds.set(key, on);
-
 const typing = () => {
 	const el = document.activeElement as HTMLElement | null;
 	return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
 };
 
-/**
- * 服务重装后前端换了版本，打开着的页面还在跑旧代码：发现版本变了就刷新。
- * 工作台上等不在打字、草稿里没有改了没发的字时刷（底部输入框的字存在 sessionStorage 里，刷新后还在）；别的页面（设置、记忆里可能有没存的表单）不自动刷，等切到另一页时再刷
- */
 /** 页面打开时的前端版本；发现版本变了时在哪一页。整个页面只有一处用，放模块里 */
 let firstBuild: string | undefined;
 let staleOn: string | undefined;
 
+/**
+ * 服务重装后前端换了版本，打开着的页面还在跑旧代码：发现版本变了就刷新。
+ * 工作台上等不在打字时刷（输入框和改过的草稿存在 sessionStorage 里，刷新后还在）；
+ * 别的页面（设置、记忆里可能有没存的表单）不自动刷，等切到另一页时再刷
+ */
 export function useReloadOnNewBuild(build: string | undefined, page: string, safePage: boolean) {
 	useEffect(() => {
 		if (!build) return;
@@ -65,7 +62,7 @@ export function useReloadOnNewBuild(build: string | undefined, page: string, saf
 		if (page !== staleOn) return location.reload();
 		if (!safePage) return;
 		const tryReload = () => {
-			if (!typing() && ![...holds.values()].some(Boolean)) location.reload();
+			if (!typing()) location.reload();
 		};
 		tryReload();
 		const t = setInterval(tryReload, 3000);

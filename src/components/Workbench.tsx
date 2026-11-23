@@ -8,7 +8,6 @@ import { AGENT_NAME, ago, isBare, money, pillOf, requestOf, titleOf, waitingOn }
 import { type Actions, type PickItem, type Target, Choices, actionsOf, draftOf, matchText, targetsOf, useRunner } from "./Choices";
 import { Docked, Embedded } from "./Drawer";
 import { TaskPanel } from "./TaskPanel";
-import { holdReload } from "../lib/live";
 import { toast } from "./Toast";
 
 /** 等你处理里先放要你动手的：审批、发送、拍板、失败，最后是看结论 */
@@ -54,7 +53,31 @@ const FILTERS: Array<[Filter, string]> = [
 	["queue", "排队"],
 	["done", "完成"],
 ];
-const DOCK_KEY = "cabinet:dock";
+/**
+ * 存在当前标签页（sessionStorage）的状态：页面刷新（比如服务重装后自动刷新）后还在，别的标签页互不影响。
+ * 工作台要等拿到状态才在浏览器里渲染，服务端渲染不到这里，初值可以直接读
+ */
+function useTabState<T>(key: string, empty: T, keep: (v: T) => T = (v) => v) {
+	const [v, setV] = useState<T>(() => {
+		try {
+			const raw = sessionStorage.getItem(key);
+			return raw ? keep(JSON.parse(raw) as T) : empty;
+		} catch {
+			return empty;
+		}
+	});
+	useEffect(() => {
+		try {
+			const blank = v === "" || (typeof v === "object" && v !== null && !Object.keys(v).length);
+			if (blank) sessionStorage.removeItem(key);
+			else sessionStorage.setItem(key, JSON.stringify(v));
+		} catch {}
+	}, [key, v]);
+	return [v, setV] as const;
+}
+
+/** 只留还在的草稿（以及还在看板上的事）的记录，发出去、过期的不再带着 */
+const pick = <T,>(m: Record<string, T>, live: Set<string>) => Object.fromEntries(Object.entries(m).filter(([k]) => live.has(k)));
 /** 今天完成默认只露这几条，和 Claude 侧栏一样不让历史把正在办的事挤下去 */
 const DONE_SHOWN = 5;
 
@@ -132,23 +155,17 @@ export function Workbench({
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	});
-	// 草稿框里改的字、每件事选的「发到哪」：只在这个页面里记着，发出去才算数
-	const [edits, setEdits] = useState<Record<string, string>>({});
-	const [targets, setTargets] = useState<Record<string, Target>>({});
+	// 草稿框里改的字（按草稿）、每件事选的「发到哪」（按事）：发出去才算数；存在这个标签页里，刷新后还在
+	const [edits, setEdits] = useTabState<Record<string, string>>("cabinet:edits", {}, (m) => pick(m, new Set(s.drafts.map((d) => d.id))));
+	const [targets, setTargets] = useTabState<Record<string, Target>>("cabinet:targets", {}, (m) => pick(m, new Set(all.map((t) => t.id))));
 	const docked = useMemo(
 		() => ({ edit: (id: string) => edits[id], setEdit: (id: string, text: string) => setEdits((m) => ({ ...m, [id]: text })) }),
-		[edits],
+		[edits, setEdits],
 	);
 	const picks: PickItem[] = [
 		...(stickers?.emoji ?? []).map((k) => ({ key: k, kind: "reaction" as const })),
 		...(stickers?.stickers ?? []).map((k) => ({ key: k, kind: "sticker" as const })),
 	];
-	// 改了还没发的草稿：服务重装后先别自动刷新页面
-	const unsentEdit = Object.entries(edits).some(([id, text]) => {
-		const d = s.drafts.find((x) => x.id === id);
-		return !!d && text !== d.text && wait.some((t) => t.drafts.at(-1) === id);
-	});
-	useEffect(() => holdReload("draft-edits", unsentEdit), [unsentEdit]);
 	const draft = cur ? draftOf(cur, s) : undefined;
 	const actions = actionsOf(cur, {
 		s,
@@ -303,21 +320,8 @@ function Dock({
 	onNext: () => void;
 }) {
 	const { busy, exec } = useRunner();
-	// 输入框里的字存在这个标签页里（sessionStorage），页面刷新（比如服务重装后自动刷新）后还在；发出去就清掉。
-	// 工作台要等拿到状态才在浏览器里渲染，服务端渲染不到这里，初值可以直接读
-	const [text, setText] = useState(() => {
-		try {
-			return sessionStorage.getItem(DOCK_KEY) ?? "";
-		} catch {
-			return "";
-		}
-	});
-	useEffect(() => {
-		try {
-			if (text) sessionStorage.setItem(DOCK_KEY, text);
-			else sessionStorage.removeItem(DOCK_KEY);
-		} catch {}
-	}, [text]);
+	// 输入框里的字刷新后还在，发出去就清掉
+	const [text, setText] = useTabState("cabinet:dock", "");
 	const [hint, setHint] = useState<string>();
 	// 关掉的卡片：记的是哪件事的哪个状态，状态变了（比如出了新草稿）卡片会重新出来
 	const [closed, setClosed] = useState<string>();
