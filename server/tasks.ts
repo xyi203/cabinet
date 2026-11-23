@@ -138,27 +138,42 @@ function looseApprovals(views: TaskView[]): TaskView[] {
 }
 
 /**
- * 草稿上 Yi 对助手说的话：每次改写 / 追问出新一版都记一条 revised 流水（drafts/actions.ts），question 是他的原话。
- * 追问带「接着追问：」前缀，MR 上的追问走复审带「复审：Yi 追问：」；自动复审、到期复查不是他说的，不进来。
- * 流水在运行结束时才写，减去耗时才是他说话的时刻
+ * 草稿上 Yi 对助手说的话（改写意见、让它先去查什么、办完后接着追问），question 是他的原话。
+ * 现在说出口就记一条 instructed 流水（drafts/actions.ts instructed）；之前只有跑完才写的 revised 流水，
+ * 老数据从 revised 读（减去耗时才是说话的时刻），同一句已经有 instructed 的就不再重复。
+ * 追问带「接着追问：」前缀，MR 上的追问走复审带「复审：Yi 追问：」；自动复审、到期复查不是他说的，不进来
  */
-function asksOf(draftIds: string[]): Map<string, Array<{ at: number; text: string }>> {
+export function asksOf(draftIds: string[]): Map<string, Array<{ at: number; text: string }>> {
 	const out = new Map<string, Array<{ at: number; text: string }>>();
 	if (!draftIds.length) return out;
 	const rows = db()
-		.select({ dm: schema.records.dm, ts: schema.records.ts, seconds: schema.records.seconds, question: schema.records.question })
+		.select({
+			dm: schema.records.dm,
+			ts: schema.records.ts,
+			status: schema.records.status,
+			seconds: schema.records.seconds,
+			question: schema.records.question,
+		})
 		.from(schema.records)
-		.where(and(eq(schema.records.kind, "draft"), eq(schema.records.status, "revised"), inArray(schema.records.dm, draftIds)))
+		.where(
+			and(
+				eq(schema.records.kind, "draft"),
+				inArray(schema.records.status, ["instructed", "revised"]),
+				inArray(schema.records.dm, draftIds),
+			),
+		)
 		.all();
+	const said = new Set(rows.filter((r) => r.status === "instructed").map((r) => `${r.dm}\n${r.question}`));
 	for (const r of rows) {
 		const q = r.question?.trim();
 		if (!r.dm || !q) continue;
+		if (r.status === "revised" && said.has(`${r.dm}\n${r.question}`)) continue;
 		let text = q;
 		if (q.startsWith("接着追问：")) text = q.slice("接着追问：".length);
 		else if (q.startsWith("复审：Yi 追问：")) text = q.slice("复审：Yi 追问：".length);
 		else if (q.startsWith("复审：") || q.startsWith("到期复查：")) continue;
 		const list = out.get(r.dm) ?? [];
-		list.push({ at: r.ts - (r.seconds ?? 0), text: text.trim() });
+		list.push({ at: r.status === "revised" ? r.ts - (r.seconds ?? 0) : r.ts, text: text.trim() });
 		out.set(r.dm, list);
 	}
 	return out;

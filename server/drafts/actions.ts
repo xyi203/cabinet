@@ -95,6 +95,14 @@ const rerunning = new Set<string>();
  * 在原会话里再跑一轮、出新一版草稿（新卡片），同一件事回到「等你发送」；上一版还没处理就替换掉它。
  * 复审和到期复查共用；question 记进流水，看板时间线里能看到这一版为什么来的
  */
+/**
+ * Yi 对助手说的话一说出口就记一条 instructed 流水，看板时间线马上出「你 → 助手」（tasks.ts asksOf）。
+ * 跑完写的 revised 流水要等助手查完、出了新一版才有，拿它显示会晚一两分钟
+ */
+function instructed(d: Draft, question: string) {
+	record({ kind: "draft", status: "instructed", dm: d.id, chatId: d.chatId, source: d.replyTo, question });
+}
+
 async function newVersion(id: string, requestId: string, ask: (d: Draft) => string, memoryQuery: string, question: string) {
 	const d = getDraft(id);
 	if (!d) throw new DraftError("草稿不存在");
@@ -102,6 +110,7 @@ async function newVersion(id: string, requestId: string, ask: (d: Draft) => stri
 	const live = LIVE.includes(d.status);
 	if (live && !claim(id, LIVE, "revising")) throw new DraftError("这条草稿正在处理，稍等一下");
 	rerunning.add(id);
+	instructed(d, question);
 	changed();
 	try {
 		const started = now();
@@ -229,6 +238,7 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: "sent" });
 		} else if (action === "revise") {
 			const mr = draftMrs([d]).get(id);
+			instructed(d, arg);
 			const started = now();
 			const { text, context } = await rerun(
 				d,

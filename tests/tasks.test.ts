@@ -266,3 +266,19 @@ test("改动前跳过的飞书消息补挂一次成已完成的事；定时任�
 	assert.equal(refreshTask(taskOf(old)!)?.status, "done");
 	assert.equal(taskOf(cron), null);
 });
+
+test("你对助手说的话：说出口就有，跑完的 revised 不重复；老数据只有 revised 的按开始时间", async () => {
+	const { asksOf } = await import("../server/tasks.ts");
+	const rec = (status: string, dm: string, question: string, ts: number, seconds?: number) =>
+		db().insert(schema.records).values({ ts, kind: "draft", status, dm, question, seconds }).run();
+	rec("instructed", "dft-a", "reductions 也是 cookie 吗？", 100);
+	// 还在跑：只有 instructed，马上看得到
+	assert.deepEqual(asksOf(["dft-a"]).get("dft-a"), [{ at: 100, text: "reductions 也是 cookie 吗？" }]);
+	// 跑完写的 revised 是同一句，不再出第二条
+	rec("revised", "dft-a", "reductions 也是 cookie 吗？", 160, 60);
+	assert.equal(asksOf(["dft-a"]).get("dft-a")?.length, 1);
+	// 老数据：只有 revised，时间是减去耗时的开始时刻；自动复审不算你说的
+	rec("revised", "dft-b", "接着追问：订单里存吗？", 300, 50);
+	rec("revised", "dft-b", "到期复查：看看 CI", 400, 10);
+	assert.deepEqual(asksOf(["dft-b"]).get("dft-b"), [{ at: 250, text: "订单里存吗？" }]);
+});

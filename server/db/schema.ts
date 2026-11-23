@@ -42,7 +42,7 @@ export const records = sqliteTable(
 		id: integer("id").primaryKey({ autoIncrement: true }),
 		ts: real("ts").notNull(),
 		kind: text("kind").notNull(), // qa / draft
-		status: text("status").notNull(), // replied remembered drafted skipped failed sent discarded completed revised
+		status: text("status").notNull(), // replied remembered drafted skipped failed sent discarded completed revised instructed asked
 		chatId: text("chat_id"),
 		source: text("source"), // 起草：被回复的原消息；问答：提问消息
 		dm: text("dm"),
