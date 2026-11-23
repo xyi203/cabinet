@@ -16,12 +16,12 @@ import { StoryBoard } from "../components/StoryBoard";
 import { TaskPanel } from "../components/TaskPanel";
 import { ToastHost } from "../components/Toast";
 import { RowActions } from "../components/Actions";
+import { Rail } from "../components/Rail";
 import { Workbench } from "../components/Workbench";
-import { type DevTask, type State, fetchState, post } from "../lib/api";
-import { ago, date, titleOf, waitingOn } from "../lib/format";
+import { type DevTask, type State, fetchMemory, fetchSchedules, fetchState, post } from "../lib/api";
+import { ago, date, titleOf, waitingOn, when } from "../lib/format";
+import { PageHead } from "../components/ui";
 import { useLiveUpdates, useReloadOnNewBuild } from "../lib/live";
-import { pct, span } from "../components/ui";
-import type { QuotaWindow } from "../lib/api";
 
 const TITLES = {
 	work: "工作台",
@@ -108,6 +108,14 @@ function Dashboard() {
 	const [connected, setConnected] = useState(true);
 	const { data: state, error } = useQuery({ queryKey: ["state"], queryFn: fetchState, refetchInterval: connected ? 15_000 : 5_000 });
 	useLiveUpdates(useCallback((c: boolean) => setConnected(c), []));
+	// 页头现状句用的数据；和页面里同一个 queryKey，共用缓存，不多发请求
+	const { data: scheds } = useQuery({
+		queryKey: ["schedules"],
+		queryFn: fetchSchedules,
+		refetchInterval: 30_000,
+		enabled: view === "cron",
+	});
+	const { data: mem } = useQuery({ queryKey: ["memory"], queryFn: fetchMemory, enabled: view === "memory" });
 	const tab0 = search.tab && (TAB_ALIASES[search.tab] ?? search.tab);
 	useReloadOnNewBuild(state?.build, `${view}:${tab0 ?? ""}`, view === "work");
 
@@ -146,35 +154,18 @@ function Dashboard() {
 
 	return (
 		<div className="app">
-			<aside>
-				<div className="brand">
-					<div className="seal">阁</div>
-					<span>Cabinet</span>
-				</div>
-				{(Object.keys(TITLES) as View[]).map((v) => (
-					<button
-						key={v}
-						className={`nav${view === v ? " on" : ""}`}
-						title={HINTS[v]}
-						aria-current={view === v ? "page" : undefined}
-						onClick={() => go(v)}
-					>
-						{TITLES[v]}
-						{v === "work" && waiting > 0 && (
-							<span className="n" aria-label={`${waiting} 件等你处理`}>
-								{waiting}
-							</span>
-						)}
-					</button>
-				))}
-				{state?.quota && (
-					<div className="aside-foot">
-						<div className="quota-h">Claude 用量</div>
-						<MiniQuota label="5 小时内" w={state.quota.windows.five_hour} now={state.now} />
-						<MiniQuota label="本周" w={state.quota.windows.seven_day} now={state.now} />
-					</div>
-				)}
-			</aside>
+			<Rail
+				items={(Object.keys(TITLES) as View[]).map((v) => ({
+					key: v,
+					label: TITLES[v],
+					hint: HINTS[v],
+					...(v === "work" && waiting > 0 ? { badge: waiting, badgeLabel: `${waiting} 件等你处理` } : {}),
+				}))}
+				current={view}
+				onGo={(v) => go(v as View)}
+				quota={state?.quota?.windows}
+				now={state?.now ?? 0}
+			/>
 			<main>
 				{error && !state && <div className="issue">连不上 Cabinet 服务，正在重试。确认服务已经启动。</div>}
 				{state && !connected && <div className="issue">和 Cabinet 服务的连接断了，正在重连，页面上的内容可能不是最新的。</div>}
@@ -192,9 +183,7 @@ function Dashboard() {
 				)}
 				{state && view === "stories" && (
 					<>
-						<div className="phead">
-							<h1>需求</h1>
-						</div>
+						<PageHead title="需求" finding={storiesFinding(state)} />
 						<StoryBoard
 							key={`${search.story ?? ""}:${detail}:${storyReopen}`}
 							state={state}
@@ -205,9 +194,7 @@ function Dashboard() {
 				)}
 				{state && view === "cron" && (
 					<>
-						<div className="phead">
-							<h1>定时</h1>
-						</div>
+						<PageHead title="定时" finding={scheds && cronFinding(scheds, state.now)} />
 						<Schedules
 							agents={state.agents}
 							stories={state.stories}
@@ -224,9 +211,15 @@ function Dashboard() {
 				)}
 				{view === "memory" && (
 					<>
-						<div className="phead">
-							<h1>记忆</h1>
-						</div>
+						<PageHead
+							title="记忆"
+							finding={
+								mem &&
+								(mem.down.length || mem.error
+									? `Hindsight「${mem.bank}」现在连不上，助手暂时用不上记忆。`
+									: `${mem.conventions.length} 条约定每次都带；经验与事实存在 Hindsight「${mem.bank}」，起草和问答时按需召回。`)
+							}
+						/>
 						<MemoryBoard />
 					</>
 				)}
@@ -279,23 +272,17 @@ function Ops({
 	const failed = s.items.filter((t) => t.need === "retry" && t.status === "blocked");
 	return (
 		<>
-			<div className="phead">
-				<h1>运行</h1>
-				<div className="pulse">
-					<span>
-						进行中 <b>{s.running}</b>
-					</span>
-					<span>
-						等待起草 <b>{s.inflight}</b>
-					</span>
-					<span className={failed.length ? "bad" : ""}>
-						失败 <b>{failed.length}</b>
-					</span>
-					<span className={s.issues.length ? "bad" : ""}>
-						自检 <b>{s.issues.length ? `${s.issues.length} 个问题` : "正常"}</b>
-					</span>
-				</div>
-			</div>
+			<PageHead
+				title="运行"
+				finding={
+					<>
+						{s.running ? `${s.running} 件在跑` : "没有在跑的"}
+						{s.inflight > 0 && `，${s.inflight} 条等待起草`}
+						{failed.length > 0 && <span className="text-bad">，{failed.length} 件失败</span>}
+						{s.issues.length ? <span className="text-bad">，自检发现 {s.issues.length} 个问题</span> : "，自检正常"}。
+					</>
+				}
+			/>
 			<Tabs tabs={OPS_TABS} value={cur} onChange={setTab} />
 			{cur === "队列" && <DispatchPage onOpenDev={onOpenDev} />}
 			{cur === "失败" &&
@@ -396,9 +383,10 @@ function Settings({ s, tab, setTab }: { s: State; tab?: string; setTab: (t: stri
 	];
 	return (
 		<>
-			<div className="phead">
-				<h1>设置</h1>
-			</div>
+			<PageHead
+				title="设置"
+				finding={`飞书${s.auth.authorized ? "已授权" : "还没授权"}，${channels.filter((c) => c[2]).length} / ${channels.length} 个消息来源在收取。`}
+			/>
 			<Tabs tabs={SET_TABS} value={cur} onChange={setTab} />
 			{cur === "消息来源" && (
 				<div className="list">
@@ -422,28 +410,20 @@ function Settings({ s, tab, setTab }: { s: State; tab?: string; setTab: (t: stri
 	);
 }
 
-/** 侧栏底部的额度条：已用多少 + 细条，悬停看多久后重置 */
-function MiniQuota({ label, w, now }: { label: string; w?: QuotaWindow; now: number }) {
-	if (!w) return null;
-	const u = Math.min(1, Math.max(0, w.utilization));
-	const hot = u >= 0.8;
-	return (
-		<div className="quota" title={w.resetsAt ? `${span(w.resetsAt - now)}后重置` : "不知道什么时候重置"}>
-			<span>
-				{label} 已用 <b className={hot ? "warn" : ""}>{pct(u)}</b>
-			</span>
-			<div
-				className="bar"
-				role="meter"
-				aria-label={`${label}已用`}
-				aria-valuenow={Math.round(u * 100)}
-				aria-valuemin={0}
-				aria-valuemax={100}
-			>
-				<i className={hot ? "hot" : ""} style={{ width: `${u * 100}%` }} />
-			</div>
-		</div>
-	);
+/** 需求页的现状：几个还没发布、几个任务在跑 */
+function storiesFinding(s: State) {
+	const open = s.stories.filter((x) => x.stage !== "done" && x.stage !== "dropped").length;
+	if (!open) return "没有还在推进的需求。";
+	const running = s.devTasks.filter((t) => t.storyId && !t.patrol && t.status === "running").length;
+	return `${open} 个需求还没发布${running ? `，${running} 个任务在跑` : ""}。`;
+}
+
+/** 定时页的现状：启用了几个、下一个什么时候跑 */
+function cronFinding(list: Array<{ name: string; enabled: boolean; nextRun: number | null }>, now: number) {
+	const on = list.filter((x) => x.enabled);
+	if (!on.length) return list.length ? `没有启用的定时任务，${list.length} 个已暂停或结束。` : "还没有定时任务。";
+	const next = on.filter((x) => x.nextRun).toSorted((x, y) => (x.nextRun ?? 0) - (y.nextRun ?? 0))[0];
+	return `${on.length} 个定时任务已启用${next?.nextRun ? `，下一个是「${next.name}」，${when(next.nextRun, now)}` : ""}。`;
 }
 
 /** 没授权；或者授权过、但缺了代码后来加的权限（missing），要重新授权一次 */

@@ -25,53 +25,74 @@
 	--color-warn-soft: var(--warn-soft);
 	--color-bad: var(--bad);
 	--color-bad-soft: var(--bad-soft);
+	--color-live: var(--live);
+	--color-live-soft: var(--live-soft);
+	--color-wait: var(--wait);
+	--color-wait-soft: var(--wait-soft);
+	--color-rule: var(--rule);
 }
 
 :root {
-	/* 暖灰中性色；唯一强调色取中国传统色「黛绿」：主操作、选中、等你处理的事。
-	 * ok / warn / bad 只用于小面积状态（标签、圆点），不做大块底色 */
-	--bg: #f6f5f1;
+	/* 照 komo 的「墨与纸」：无彩中性灰，主操作和选中是墨色（--accent 现在就是墨）。
+	 * 唯一的色相是黛绿 --live，只表示「此刻在跑 / 在场」：运行中的点和字、用量条、印章。
+	 * 等你拍板的事用琥珀 --wait（--zhu 是旧名，等同 --wait）。ok / warn / bad 只用于小面积状态。 */
+	--bg: #f4f4f5;
 	--panel: #fff;
-	--text: #24221f;
-	--text-2: #57524b;
-	--muted: #6f6a62;
-	--line: #e6e2db;
-	--soft: #efece6;
-	--accent: #426666;
-	--accent-soft: #e7eeec;
+	--text: #1a1a1a;
+	--text-2: #3f3f43;
+	--muted: #5c5c61;
+	--line: #e6e6e8;
+	--rule: #efeff1;
+	--soft: #ececee;
+	--accent: #1a1a1a;
+	--accent-hover: #36363a;
+	--accent-soft: #e8e8ea;
 	--on-accent: #fff;
-	/* 旧名，等同强调色 */
-	--zhu: var(--accent);
-	--zhu-soft: var(--accent-soft);
-	--ok: #4d7a3a;
-	--ok-soft: #edf2e6;
-	--warn: #8a6a10;
-	--warn-soft: #f6efdc;
-	--bad: #b0403a;
-	--bad-soft: #f8e9e6;
-	--shade: rgba(36, 34, 31, 0.28);
+	--live: #426666;
+	--live-soft: #e3ecea;
+	--wait: #6b4f0a;
+	--wait-soft: #fbf3d6;
+	--wait-dot: #c98a12;
+	--zhu: var(--wait);
+	--zhu-soft: var(--wait-soft);
+	--ok: #3d6b26;
+	--ok-soft: #eaf3e0;
+	--warn: #6b4f0a;
+	--warn-soft: #fbf3d6;
+	--bad: #b3261e;
+	--bad-soft: #fdecea;
+	--focus: hsl(212 100% 48%);
+	--shade: rgb(0 0 0 / 0.28);
 	--f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
 	--f-brand: "Noto Serif SC", "Songti SC", serif;
 }
 @media (prefers-color-scheme: dark) {
 	:root {
-		--bg: #171614;
-		--panel: #1f1e1b;
-		--text: #ece9e3;
-		--text-2: #b8b2a8;
-		--muted: #969087;
-		--line: #34312c;
-		--soft: #2a2825;
-		--accent: #8fb8b4;
-		--accent-soft: #263331;
-		--on-accent: #14201f;
+		--bg: #18181a;
+		--panel: #1f1f22;
+		--text: #ececee;
+		--text-2: #c4c4c8;
+		--muted: #9a9aa0;
+		--line: #333336;
+		--rule: #2a2a2d;
+		--soft: #2a2a2d;
+		--accent: #ececee;
+		--accent-hover: #d4d4d8;
+		--accent-soft: #333336;
+		--on-accent: #18181a;
+		--live: #8fb8b4;
+		--live-soft: #263331;
+		--wait: #e0b85a;
+		--wait-soft: #362d16;
+		--wait-dot: #d29a2a;
 		--ok: #9cc28a;
 		--ok-soft: #26301f;
 		--warn: #e0b85a;
 		--warn-soft: #362d16;
 		--bad: #e8857a;
 		--bad-soft: #3a221f;
-		--shade: rgba(0, 0, 0, 0.5);
+		--focus: hsl(212 100% 62%);
+		--shade: rgb(0 0 0 / 0.5);
 		color-scheme: dark;
 	}
 }
@@ -114,7 +135,7 @@ body {
 	width: 30px;
 	height: 30px;
 	border-radius: 6px;
-	background: var(--accent);
+	background: var(--live);
 	color: #fff;
 	display: grid;
 	place-items: center;
@@ -222,11 +243,14 @@ body {
 	background: var(--soft);
 	color: var(--muted);
 }
-.pill.pending,
+.pill.pending {
+	background: var(--wait-soft);
+	color: var(--wait);
+}
 .pill.revising,
 .pill.sending {
-	background: var(--accent-soft);
-	color: var(--accent);
+	background: var(--live-soft);
+	color: var(--live);
 }
 .pill.noreply {
 	background: var(--warn-soft);
@@ -399,13 +423,13 @@ blockquote {
 }
 .btn.primary:hover,
 .btn.pri:hover {
-	background: var(--accent);
-	filter: brightness(1.08);
+	background: var(--accent-hover);
+	border-color: var(--accent-hover);
 }
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 2px solid var(--focus);
 	outline-offset: -1px;
 }
 .btn:focus-visible,
@@ -413,7 +437,7 @@ select:focus-visible {
 .nav:focus-visible,
 .chip:focus-visible,
 .seg button:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 2px solid var(--focus);
 	outline-offset: 2px;
 }
 .btn:disabled {
@@ -588,10 +612,10 @@ select:focus-visible {
 	color: var(--muted);
 }
 .ico.in_progress {
-	color: var(--warn);
+	color: var(--live);
 }
 .ico.in_review {
-	color: var(--accent);
+	color: var(--wait);
 }
 .ico.blocked {
 	color: var(--bad);
@@ -613,7 +637,7 @@ select:focus-visible {
 	border-color: var(--accent);
 }
 .tcard:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 2px solid var(--focus);
 	outline-offset: 2px;
 }
 .tcard .head {
@@ -1166,77 +1190,147 @@ code,
 	color: var(--text-2);
 	margin-bottom: -4px;
 }
+/* 图标栏（照 komo）：72 宽，印章、各页入口（图标 + 短字）、底部用量环 */
 .app {
-	grid-template-columns: 184px minmax(0, 1fr);
+	grid-template-columns: 72px minmax(0, 1fr);
 }
-.app > aside {
+.app > aside.rail {
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
-	padding: 18px 10px;
-}
-.app > aside .brand {
-	letter-spacing: 0.02em;
+	align-items: center;
+	gap: 6px;
+	padding: 14px 0 12px;
 }
 .seal {
 	width: 28px;
 	height: 28px;
+	flex: none;
 	border-radius: 6px;
-	background: var(--accent);
-	color: var(--on-accent);
+	background: var(--live);
+	color: var(--panel);
 	display: grid;
 	place-items: center;
 	font: 700 17px/1 var(--f-brand);
 }
-.app > aside .nav {
-	color: var(--text-2);
+.rail-nav {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin-top: 14px;
 }
-.app > aside .nav.on {
+.rail-btn {
+	position: relative;
+	width: 60px;
+	height: 52px;
+	display: grid;
+	place-items: center;
+	align-content: center;
+	gap: 3px;
+	border: 0;
+	border-radius: 10px;
+	background: none;
+	color: var(--muted);
+	font: inherit;
+	cursor: pointer;
+	transition:
+		background-color 0.12s,
+		color 0.12s;
+}
+.rail-btn svg {
+	width: 20px;
+	height: 20px;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.5;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+.rail-btn span {
+	font-size: 11px;
+	line-height: 14px;
+}
+.rail-btn:hover {
 	background: var(--soft);
 	color: var(--text);
 }
-.nav .n {
-	font-variant-numeric: tabular-nums;
-	font-size: 12px;
-	font-weight: 600;
-	min-width: 20px;
-	padding: 0 6px;
-	border-radius: 10px;
-	background: var(--accent);
-	color: var(--on-accent);
-	text-align: center;
-	line-height: 18px;
+.rail-btn.on {
+	background: var(--accent-soft);
+	color: var(--text);
 }
-.aside-foot {
+.rail-btn.on svg {
+	stroke-width: 1.9;
+}
+.rail-btn.on span {
+	font-weight: 600;
+}
+.rail-btn:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 0;
+}
+/* 等你处理的件数：琥珀角标，外圈一道底色把它从图标上抠出来 */
+.rail-n {
+	position: absolute;
+	top: 3px;
+	right: 8px;
+	min-width: 16px;
+	height: 16px;
+	padding: 0 4px;
+	border-radius: 999px;
+	background: var(--wait-dot);
+	color: #fff;
+	font-size: 10px;
+	font-weight: 700;
+	line-height: 16px;
+	text-align: center;
+	box-shadow: 0 0 0 2px var(--bg);
+}
+.rail-quota {
 	margin-top: auto;
-	padding: 10px;
 	display: grid;
 	gap: 10px;
+	justify-items: center;
 }
-.quota {
+.ring {
+	position: relative;
 	display: grid;
-	gap: 4px;
-	font-size: 12px;
+	justify-items: center;
+	gap: 2px;
 	color: var(--muted);
+	font-size: 10px;
+	line-height: 12px;
+	cursor: default;
 }
-.quota b {
-	font-variant-numeric: tabular-nums;
-	font-weight: 500;
+.ring svg {
+	width: 30px;
+	height: 30px;
+}
+.ring circle {
+	fill: none;
+	stroke-width: 2.5;
+}
+.ring .track {
+	stroke: var(--accent-soft);
+}
+.ring .fill {
+	stroke: var(--live);
+	stroke-linecap: round;
+}
+.ring.hot .fill {
+	stroke: var(--wait-dot);
+}
+.ring b {
+	position: absolute;
+	top: 0;
+	width: 30px;
+	height: 30px;
+	display: grid;
+	place-items: center;
+	font-size: 10px;
+	font-weight: 600;
 	color: var(--text-2);
 }
-.bar {
-	height: 4px;
-	border-radius: 2px;
-	background: var(--soft);
-	overflow: hidden;
-}
-.bar i {
-	display: block;
-	height: 100%;
-	background: var(--accent);
-}
-.bar i.hot {
-	background: var(--warn);
+.ring.hot b {
+	color: var(--warn);
 }
 .app > main {
 	padding: 22px 28px 60px;
@@ -1275,7 +1369,7 @@ main.full .chatpage {
 	font-variant-numeric: tabular-nums;
 }
 .pulse .hot b {
-	color: var(--accent);
+	color: var(--live);
 }
 .link {
 	border: 0;
@@ -1449,7 +1543,7 @@ details.more[open] > summary h2::before {
 }
 .trow:focus-visible,
 .kcard:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 2px solid var(--focus);
 	outline-offset: -2px;
 }
 .tb {
@@ -1504,7 +1598,7 @@ details.more[open] > summary h2::before {
 	word-break: break-word;
 }
 .livedot {
-	color: var(--accent);
+	color: var(--live);
 }
 .livedot::before {
 	content: "";
@@ -1512,7 +1606,7 @@ details.more[open] > summary h2::before {
 	width: 6px;
 	height: 6px;
 	border-radius: 50%;
-	background: var(--accent);
+	background: var(--live);
 	margin-right: 6px;
 	vertical-align: 1px;
 	animation: blink 1.4s ease-in-out infinite;
@@ -1556,10 +1650,13 @@ button.story:hover {
 	background: var(--zhu-soft);
 	color: var(--zhu);
 }
-.p-read,
+.p-read {
+	background: var(--wait-soft);
+	color: var(--wait);
+}
 .p-run {
-	background: var(--accent-soft);
-	color: var(--accent);
+	background: var(--live-soft);
+	color: var(--live);
 }
 .p-fail {
 	background: var(--bad-soft);
@@ -1702,8 +1799,23 @@ button.story:hover {
 	white-space: pre-wrap;
 	word-break: break-word;
 }
+/* 你说的话靠右（照 komo 的用户气泡），和左边对方的消息一眼分开 */
+.mine {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+}
+.mine .bubble {
+	max-width: 80%;
+}
 .bubble.yi {
 	background: var(--accent-soft);
+}
+/* 对助手说的话：对方看不到，白底描边，和发到飞书的实心气泡分开 */
+.bubble.ask {
+	background: var(--panel);
+	box-shadow: inset 0 0 0 1px var(--line);
+	color: var(--text-2);
 }
 .sys {
 	font-size: 12px;
@@ -1847,6 +1959,8 @@ pre.cmd {
 @media (max-width: 760px) {
 	.app {
 		grid-template-columns: minmax(0, 1fr);
+		/* 页面短时网格会把多出的高度分给顶上的图标栏，固定成内容高 */
+		grid-template-rows: auto 1fr;
 	}
 	.app > aside {
 		position: sticky;
@@ -1862,23 +1976,24 @@ pre.cmd {
 		z-index: 9;
 		gap: 4px;
 	}
-	.app > aside .brand {
-		display: none;
-	}
-	.app > aside .brand span,
-	.aside-foot {
-		display: none;
-	}
-	.app > aside .nav {
-		gap: 4px;
-		white-space: nowrap;
-		width: auto;
-		padding: 6px 8px;
-	}
-	.app > aside {
-		padding: 6px 8px;
+	.app > aside.rail {
+		padding: 4px 8px;
 		gap: 0;
-		justify-content: space-between;
+	}
+	.app > aside .seal,
+	.rail-quota {
+		display: none;
+	}
+	.rail-nav {
+		flex-direction: row;
+		margin: 0 auto;
+	}
+	.rail-btn {
+		width: 50px;
+		height: 46px;
+	}
+	.rail-n {
+		right: 4px;
 	}
 	.tools input.in {
 		flex: 1 1 140px;
@@ -1920,7 +2035,7 @@ pre.cmd {
 	background: var(--soft);
 }
 .srow.click:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 2px solid var(--focus);
 	outline-offset: -2px;
 }
 /* 工作台「今天还会运行」：点名字直接打开那个定时任务 */
@@ -1989,7 +2104,7 @@ pre.cmd {
 	cursor: default;
 }
 .runhead:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 2px solid var(--focus);
 	outline-offset: -2px;
 }
 .runhead .t {
@@ -2073,7 +2188,7 @@ pre.cmd {
 }
 .sq i.r,
 .legend i.r {
-	border: 1.5px solid var(--accent);
+	border: 1.5px solid var(--live);
 }
 .legend {
 	display: flex;
@@ -2410,4 +2525,8 @@ pre.cmd {
 .dock .embed > .actions {
 	position: static;
 	padding: 10px 0 0;
+}
+/* 按钮那一排里展开了表情的「回表情」 */
+.btn.on {
+	box-shadow: inset 0 0 0 1px var(--text-2);
 }

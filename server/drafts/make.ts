@@ -403,6 +403,8 @@ export function draftWithAsk(messageId: string, text: string): "started" | "late
 	if (!inflight.has(messageId)) throw new DraftError("这条已经起草完或不在排队了");
 	if (prompted.has(messageId)) return "late";
 	setKv(askKey(messageId), text);
+	// kv 里这句起草完就删了：另记一条流水，看板时间线上才看得到他起草前交代过什么（tasks.ts askedOf）
+	record({ kind: "draft", status: "asked", chatId: inflight.get(messageId)?.chatId, source: messageId, question: text });
 	log("Yi 交代了怎么处理，立即起草", messageId);
 	// 在等（排队等 deep、等批准）的叫醒它；在排队等名额的轮到时会带上这句话
 	draftNow(messageId);

@@ -186,7 +186,9 @@ export type Need = "send" | "approve" | "read" | "decide" | "retry";
 export type TaskEvent =
 	| { k: "msg"; at: number; who: string; owner: boolean; text: string; url?: string | null; mid?: string }
 	| { k: "route"; at: number; rule: string; agent: string | null; tier?: string; kind: string }
-	| { k: "result"; at: number; outcome: string; detail?: string | null; ref?: string | null };
+	| { k: "result"; at: number; outcome: string; detail?: string | null; ref?: string | null }
+	/** 你在看板 / 卡片上对助手说的话（改写意见、先去查什么、接着追问），不是发给对方的 */
+	| { k: "ask"; at: number; text: string };
 
 /** 一件事（server/tasks.ts TaskView）：排队里的消息 id 是 q:<消息>，分派前就失败的是 fail-/qa-<消息>，记忆冲突是 mem:<id>，挂不上任务的审批是 apv:<id> */
 export interface TaskView {

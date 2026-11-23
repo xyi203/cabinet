@@ -133,14 +133,42 @@ function Ev({ at, children }: { at?: number; children: ReactNode }) {
 	);
 }
 
+/**
+ * 你说的话靠右放，分两种，一眼要能分开：
+ * 发到飞书给对方的（灰底实心气泡，和对方的消息同一种底）；对助手说的（白底描边气泡，标「→ 助手」，对方看不到）
+ */
+function Mine({ how, toAgent, children }: { how?: string; toAgent?: boolean; children: ReactNode }) {
+	return (
+		<div className="mine">
+			<div className="who">
+				<b>你</b>
+				{toAgent ? " → 助手" : how && ` · ${how}`}
+			</div>
+			<div className={`bubble ${toAgent ? "ask" : "yi"}`}>{children}</div>
+		</div>
+	);
+}
+
 function eventNode(e: TaskEvent): ReactNode {
+	if (e.k === "ask")
+		return (
+			<Mine toAgent>
+				<MsgText text={e.text} />
+			</Mine>
+		);
+	if (e.k === "msg" && e.owner)
+		return (
+			<Mine how="飞书">
+				<MsgText text={e.text} mid={e.mid} />
+			</Mine>
+		);
 	if (e.k === "msg")
 		return (
 			<>
 				<div className="who">
-					<b>{e.owner ? "你" : e.who || "对方"}</b>
+					<b>{e.who || "对方"}</b>
 				</div>
-				<div className={`bubble${e.owner ? " yi" : ""}`}>
+				<div className="bubble">
 					<MsgText text={e.text} mid={e.mid} />
 				</div>
 			</>
@@ -159,6 +187,23 @@ function eventNode(e: TaskEvent): ReactNode {
 				)}
 			</div>
 		);
+	// 发出去的那句（经看板 / 卡片发的、你在飞书亲自回的）照聊天气泡显示全文，不再是一行灰字
+	if (e.k === "result" && e.detail && (e.outcome === "sent" || e.outcome === "expired")) {
+		if (e.outcome === "expired") {
+			const text = e.detail.replace(/^你回的：/, "");
+			return (
+				<Mine how="在飞书亲自回复">
+					<MsgText text={text} mid={e.ref} />
+				</Mine>
+			);
+		}
+		const dm = e.detail.startsWith("私聊发给对方：");
+		return (
+			<Mine how={dm ? "从看板私聊发给对方" : "从看板发到飞书"}>
+				<Markdown text={dm ? e.detail.slice("私聊发给对方：".length) : e.detail} />
+			</Mine>
+		);
+	}
 	return (
 		<div className="sys dim">
 			{OUTCOME[e.outcome] ?? e.outcome}
@@ -215,7 +260,13 @@ function DraftRecord({ d, t }: { d: Draft; t: TaskView }) {
 				<span>{STATUS[d.status] ?? d.status}</span>
 			</div>
 			<div className="ob">
-				{d.kind === "text" ? <Markdown text={d.draft} /> : <div className="quote">{describeDraft(d)}</div>}
+				{d.status === "sent" ? (
+					<div className="meta">正文已发出，见下面你的消息</div>
+				) : d.kind === "text" ? (
+					<Markdown text={d.draft} />
+				) : (
+					<div className="quote">{describeDraft(d)}</div>
+				)}
 				{d.note && <div className="meta">{d.note}</div>}
 				{mr && (
 					<div className="meta">

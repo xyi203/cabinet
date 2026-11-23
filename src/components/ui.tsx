@@ -35,6 +35,22 @@ function Tile({ children }: { children: ReactNode }) {
 	return <div className="rounded-[12px] bg-bg px-4 py-3">{children}</div>;
 }
 
+/**
+ * 页头（照 komo）：标题、下面一句话说清这一页现在的状况（「3 个助手，今天跑了 13 次」），操作放右边。
+ * 现状句是数出来的事实，不写这一页是干什么的（那个在图标栏的悬停提示里）。
+ */
+export function PageHead({ title, finding, actions }: { title: ReactNode; finding?: ReactNode; actions?: ReactNode }) {
+	return (
+		<header className="mb-5 flex flex-wrap items-start gap-x-4 gap-y-2">
+			<div className="min-w-0 flex-1">
+				<h1 className="m-0 text-[20px] leading-7 font-semibold tracking-[-0.01em]">{title}</h1>
+				{finding && <p className="mt-0.5 mb-0 text-[14px] text-muted">{finding}</p>}
+			</div>
+			{actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+		</header>
+	);
+}
+
 export function SectionTitle({ children, extra }: { children: ReactNode; extra?: ReactNode }) {
 	return (
 		<div className="mb-1 flex items-center gap-2">

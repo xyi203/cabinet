@@ -25,7 +25,7 @@ const TASK_STATUS: Record<string, string> = {
 	done: "已完成",
 	discarded: "已放弃",
 };
-const TASK_STATUS_COLOR: Record<string, string> = { review: "text-accent", failed: "text-bad" };
+const TASK_STATUS_COLOR: Record<string, string> = { running: "text-live", review: "text-wait", failed: "text-bad" };
 
 /** 巡检每 30 分钟一轮，不进任务列表，在发布工单下面看 */
 const tasksOf = (state: State, id: string) => state.devTasks.filter((t) => t.storyId === id && !t.patrol);
@@ -48,7 +48,7 @@ const roundState = (t: DevTask) =>
 					? "无变化"
 					: "有异常";
 /** 正常的不上色，只让异常和失败显眼 */
-const ROUND_COLOR: Record<string, string> = { 有异常: "text-bad", 失败: "text-bad", 进行中: "text-accent" };
+const ROUND_COLOR: Record<string, string> = { 有异常: "text-bad", 失败: "text-bad", 进行中: "text-live" };
 /** 观察文档的链接：写在生成文档那个任务的结论里 */
 const DOC_URL_RE = /https:\/\/[\w.-]*feishu\.cn\/(?:docx|wiki|docs)\/[\w-]+/;
 

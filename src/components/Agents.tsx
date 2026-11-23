@@ -5,6 +5,7 @@ import { AGENT_NAME, money, when } from "../lib/format";
 import { EFFORT } from "./ModelPicker";
 import { PromptEditor } from "./Prompts";
 import { TIER_NAME } from "./Stats";
+import { PageHead } from "./ui";
 
 /** 所有助手共用的配置文件：模型、档位、工具、技能都在这里改 */
 const CONFIG = "config/agents.json";
@@ -35,8 +36,8 @@ function Avatar({ name, big }: { name: string; big?: boolean }) {
 
 function Status({ a }: { a: AgentStat }) {
 	return a.running.length ? (
-		<span className="text-ok" title={a.running.map((r) => r.label).join("\n")}>
-			● 运行中 {a.running.length}
+		<span className="livedot" title={a.running.map((r) => r.label).join("\n")}>
+			运行中 {a.running.length}
 		</span>
 	) : (
 		<span className="text-muted">空闲</span>
@@ -61,14 +62,15 @@ export function AgentsPage({
 	const cols = "grid grid-cols-[minmax(220px,2fr)_84px_minmax(120px,1fr)_72px_120px_96px] items-center gap-x-4";
 	return (
 		<div className="mx-auto max-w-[1080px]">
-			<div className="phead">
-				<h1>
-					智能体 <span className="text-[14px] font-normal text-muted tabular-nums">{agents.length}</span>
-				</h1>
-				<button className="btn ml-auto" title="新增、删除助手，改模型、档位、工具和技能" onClick={() => onOpen(CONFIG_KEY)}>
-					编辑配置文件
-				</button>
-			</div>
+			<PageHead
+				title="智能体"
+				finding={agentsFinding(agents)}
+				actions={
+					<button className="btn" title="新增、删除助手，改模型、档位、工具和技能" onClick={() => onOpen(CONFIG_KEY)}>
+						编辑配置文件
+					</button>
+				}
+			/>
 			{/* 照设置页排：没有外框和表头色块，只用细线分行 */}
 			<div className="overflow-x-auto">
 				<div className="min-w-[780px]">
@@ -258,4 +260,12 @@ function ConfigFile({ onBack }: { onBack: () => void }) {
 			{file ? <PromptEditor file={file} /> : <div className="text-[14px] text-muted">{prompts ? `没找到 ${CONFIG}` : "加载中…"}</div>}
 		</div>
 	);
+}
+
+/** 页头现状：几个助手、今天跑了几次花了多少、几个正在跑 */
+function agentsFinding(agents: AgentStat[]) {
+	const runs = agents.reduce((n, a) => n + a.runs, 0);
+	const cost = agents.reduce((n, a) => n + a.cost, 0);
+	const busy = agents.filter((a) => a.running.length > 0).length;
+	return `${agents.length} 个助手，今天跑了 ${runs} 次，花费 ${money(cost)}${busy ? `，${busy} 个正在跑` : ""}。`;
 }

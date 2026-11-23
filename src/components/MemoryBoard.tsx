@@ -380,9 +380,6 @@ export function MemoryBoard() {
 	};
 	return (
 		<div className="flex flex-col gap-6">
-			<p className="-mt-2 mb-0 text-[14px] text-muted">
-				助手回消息、做事时会参考这些记忆：约定、你的偏好和经验都在 Hindsight（bank「{data.bank}」）。
-			</p>
 			{(data.down.length > 0 || data.pending > 0) && (
 				<div className="flex flex-col gap-1 text-[12px]">
 					{data.down.map((d) => (

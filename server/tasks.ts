@@ -25,7 +25,9 @@ import { type Need, type Outputs, type TaskStatus, applyStatus, outputsOf } from
 export type TaskEvent =
 	| { k: "msg"; at: number; who: string; owner: boolean; text: string; url?: string | null }
 	| { k: "route"; at: number; rule: string; agent: string | null; tier?: string; kind: string }
-	| { k: "result"; at: number; outcome: string; detail?: string | null; ref?: string | null };
+	| { k: "result"; at: number; outcome: string; detail?: string | null; ref?: string | null }
+	/** Yi 在看板 / 卡片上对助手说的话（改写意见、让它先去查什么、办完后接着追问），不是发给对方的 */
+	| { k: "ask"; at: number; text: string };
 
 export interface TaskView {
 	id: string;
@@ -93,7 +95,9 @@ export function taskViews(records: RecordRow[]): TaskView[] {
 		.limit(500)
 		.all();
 	const outs = outputsOf(rows.map((r) => r.id));
+	const asks = asksOf([...outs.values()].flatMap((o) => o.drafts.map((d) => d.id)));
 	const trigIds = [...new Set([...outs.values()].flatMap((o) => o.routes.flatMap((r) => r.triggers)))];
+	const asked = askedOf(trigIds.map((id) => id.slice(id.indexOf(":") + 1)));
 	const triggers = trigIds.length ? db().select().from(schema.triggers).where(inArray(schema.triggers.id, trigIds)).all() : [];
 	const trigById = new Map(triggers.map((x) => [x.id, x]));
 	const views: TaskView[] = [];
@@ -106,7 +110,7 @@ export function taskViews(records: RecordRow[]): TaskView[] {
 			.filter((x) => x != null)
 			.toSorted((a, b) => a.at - b.at);
 		for (const x of trs) covered.add(x.id.slice(x.id.indexOf(":") + 1));
-		views.push(view(row, o, trs));
+		views.push(view(row, o, trs, asks, asked));
 	}
 	const out = [...views, ...queued(t), ...unrouted(records, covered, t)];
 	return [...out, ...looseApprovals(out)].toSorted((a, b) => b.updated - a.updated);
@@ -133,7 +137,58 @@ function looseApprovals(views: TaskView[]): TaskView[] {
 		}));
 }
 
-function view(input: typeof schema.tasks.$inferSelect, o: Outputs, trs: Array<typeof schema.triggers.$inferSelect>): TaskView {
+/**
+ * 草稿上 Yi 对助手说的话：每次改写 / 追问出新一版都记一条 revised 流水（drafts/actions.ts），question 是他的原话。
+ * 追问带「接着追问：」前缀，MR 上的追问走复审带「复审：Yi 追问：」；自动复审、到期复查不是他说的，不进来。
+ * 流水在运行结束时才写，减去耗时才是他说话的时刻
+ */
+function asksOf(draftIds: string[]): Map<string, Array<{ at: number; text: string }>> {
+	const out = new Map<string, Array<{ at: number; text: string }>>();
+	if (!draftIds.length) return out;
+	const rows = db()
+		.select({ dm: schema.records.dm, ts: schema.records.ts, seconds: schema.records.seconds, question: schema.records.question })
+		.from(schema.records)
+		.where(and(eq(schema.records.kind, "draft"), eq(schema.records.status, "revised"), inArray(schema.records.dm, draftIds)))
+		.all();
+	for (const r of rows) {
+		const q = r.question?.trim();
+		if (!r.dm || !q) continue;
+		let text = q;
+		if (q.startsWith("接着追问：")) text = q.slice("接着追问：".length);
+		else if (q.startsWith("复审：Yi 追问：")) text = q.slice("复审：Yi 追问：".length);
+		else if (q.startsWith("复审：") || q.startsWith("到期复查：")) continue;
+		const list = out.get(r.dm) ?? [];
+		list.push({ at: r.ts - (r.seconds ?? 0), text: text.trim() });
+		out.set(r.dm, list);
+	}
+	return out;
+}
+
+/** 消息还没起草时 Yi 交代的话（drafts/make.ts draftWithAsk 记的 asked 流水），按消息 id 分组 */
+function askedOf(mids: string[]): Map<string, Array<{ at: number; text: string }>> {
+	const out = new Map<string, Array<{ at: number; text: string }>>();
+	if (!mids.length) return out;
+	const rows = db()
+		.select({ source: schema.records.source, ts: schema.records.ts, question: schema.records.question })
+		.from(schema.records)
+		.where(and(eq(schema.records.kind, "draft"), eq(schema.records.status, "asked"), inArray(schema.records.source, mids)))
+		.all();
+	for (const r of rows) {
+		if (!r.source || !r.question?.trim()) continue;
+		const list = out.get(r.source) ?? [];
+		list.push({ at: r.ts, text: r.question.trim() });
+		out.set(r.source, list);
+	}
+	return out;
+}
+
+function view(
+	input: typeof schema.tasks.$inferSelect,
+	o: Outputs,
+	trs: Array<typeof schema.triggers.$inferSelect>,
+	asks: Map<string, Array<{ at: number; text: string }>>,
+	asked: Map<string, Array<{ at: number; text: string }>>,
+): TaskView {
 	let row = input;
 	const routes = o.routes.toSorted((a, b) => a.at - b.at);
 	const acting = routes.filter((r) => ["draft", "qa", "dev"].includes(r.actionKind));
@@ -156,6 +211,8 @@ function view(input: typeof schema.tasks.$inferSelect, o: Outputs, trs: Array<ty
 		})),
 		...routes.map((r) => ({ k: "route" as const, at: r.at, rule: r.rule, agent: r.agent, tier: r.info?.tier, kind: r.actionKind })),
 		...o.results.map((r) => ({ k: "result" as const, at: r.at, outcome: r.outcome, detail: r.detail, ref: r.ref })),
+		...drafts.flatMap((d) => (asks.get(d.id) ?? []).map((a) => ({ k: "ask" as const, at: a.at, text: a.text }))),
+		...trs.flatMap((x) => (asked.get(x.id.slice(x.id.indexOf(":") + 1)) ?? []).map((a) => ({ k: "ask" as const, at: a.at, text: a.text }))),
 	].toSorted((a, b) => a.at - b.at);
 	const lastResult = o.results.toSorted((a, b) => b.at - a.at)[0];
 	let result: string | undefined;
@@ -240,6 +297,8 @@ function view(input: typeof schema.tasks.$inferSelect, o: Outputs, trs: Array<ty
 function queued(t: number): TaskView[] {
 	if (!inflight.size) return [];
 	const mids = [...inflight.keys()];
+	// 排队时交代过的话：还没分派，不在任务的 trigger 里，按消息 id 单独查
+	const asked = askedOf(mids);
 	const routed = new Set(
 		db()
 			.select({ id: schema.triggers.id })
@@ -274,7 +333,10 @@ function queued(t: number): TaskView[] {
 			drafts: [],
 			devTasks: [],
 			approvals: [],
-			events: [{ k: "msg", at: i.since, who: i.label, owner: false, text: i.text }],
+			events: [
+				{ k: "msg" as const, at: i.since, who: i.label, owner: false, text: i.text },
+				...(asked.get(mid) ?? []).map((a) => ({ k: "ask" as const, at: a.at, text: a.text })),
+			],
 		}));
 }
 

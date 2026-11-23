@@ -1,4 +1,4 @@
-// 一件事现在能做什么，只在这里定义一次，形式照 Claude 的选择提示：编号选项（1 / 2 / 3、↑ ↓ 回车、Esc 选否定的那项），
+// 一件事现在能做什么，只在这里定义一次，显示成一排按钮（主按钮 + 普通按钮，回车点主按钮、Esc 点否定的那项、1 / 2 / 3 按顺序），
 // 工作台底部常驻的输入框是最后一项——打字发出就用你写的（草稿：交给助手按指示改写或先去查，出新一版草稿，不直接发给对方；
 // 审批：当拒绝理由；agent 任务：追问 / 插话）。「/改写 xxx」和直接打字一样。
 import { useQueryClient } from "@tanstack/react-query";
@@ -30,7 +30,7 @@ export interface Option {
 	side?: boolean;
 	/** 选了以后就地出一排可选的（表情、表情包），选中的 key 和类型交给 run */
 	pick?: PickItem[];
-	/** 选项右边的附加控件（发到哪），点它不会触发选项本身 */
+	/** 附加控件（发到哪），放在按钮那一排上面，点它不会触发选项本身 */
 	extra?: React.ReactNode;
 	run: Run;
 }
@@ -157,7 +157,7 @@ export function actionsOf(t: TaskView | undefined, c: Ctx): Actions {
 		if (!meego && c.picks.length)
 			options.push({
 				key: "pick",
-				label: emoji ? "换一个表情或表情包" : "回表情或表情包",
+				label: emoji ? "换一个表情" : "回表情",
 				pick: c.picks,
 				advance: true,
 				run: (key, kind) => send(key, kind ?? "reaction"),
@@ -371,13 +371,13 @@ export function useRunner() {
 }
 
 /**
- * Claude 式的选择：编号选项。数字键 / ↑ ↓ 回车 / Esc 只在没在打字时生效；
- * 打字的输入框在外面（工作台底部常驻），它发出的话由 matchText 处理
+ * 要你拍板的事：一排按钮，点一下就办完。第一项是主按钮（墨色，回车也是它），其余是普通按钮，
+ * 否定的那项（不回复、拒绝、忽略）放在最后，Esc 也是它。数字键 1 / 2 / 3 按顺序点。快捷键只在没在打字时生效；
+ * 打字的输入框在外面（工作台底部常驻），它发出的话由 matchText 处理。trailing 放在这一排最右边（不算决定的小链接、关掉）
  */
-export function Choices({ actions, onAdvance }: { actions: Actions; onAdvance: () => void }) {
+export function Choices({ actions, onAdvance, trailing }: { actions: Actions; onAdvance: () => void; trailing?: React.ReactNode }) {
 	const { busy, exec } = useRunner();
 	const { options } = actions;
-	const [cur, setCur] = useState(0);
 	const [open, setOpen] = useState<number>();
 	const fire = async (i: number, n = "", kind?: Kind) => {
 		const o = options[i];
@@ -386,26 +386,21 @@ export function Choices({ actions, onAdvance }: { actions: Actions; onAdvance: (
 	};
 	const pick = (i: number) => {
 		if (!options[i] || busy) return;
-		setCur(i);
 		if (options[i].pick) setOpen(open === i ? undefined : i);
 		else void fire(i);
 	};
+	// 否定的那项排到最后，主按钮是剩下的第一项
+	const order = [...options.keys()].toSorted((x, y) => Number(!!options[x].neg) - Number(!!options[y].neg));
+	const main = order.find((i) => !options[i].neg && !options[i].pick);
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			const el = document.activeElement as HTMLElement | null;
 			if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
 			if (e.metaKey || e.ctrlKey || e.altKey || document.querySelector("dialog.confirm[open]")) return;
 			const n = Number(e.key);
-			if (n >= 1 && n <= options.length) pick(n - 1);
-			else if (e.key === "ArrowDown") {
-				e.preventDefault();
-				setCur((x) => Math.min(options.length - 1, x + 1));
-			} else if (e.key === "ArrowUp") {
-				e.preventDefault();
-				setCur((x) => Math.max(0, x - 1));
-			}
+			if (n >= 1 && n <= order.length) pick(order[n - 1]);
 			// 焦点在别的按钮上时回车是点那个按钮，不能顺手批准、发送了
-			else if (e.key === "Enter" && el?.tagName !== "BUTTON") pick(cur);
+			else if (e.key === "Enter" && el?.tagName !== "BUTTON" && main !== undefined) pick(main);
 			else if (e.key === "Escape") {
 				const i = options.findIndex((o) => o.neg);
 				if (i >= 0) pick(i);
@@ -415,58 +410,65 @@ export function Choices({ actions, onAdvance }: { actions: Actions; onAdvance: (
 		return () => window.removeEventListener("keydown", onKey);
 	});
 	if (!options.length) return null;
+	const picked = open === undefined ? undefined : options[open];
 	return (
-		<div className={`flex flex-col${busy ? " opacity-60" : ""}`}>
-			{options.map((o, i) => (
-				<div key={o.key}>
-					<div className={`flex items-center gap-2 rounded-[6px] pr-2 ${cur === i ? "bg-accent-soft" : ""}`} onMouseEnter={() => setCur(i)}>
-						<button
-							disabled={busy}
-							onClick={() => pick(i)}
-							className={`flex flex-1 items-center gap-2 border-0 bg-transparent px-2 py-1.5 text-left text-[14px] ${cur === i ? "text-accent" : "text-text"}`}
-						>
-							<span className="w-3 text-accent">{cur === i ? "›" : ""}</span>
-							<span className="w-4 text-muted tabular-nums">{i + 1}.</span>
-							<span>{o.label}</span>
-							{o.neg && <span className="ml-auto text-[12px] text-muted">Esc</span>}
-						</button>
-						{o.extra}
-					</div>
-					{open === i && o.pick && (
-						<div className="my-1 ml-9 flex flex-col gap-2">
-							{(["reaction", "sticker"] as const).map((k) => {
-								const items = o.pick!.filter((p) => p.kind === k);
-								if (!items.length) return null;
-								return (
-									<div key={k} className="flex items-start gap-2">
-										<span className="w-12 shrink-0 pt-2 text-[12px] text-muted">{k === "reaction" ? "表情" : "表情包"}</span>
-										<div className="flex flex-wrap gap-1.5">
-											{items.map((p) => (
-												<button
-													key={p.key}
-													title={k === "sticker" ? p.key.replace(/\.[^.]+$/, "") : p.key}
-													disabled={busy}
-													onClick={() => void fire(i, p.key, p.kind)}
-													className={`flex items-center justify-center rounded-[6px] border border-line bg-panel hover:bg-soft ${k === "sticker" ? "h-16 w-16 flex-col overflow-hidden p-1" : "h-9 min-w-9 px-1.5 text-[16px]"}`}
-												>
-													{k === "reaction" ? (
-														(GLYPH[p.key] ?? p.key)
-													) : (
-														<>
-															<img src={`/api/stickers/${enc(p.key)}`} alt="" className="max-h-10 max-w-full" />
-															<span className="truncate text-[11px] text-muted">{p.key.replace(/\.[^.]+$/, "")}</span>
-														</>
-													)}
-												</button>
-											))}
-										</div>
-									</div>
-								);
-							})}
-						</div>
-					)}
+		<div className={`flex flex-col gap-2${busy ? " opacity-60" : ""}`}>
+			{/* 附加控件（发到哪）单独一行放在按钮上面，先选去处再点发送 */}
+			{options.some((o) => o.extra) && (
+				<div className="flex flex-wrap items-center gap-2">{options.map((o) => o.extra && <span key={o.key}>{o.extra}</span>)}</div>
+			)}
+			<div className="flex flex-wrap items-center gap-2">
+				{order.map((i) => {
+					const o = options[i];
+					return (
+						<span key={o.key} className="contents">
+							<button
+								disabled={busy}
+								onClick={() => pick(i)}
+								aria-expanded={o.pick ? open === i : undefined}
+								title={i === main ? "回车" : o.neg ? "Esc" : undefined}
+								className={`btn${i === main ? " pri" : ""}${open === i ? " on" : ""}`}
+							>
+								{o.label}
+							</button>
+						</span>
+					);
+				})}
+				{trailing && <span className="ml-auto flex items-center gap-3">{trailing}</span>}
+			</div>
+			{picked?.pick && open !== undefined && (
+				<div className="flex flex-col gap-2">
+					{(["reaction", "sticker"] as const).map((k) => {
+						const items = picked.pick!.filter((p) => p.kind === k);
+						if (!items.length) return null;
+						return (
+							<div key={k} className="flex items-start gap-2">
+								<span className="w-12 shrink-0 pt-2 text-[12px] text-muted">{k === "reaction" ? "表情" : "表情包"}</span>
+								<div className="flex flex-wrap gap-1.5">
+									{items.map((p) => (
+										<button
+											key={p.key}
+											title={k === "sticker" ? p.key.replace(/\.[^.]+$/, "") : p.key}
+											disabled={busy}
+											onClick={() => void fire(open, p.key, p.kind)}
+											className={`flex items-center justify-center rounded-[6px] border border-line bg-panel hover:bg-soft ${k === "sticker" ? "h-16 w-16 flex-col overflow-hidden p-1" : "h-9 min-w-9 px-1.5 text-[16px]"}`}
+										>
+											{k === "reaction" ? (
+												(GLYPH[p.key] ?? p.key)
+											) : (
+												<>
+													<img src={`/api/stickers/${enc(p.key)}`} alt="" className="max-h-10 max-w-full" />
+													<span className="truncate text-[11px] text-muted">{p.key.replace(/\.[^.]+$/, "")}</span>
+												</>
+											)}
+										</button>
+									))}
+								</div>
+							</div>
+						);
+					})}
 				</div>
-			))}
+			)}
 		</div>
 	);
 }

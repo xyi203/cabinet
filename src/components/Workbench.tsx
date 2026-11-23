@@ -297,7 +297,7 @@ function Item({ t, on, onClick }: { t: TaskView; on: boolean; onClick: () => voi
 }
 
 /**
- * 底部输入区，照 Claude 桌面端：选中的事有要你选的，就在常驻输入框上方浮一张选项卡（可以关掉，先不选）；
+ * 底部输入区，照 Claude 桌面端：选中的事有要你拍板的，就在常驻输入框上方放一排按钮，点一下就办完（可以收起，先不选）；
  * 输入框一直在。这件事接受打字时（草稿、审批、agent 任务），输入框发出的话就是对它的回答；
  * 卡片关着或没选中事时，发出的话是派给助手的新活
  */
@@ -334,7 +334,9 @@ function Dock({
 	const card = open && cardOptions.length > 0;
 	const side = cur ? (decide ? actions.options.filter((o) => o.side) : actions.options) : [];
 	const stop = side.find((o) => o.key === "stop");
-	const links = side.filter((o) => o !== stop);
+	// 按钮那一排出来时，「已经在别处回过了」这类小链接跟着放在那一排右边；没有按钮时留在输入框下面
+	const links = card ? [] : side.filter((o) => o !== stop);
+	const barLinks = card ? side.filter((o) => o !== stop) : [];
 	const runSide = async (o: (typeof side)[number]) => {
 		if ((await exec(() => o.run(""))) && o.advance) onAdvance();
 	};
@@ -373,22 +375,33 @@ function Dock({
 		onCreated(devId);
 	};
 	return (
-		<div className="px-8 pb-6">
+		// 上沿一段白到透明的渐隐：滚上去的正文是淡掉，不是被切成半行贴在按钮上（照 komo 的对话区）
+		<div className="relative px-8 pt-2 pb-6 before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-6 before:bg-linear-to-t before:from-panel before:to-transparent">
 			<div className="mx-auto flex max-w-[860px] flex-col gap-2">
 				{card && cur && (
-					<div className="rounded-[12px] border border-line bg-panel px-2 py-2 shadow-[0_2px_12px_var(--shade)]">
-						<div className="flex items-center gap-2 px-2 pb-1">
-							<span className="flex-1 truncate text-[12px] text-muted">{titleOf(cur)}</span>
-							<button
-								className="border-0 bg-transparent px-1 text-[12px] text-muted hover:text-text"
-								aria-label="先不选，关掉"
-								title="先不选，关掉"
-								onClick={() => setClosed(stamp)}
-							>
-								✕
-							</button>
-						</div>
-						<Choices key={stamp} actions={{ ...actions, options: cardOptions }} onAdvance={onAdvance} />
+					<div className="px-1">
+						<Choices
+							key={stamp}
+							actions={{ ...actions, options: cardOptions }}
+							onAdvance={onAdvance}
+							trailing={
+								<>
+									{barLinks.map((o) => (
+										<button key={o.key} className="btn ghost" disabled={busy} onClick={() => void runSide(o)}>
+											{o.label}
+										</button>
+									))}
+									<button
+										className="border-0 bg-transparent px-1 text-[14px] text-muted hover:text-text"
+										aria-label="先不选，收起"
+										title="先不选，收起；输入框就变回派新活"
+										onClick={() => setClosed(stamp)}
+									>
+										✕
+									</button>
+								</>
+							}
+						/>
 					</div>
 				)}
 				<div className="flex items-end gap-2 rounded-[14px] border border-line bg-panel py-1.5 pr-1.5 pl-4 transition-colors focus-within:border-text-2">
