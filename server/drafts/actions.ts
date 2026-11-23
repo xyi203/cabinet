@@ -167,6 +167,29 @@ export async function followUpDraft(id: string, key: string, about: string): Pro
 	);
 }
 
+/**
+ * Yi 在已经办完的事上接着追问（看板输入框）：在起草时的原会话里再跑一轮，之前查到的都还在会话里，
+ * 不另开一个没有前文的新任务。要再回对方就出新一版草稿（回到「等你发送」），不用回写【无需回复】
+ */
+export async function askOnDraft(id: string, ask: string): Promise<void> {
+	const d = getDraft(id);
+	if (!d) throw new DraftError("草稿不存在");
+	if (!ask.trim()) throw new DraftError("想让助手做什么？");
+	// MR 预审有固定的三段输出和评论台账：按复审走，Yi 的话当复审理由
+	if (draftMrs([d]).get(id)) return reReview(id, `Yi 追问：${ask.trim()}`);
+	log("接着追问", id);
+	await newVersion(
+		id,
+		`ask:${id}:${Date.now()}`,
+		() =>
+			`Yi 在这件事上接着说：${ask.trim()}\n\n上面「当前草稿」是${LIVE.includes(d.status) ? "还没发出的草稿" : "之前的处理结果（可能已经发给对方了）"}。` +
+			"按 Yi 说的接着查、接着做（要查库、捞日志、看代码的先查清楚），在之前查到的基础上往下走，别从头再查。" +
+			"查完要回对方就写新的回复；不用回就写【无需回复】加一句原因，并把查到的结论写进【备注】给 Yi 看。",
+		`${d.text}\n${ask}`,
+		`接着追问：${ask.trim()}`,
+	);
+}
+
 export type Action = "send" | "discard" | "revise" | "complete";
 
 /** 「发 / 不发 / 改 / 完成」的唯一实现，飞书私聊和看板共用。

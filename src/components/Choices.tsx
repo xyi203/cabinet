@@ -317,6 +317,21 @@ export function actionsOf(t: TaskView | undefined, c: Ctx): Actions {
 					: undefined,
 			slash: [],
 		};
+	// 办完的事上接着说：接着原来的会话做，不另开没有前文的新任务（Yi 在一件办完的事上追问「去查一下 DB 的数据」，
+	// 结果开了个新任务，前面查到的全丢了）。派过任务的发给那个任务；起草过的在起草的会话里再跑一轮、出新一版草稿
+	if (t.status === "done" || t.status === "cancelled") {
+		if (dev) return { options: [], typeIn: talk, slash: [] };
+		if (draft)
+			return {
+				options: [],
+				typeIn: {
+					hint: "接着这件事问助手、让它去查什么，它会带着前面查到的接着做",
+					advance: false,
+					run: (v) => post(`/api/drafts/${draft.id}/ask`, { text: v }).then(() => "交给助手了，接着原来的会话查，好了会回到「等你」"),
+				},
+				slash: [],
+			};
+	}
 	return none;
 }
 

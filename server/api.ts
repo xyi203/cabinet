@@ -9,7 +9,7 @@ import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { type LiveEvent, bus, changed } from "./bus.ts";
 import { COMMON_EMOJI, DEV_ORIGIN, MEMORY, OAUTH_REDIRECT, PATHS, PORT } from "./config.ts";
-import { applyDraftAction } from "./drafts/actions.ts";
+import { applyDraftAction, askOnDraft } from "./drafts/actions.ts";
 import { ApprovalError, decideApproval } from "./approvals.ts";
 import { lineage, recentLineage } from "./pipeline.ts";
 import { deleteSchedule, listSchedules, runNow, saveSchedule, scheduleRuns } from "./schedules.ts";
@@ -73,7 +73,7 @@ function localRequest(req: IncomingMessage) {
 
 // 草稿 id 是私聊卡片的 message_id（om_…）；只回表情 / 不用回的安静草稿没有卡片，id 是 quiet_<原消息 id>_<时间>
 export const DRAFT_DISPATCH_RE = /^\/api\/drafts\/((?:quiet_)?om_[\w-]+)\/dispatch$/;
-export const DRAFT_ACTION_RE = /^\/api\/drafts\/((?:quiet_)?om_[\w-]+)\/(send|discard|revise|complete)$/;
+export const DRAFT_ACTION_RE = /^\/api\/drafts\/((?:quiet_)?om_[\w-]+)\/(send|discard|revise|complete|ask)$/;
 
 function tokenOk(req: IncomingMessage) {
 	const got = Buffer.from(String(req.headers["x-cabinet-token"] ?? ""));
@@ -517,6 +517,13 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 	const [, id, action] = m;
 	const arg = String(body.text ?? "");
 	const kind: Kind = ["text", "reaction", "sticker"].includes(body.kind) ? body.kind : "text";
+	if (action === "ask") {
+		// 办完的事上接着追问：在原会话里再跑一轮，放后台；出新一版草稿回到「等你」
+		if (!getDraft(id)) return send(res, 404, { error: "草稿不存在" });
+		if (!arg.trim()) return send(res, 400, { error: "想让助手做什么？" });
+		void askOnDraft(id, arg).catch((e) => log("看板追问失败", id, e));
+		return send(res, 202, { ok: true });
+	}
 	if (action === "revise") {
 		// 改写要跑一轮 pi，放后台；新草稿会出现在列表里，旧的变成「已改写」
 		const d = getDraft(id);
