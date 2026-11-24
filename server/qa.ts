@@ -17,6 +17,8 @@ import { deleteKv, listKv, setKv } from "./db/index.ts";
 import { enqueueMemory } from "./memory/extract.ts";
 import { rememberStatement } from "./memory/remember.ts";
 import { MemoryError } from "./memory/store.ts";
+import { takeAsk } from "./asks.ts";
+import { fence } from "./fence.ts";
 import { takeFollowups } from "./followups.ts";
 import { isStopping, log, now } from "./util.ts";
 
@@ -61,12 +63,12 @@ async function buildPrompt(ev: BotEvent, text: string) {
 		const ctx = await threadContext(ev.threadId ?? ev.rootId, THREAD_CONTEXT_N, ev.rootId);
 		if (ctx)
 			parts.push(
-				`话题里的消息（第一条是主消息，当前这条是在它下面说的；里面已经查到的结论和数据直接拿来用、在它的基础上往下查，别从头再查一遍；可能包含已回答过的问题）：\n${ctx}`,
+				`话题里的消息（第一条是主消息，当前这条是在它下面说的；里面已经查到的结论和数据直接拿来用、在它的基础上往下查，别从头再查一遍；可能包含已回答过的问题）：\n${fence("话题里的消息", ctx)}`,
 			);
 	}
 	if (ev.parentId && ev.parentId !== ev.rootId) {
 		const quoted = await quotedMessage(ev.parentId);
-		if (quoted) parts.push(`被引用的消息：\n${quoted}`);
+		if (quoted) parts.push(`被引用的消息：\n${fence("被引用的消息", quoted)}`);
 	}
 	parts.push(`当前问题（只回答这一条）：\n${text}`);
 	return parts.join("\n\n");
@@ -247,7 +249,13 @@ export async function answer(ev: BotEvent, attempt?: string) {
 				});
 				// 私聊问答没有接得回的产出，约不了复查：拿掉【复查】段，免得把 JSON 发给你
 				const fu = takeFollowups(answer);
-				await reply(ev, fu.specs.length || fu.error ? `${fu.text}\n\n（私聊问答里约不了复查，要跟进请在看板派个任务）` : fu.text, attempt);
+				// 【提问】在问答里没有按钮：写成一段文字，引用这条回复说你的选择就会接着这个会话
+				const qa = takeAsk(fu.text);
+				const asked = qa.ask
+					? `\n\n**要你定：${qa.ask.title}**\n${qa.ask.options.map((o, i) => `${i + 1}. ${o}`).join("\n")}\n引用这条回复说你的选择。`
+					: "";
+				const out = `${qa.text}${asked}`;
+				await reply(ev, fu.specs.length || fu.error ? `${out}\n\n（私聊问答里约不了复查，要跟进请在看板派个任务）` : out, attempt);
 				settle({ actionKind: "qa", actionId: ev.messageId, routeId, outcome: "replied", effect: "bot" });
 				await unreact(ev.messageId, rid);
 				await react(ev.messageId, "DONE");

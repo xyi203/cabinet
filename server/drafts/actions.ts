@@ -20,7 +20,8 @@ import { locks, sem } from "../agent/slots.ts";
 import { gatherContext } from "./context.ts";
 import { describeReply, draftLabel, type Kind, resolveEmoji, resolveSticker, stickerHint } from "./format.ts";
 import { CardInputError, draftCard, draftStateText, parseCardAction, sendText } from "./card.ts";
-import { claim, DraftError, getDraft, isQuiet, LIVE, pushDraft, setStatus, syncCard } from "./store.ts";
+import { claim, DraftError, draftAsk, getDraft, isQuiet, LIVE, pushDraft, setStatus, syncCard } from "./store.ts";
+import { clearAsk } from "../asks.ts";
 import { cancelFollowups } from "../followups.ts";
 import { taskOfAction } from "../taskstore.ts";
 import { draftLink } from "../boardlink.ts";
@@ -199,6 +200,21 @@ export async function askOnDraft(id: string, ask: string): Promise<void> {
 	);
 }
 
+/** Yi 回答了草稿上挂着的【提问】（server/asks.ts）：在原会话里按他的选择出新一版；MR 预审按复审走 */
+export async function answerDraftAsk(id: string, title: string, prompt: string): Promise<void> {
+	const d = getDraft(id);
+	if (!d) throw new DraftError("草稿不存在");
+	if (draftMrs([d]).get(id)) return reReview(id, prompt);
+	log("回答提问", id, title);
+	await newVersion(
+		id,
+		`answer:${id}:${Date.now()}`,
+		() => `${prompt}\n\n要回对方就写新的回复；不用回就写【无需回复】加一句原因。`,
+		`${d.text}\n${title}`,
+		`回答提问：${title}`,
+	);
+}
+
 export type Action = "send" | "discard" | "revise" | "complete";
 
 /** 「发 / 不发 / 改 / 完成」的唯一实现，飞书私聊和看板共用。
@@ -265,6 +281,7 @@ export async function applyDraftAction(id: string, action: Action, arg = "", kin
 		} else {
 			// 不回复、完成都是 Yi 把这件事关了：约好的复查不再跑（发送不算，发完常常还要回来看）
 			cancelFollowups(taskOfAction(id));
+			clearAsk(taskOfAction(id));
 			record({ kind: "draft", status: busy, dm: id, chatId: d.chatId, source: d.replyTo });
 			settle({ actionKind: "draft", actionId: id, routeId: d.routeId, outcome: busy, effect: "internal" });
 			enqueueMemory({ type: "draft", replyTo: d.replyTo, outcome: busy as "discarded" | "completed" });
@@ -348,13 +365,17 @@ export async function onDraftCardAction(data: unknown) {
 				`「${ev.name === "revise" ? "改写" : ev.name === "mr_approve" ? "批准 MR" : ev.name === "mr_note" ? "发到 MR" : "发送"}」没有成功：${reason(r.error)}`,
 			);
 		});
-		return toast("info", BUSY_TOAST[ev.name] ?? "正在发送…", draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id), draftLink(d.id)));
+		return toast(
+			"info",
+			BUSY_TOAST[ev.name] ?? "正在发送…",
+			draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id), draftLink(d.id), draftAsk(d)),
+		);
 	}
-	const card = () => draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id), draftLink(d.id));
+	const card = () => draftCard(getDraft(d.id)!, "", draftMrs([d]).get(d.id), draftLink(d.id), draftAsk(d));
 	if (settled.ok) return toast("success", DONE_TOAST[ev.name] ?? "已处理", card());
 	if (!(settled.error instanceof DraftError)) log("草稿卡片操作失败", ev.name, d.id, settled.error);
 	const msg = reason(settled.error);
 	// 回滚状态时排了一次不带提示的重画，可能晚于这个回调响应到达：再排一次带提示的，最后停在有原因的那张
 	syncCard(d.id, msg);
-	return toast("error", msg, draftCard(getDraft(d.id)!, msg, draftMrs([d]).get(d.id), draftLink(d.id)));
+	return toast("error", msg, draftCard(getDraft(d.id)!, msg, draftMrs([d]).get(d.id), draftLink(d.id), draftAsk(d)));
 }

@@ -12,6 +12,7 @@ import type { DevTask, Schedule } from "./db/schema.ts";
 import { NO_CHANGE, PATROL_OK, checkModel, dispatch, getDevTask } from "./dev.ts";
 import { DraftError } from "./drafts/store.ts";
 import { decide, receive } from "./pipeline.ts";
+import { suggestPrompt } from "./suggestions.ts";
 import { log, now } from "./util.ts";
 
 // ---------- cron ----------
@@ -97,6 +98,8 @@ export interface ScheduleInput {
 	/** 过了这个时间自动停用 */
 	until?: number | null;
 	patrol?: boolean;
+	/** 只出建议：结论不私聊，交【建议】放进工作台（server/suggestions.ts） */
+	suggest?: boolean;
 	/** 按时间点跑（unix 秒）：给了就不解析 cron，cron 当说明；不给时 cron 没改就沿用原来的时间点 */
 	times?: number[] | null;
 }
@@ -200,6 +203,7 @@ export function saveSchedule(input: ScheduleInput): Schedule {
 		until: input.until !== undefined ? input.until : (old?.until ?? null),
 		times,
 		patrol: input.patrol ?? old?.patrol ?? false,
+		suggest: input.suggest ?? old?.suggest ?? false,
 		created: old?.created ?? t,
 		updated: t,
 	};
@@ -261,9 +265,10 @@ export async function fire(s: Schedule, at = now(), manual = false): Promise<str
 	const request = [
 		`[定时任务「${s.name}」] ${manual ? "Yi 手动触发" : `计划时间 ${when}`}（${s.times?.length ? s.cron : `cron \`${s.cron}\``}）。这不是有人在等你回复，结论直接写给 Yi。`,
 		s.prompt,
-		prev
+		prev && !s.suggest
 			? `上一次运行是 ${prev.id}：可以用 lookup ${prev.id} 看上次的结论，这次只说变化；和上次比没有变化时，第一行只写「${NO_CHANGE}」（之后可以跟一句说明），这一轮就直接归档、不打扰 Yi。`
 			: "",
+		s.suggest ? suggestPrompt(NO_CHANGE, at) : "",
 	]
 		.filter(Boolean)
 		.join("\n\n");
@@ -282,7 +287,8 @@ export async function fire(s: Schedule, at = now(), manual = false): Promise<str
 		title: `定时 · ${s.name}`,
 		triggers: [tid],
 		rule: `定时任务：${s.name}`,
-		notify: true,
+		// 只出建议的不私聊：建议在工作台上看
+		notify: !s.suggest,
 		model: s.model ?? undefined,
 		thinking: s.thinking ?? undefined,
 		patrol: s.patrol,

@@ -9,6 +9,7 @@ import { queuePatch, sendCardToUserAsBot, sendToUserAsBot } from "../lark/bot.ts
 import { log, now } from "../util.ts";
 import { draftCard, where } from "./card.ts";
 import { draftMrs, type MrLedger, parseLedger, saveLedger } from "./mr.ts";
+import { type Ask, clearAsk, getAsk, saveAsk, takeAsk } from "../asks.ts";
 import { saveFollowups, takeFollowups } from "../followups.ts";
 import { describeReply, type Kind, NO_REPLY_MARK, parseDraftBody, splitNote } from "./format.ts";
 
@@ -113,8 +114,14 @@ export function syncCard(id: string, notice = "") {
 	if (!getKv(cardKey(id), false)) return;
 	queuePatch(id, () => {
 		const d = getDraft(id);
-		return d && draftCard(d, notice, draftMrs([d]).get(id), draftLink(id));
+		return d && draftCard(d, notice, draftMrs([d]).get(id), draftLink(id), draftAsk(d));
 	});
+}
+
+/** 这条草稿所在的事上挂着的【提问】（只认草稿提的，agent 任务的提问在任务卡片上） */
+export function draftAsk(d: Pick<Draft, "routeId">): Ask | undefined {
+	const ask = getAsk(d.routeId != null ? taskOfRoute(d.routeId) : null);
+	return ask?.kind === "draft" ? ask : undefined;
 }
 
 const quote = (t: string) =>
@@ -154,8 +161,12 @@ export function quietDraft(d: { replaces?: string; report: string; kind: string;
 export async function pushDraft(source: Source, raw: string, replaces?: string): Promise<string> {
 	// 【复查】是给 cabinet 的，不进草稿；读不懂或没记上的原因写进备注
 	const fu = takeFollowups(raw);
-	const { body: rawBody, note: splitN, report, comments } = splitNote(fu.text);
-	const rawNote = [splitN, fu.error ?? ""].filter(Boolean).join("\n");
+	// 【提问】同样只给 cabinet：选项做成卡片按钮，Yi 点了在原会话里出新一版
+	const qa = takeAsk(fu.text);
+	const { body: rawBody, note: splitN, report, comments } = splitNote(qa.text);
+	const rawNote = [splitN, fu.error ?? "", qa.error ?? ""].filter(Boolean).join("\n");
+	const taskId = source.routeId != null ? taskOfRoute(source.routeId) : null;
+	const ask: Ask | undefined = qa.ask && taskId ? { ...qa.ask, taskId, kind: "draft", actionId: "", created: now() } : undefined;
 	const mr = draftMrs([{ id: "", routeId: source.routeId ?? null }]).get("");
 	// MR 预审的评论台账：Yi 在卡片上过目，点「发到 MR」时照着发
 	let ledger: MrLedger | undefined;
@@ -194,6 +205,7 @@ export async function pushDraft(source: Source, raw: string, replaces?: string):
 					"",
 					mr && { ...mr, ledger },
 					draftLink("", source.routeId),
+					ask,
 				),
 			);
 		} catch (e) {
@@ -209,8 +221,12 @@ export async function pushDraft(source: Source, raw: string, replaces?: string):
 			.run();
 	});
 	if (ledger) saveLedger(dmId, ledger);
+	// 新一版草稿替掉了上一版：上一版挂的提问一起作废，这一版问了就换成新的
+	if (taskId) {
+		if (qa.ask) saveAsk(taskId, "draft", dmId, qa.ask);
+		else if (getAsk(taskId)?.kind === "draft") clearAsk(taskId);
+	}
 	if (fu.specs.length) {
-		const taskId = source.routeId != null ? taskOfRoute(source.routeId) : null;
 		const warn = taskId ? saveFollowups(taskId, "draft", dmId, fu.specs) : "这条草稿挂不到任务上，约的复查没记上";
 		if (warn)
 			db()

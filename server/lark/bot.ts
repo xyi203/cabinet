@@ -5,8 +5,9 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import { createReadStream, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { FEISHU_APP_ID, FEISHU_APP_SECRET, OAUTH_REDIRECT } from "../config.ts";
+import { FEISHU_APP_ID, FEISHU_APP_SECRET, OAUTH_REDIRECT, OWNER_OPEN_ID } from "../config.ts";
 import { getKv, setKv } from "../db/index.ts";
+import { speakerTag } from "../fence.ts";
 import { log, now } from "../util.ts";
 import { cardUserIds, renderCard } from "./card.ts";
 import type { BotEvent, Chat, Mention, Message, UserTarget } from "./types.ts";
@@ -521,7 +522,7 @@ export function formatMessages(msgs: Message[]): string {
 		.map((m) => {
 			const t = new Date(m.create_time).toLocaleString("sv-SE", { hour12: false }).slice(5, 16);
 			const tag = m.thread_id && m.root_id ? "（话题回复）" : m.parent_id ? "（回复）" : "";
-			return `[${t}] ${m.sender.name}${tag}：${m.content.replace(/\n/g, "\n  ")}`;
+			return `[${t}] ${m.sender.name}${speakerTag(m.sender, OWNER_OPEN_ID)}${tag}：${m.content.replace(/\n/g, "\n  ")}`;
 		})
 		.join("\n");
 }

@@ -4,7 +4,7 @@
 import { and, desc, eq, gte, inArray, isNull, like, or } from "drizzle-orm";
 import { routeRules } from "./rules.ts";
 import { topicRoot } from "./topics.ts";
-import { resetFollowupRuns } from "./followups.ts";
+import { cancelOnReply, resetFollowupRuns } from "./followups.ts";
 import { db, getKv, schema, setKv } from "./db/index.ts";
 import type { Approval, DevTask, Draft, ResultRow, RouteRow, TriggerRow } from "./db/schema.ts";
 import { log, now } from "./util.ts";
@@ -53,7 +53,11 @@ export function assignTask(triggerIds: string[], r: AssignInput, at = now()): st
 	const actors = new Set(trs.filter((t) => !t.owner && t.actorId).map((t) => t.actorId));
 	const hit = fresh ? undefined : findOpen(first.thread, refs, actors, at);
 	// 对方来了新消息：这件事的自动复查次数重新算（followups.ts）
-	if (hit && actors.size) resetFollowupRuns(hit);
+	// 等对方回复的复查也不用等了：新消息会在这件事里接着处理
+	if (hit && actors.size) {
+		resetFollowupRuns(hit);
+		cancelOnReply(hit);
+	}
 	if (hit) return touch(hit, at);
 	const id = newId();
 	db()

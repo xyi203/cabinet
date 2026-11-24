@@ -19,7 +19,9 @@ import { conversationLog, running } from "./agent/driver.ts";
 import { now } from "./util.ts";
 import { watchdogIssues } from "./watchdog.ts";
 import { quotaNow } from "./quota.ts";
+import { getAsk } from "./asks.ts";
 import { pendingFollowups } from "./followups.ts";
+import { openSuggestions } from "./suggestions.ts";
 import { type Need, type Outputs, type TaskStatus, applyStatus, outputsOf } from "./taskstore.ts";
 
 export type TaskEvent =
@@ -65,7 +67,14 @@ export interface TaskView {
 	/** 记忆冲突：两条记忆的 id */
 	events: TaskEvent[];
 	/** agent 约好、还没到期的复查 */
-	followups?: Array<{ key: string; at: number; about: string }>;
+	followups?: Array<{ key: string; at: number; about: string; until?: string }>;
+	/** agent 挂着等 Yi 拍板的提问（server/asks.ts） */
+	ask?: { title: string; options: string[]; recommend?: number; about: string; at: number };
+}
+
+function askView(taskId: string): TaskView["ask"] {
+	const a = getAsk(taskId);
+	return a && { title: a.title, options: a.options, recommend: a.recommend, about: a.about, at: a.created };
 }
 
 const OUTCOME: Record<string, string> = {
@@ -304,7 +313,8 @@ function view(
 		devTasks: devs.map((d) => d.id),
 		approvals: o.approvals.map((a) => a.id),
 		events,
-		followups: pendingFollowups(row.id).map((f) => ({ key: f.key, at: f.at, about: f.about })),
+		followups: pendingFollowups(row.id).map((f) => ({ key: f.key, at: f.at, about: f.about, until: f.until })),
+		ask: askView(row.id),
 	};
 }
 
@@ -510,6 +520,8 @@ export function dashboardState() {
 			return { ...a, command: describe(a), learn: learn && learnText(learn) };
 		}),
 		issues: watchdogIssues(),
+		// 只出建议的巡查交上来、还挂着的建议（server/suggestions.ts）
+		suggestions: openSuggestions().map(({ id, title, why, link, source, created }) => ({ id, title, why, link, source, created })),
 		quota: quotaNow(),
 		build: BUILD,
 	};

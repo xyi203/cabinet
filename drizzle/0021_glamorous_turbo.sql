@@ -1,0 +1,1 @@
+ALTER TABLE `schedules` ADD `suggest` integer DEFAULT false NOT NULL;

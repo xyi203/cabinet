@@ -3,8 +3,9 @@
 // 办完自动跳到下一件等你的事。卡片关掉或没选中事时，输入框里说的话会派给助手当新任务，派出后右边切到这件事
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { type State, type TaskView, createAgentTask, fetchDispatch, fetchStickers, pollNow } from "../lib/api";
+import { type State, type SuggestionView, type TaskView, createAgentTask, fetchDispatch, fetchStickers, pollNow } from "../lib/api";
 import { AGENT_NAME, ago, isBare, money, pillOf, requestOf, titleOf, waitingOn } from "../lib/format";
+import { useAct } from "./Actions";
 import { type Actions, type PickItem, type Target, Choices, actionsOf, draftOf, matchText, targetsOf, useRunner } from "./Choices";
 import { Docked, Embedded } from "./Drawer";
 import { TaskPanel } from "./TaskPanel";
@@ -235,6 +236,7 @@ export function Workbench({
 							</section>
 						);
 					})}
+					{(filter === "all" || filter === "wait") && !!s.suggestions?.length && <Suggestions items={s.suggestions} now={s.now} />}
 				</div>
 			</aside>
 			<div className="flex min-h-0 flex-col bg-panel">
@@ -278,6 +280,45 @@ export function Workbench({
 }
 
 /** 左栏一行：状态标签 + 标题，在跑的下面一行写它正在做哪一步 */
+/** 只出建议的巡查交上来的建议（server/suggestions.ts）：有空看看，采纳就开成一件事，忽略了同一个链接 30 天内不再提 */
+function Suggestions({ items, now }: { items: SuggestionView[]; now: number }) {
+	const { busy, act } = useAct();
+	return (
+		<section className="mb-3">
+			<div className="px-2 pt-2 pb-1 text-[12px] font-semibold text-muted">有空看看（{items.length}）</div>
+			{items.map((g) => (
+				<div key={g.id} className="px-2 py-1.5 text-[13px]">
+					<div className="font-medium">
+						{g.link ? (
+							<a href={g.link} target="_blank" rel="noreferrer">
+								{g.title}
+							</a>
+						) : (
+							g.title
+						)}
+					</div>
+					<div className="text-[12px] text-muted">{g.why}</div>
+					<div className="row-inline mt-1">
+						<span className="text-[11px] text-muted">
+							{g.source.replace(/^定时 · /, "")} · {ago(now, g.created)}
+						</span>
+						<button className="btn primary sm" disabled={busy} onClick={() => act(`/api/suggestions/${g.id}/accept`, {}, "已交给助手")}>
+							采纳
+						</button>
+						<button
+							className="btn ghost sm"
+							disabled={busy}
+							onClick={() => act(`/api/suggestions/${g.id}/dismiss`, {}, "已忽略，30 天内不再提")}
+						>
+							忽略
+						</button>
+					</div>
+				</div>
+			))}
+		</section>
+	);
+}
+
 function Item({ t, on, onClick }: { t: TaskView; on: boolean; onClick: () => void }) {
 	const [label, cls] = pillOf(t);
 	return (

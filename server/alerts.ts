@@ -10,6 +10,7 @@ import type { ChatRef } from "./drafts/store.ts";
 import { formatMessages } from "./lark/bot.ts";
 import { routeRules } from "./rules.ts";
 import type { Message } from "./lark/types.ts";
+import { fence } from "./fence.ts";
 import { decide, receive } from "./pipeline.ts";
 import { log, now } from "./util.ts";
 
@@ -107,7 +108,7 @@ export async function flush(chatId: string) {
 		}),
 	);
 	const n = b.msgs.length;
-	const text = `群「${b.chat.name}」里机器人 @${OWNER_NAME} 的 ${n} 条告警：\n${alertText(b.msgs)}`;
+	const text = `群「${b.chat.name}」里机器人 @${OWNER_NAME} 的 ${n} 条告警：\n${fence("告警消息", alertText(b.msgs))}`;
 	try {
 		const open = openTask(chatId);
 		if (open) {

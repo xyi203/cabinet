@@ -3,22 +3,31 @@
 // 用在「现在查不出结果」的事上：等 CI、等发布、等对方晚点发过来，不轮询干等。
 // 同一件事（Task）里 key 唯一，再写同一个 key 是改期，{"key": …, "cancel": true} 取消。
 // Yi 在这件事上点了完成 / 不回复 / 放弃，约好的复查一起取消；同一件事自动复查最多 MAX_RUNS 次，有人来新消息时清零。
+// 可以带 until 等一件事（docs/bot-borrow.md §3，参照 Orca 的 --once --by 和 T3 的 watch_pull_request）：
+// MR 合并 / 关闭（mr_merged）、MR 的流水线跑完（pipeline_done）就提前触发，at 变成截止时间；
+// 等对方回复（reply）时对方一来消息就取消（新消息本来就会在这件事里接着处理），到截止还没回才触发。
 import { deleteKv, getKv, listKv, setKv } from "./db/index.ts";
 import { log, now } from "./util.ts";
 
 export const FOLLOWUP_MARK = "【复查】";
 /** 复查段之后可能还跟着的别的段：截到它们为止 */
-const OTHER_MARKS = ["【备注】", "【评审报告】", "【MR评论】"];
+const OTHER_MARKS = ["【提问】", "【备注】", "【评审报告】", "【MR评论】"];
 const MIN_DELAY = 5 * 60;
 const MAX_DELAY = 7 * 86400;
 const MAX_PENDING = 5;
 export const MAX_RUNS = 5;
+
+export const UNTIL = ["mr_merged", "pipeline_done", "reply"] as const;
+export type Until = (typeof UNTIL)[number];
 
 export interface FollowupSpec {
 	key: string;
 	at?: number;
 	about?: string;
 	cancel?: boolean;
+	until?: Until;
+	/** until 是 mr_merged / pipeline_done 时盯的 MR 链接 */
+	mr?: string;
 }
 
 export interface Followup {
@@ -32,7 +41,17 @@ export interface Followup {
 	/** 约它的那次产出：草稿 id 或 agent 任务 id */
 	actionId: string;
 	created: number;
+	until?: Until;
+	mr?: string;
+	/** 上次去查事件的时间（秒）：每条最多隔 EVENT_CHECK 查一次 */
+	checked?: number;
+	/** 等的事件到了：一句说明，到点跑的时候带上 */
+	met?: string;
 }
+
+/** 等事件的复查多久查一次 GitLab（秒） */
+export const EVENT_CHECK = 5 * 60;
+const MR_URL = /^https?:\/\/[^/\s]+\/[\w./-]+?\/-\/merge_requests\/\d+/;
 
 const itemKey = (taskId: string, key: string) => `fu:${taskId}:${key}`;
 const countKey = (taskId: string) => `fucount:${taskId}`;
@@ -76,7 +95,17 @@ export function takeFollowups(text: string, at = now()): { text: string; specs: 
 		if (t < at + MIN_DELAY - 60 || t > at + MAX_DELAY) return bad("的时间要在 5 分钟到 7 天之后");
 		const about = typeof x.about === "string" ? x.about.trim() : "";
 		if (!about) return bad("缺少 about（到时候查什么、怎么算好）");
-		specs.push({ key, at: Math.round(t), about: about.slice(0, 1000) });
+		let until: Until | undefined;
+		let mr: string | undefined;
+		if (x.until != null) {
+			if (!UNTIL.includes(x.until)) return bad(`的 until 只能是 ${UNTIL.join(" / ")}`);
+			until = x.until;
+			if (until !== "reply") {
+				mr = typeof x.mr === "string" ? MR_URL.exec(x.mr.trim())?.[0] : undefined;
+				if (!mr) return bad(`等 ${until} 要带 mr（MR 链接）`);
+			}
+		}
+		specs.push({ key, at: Math.round(t), about: about.slice(0, 1000), ...(until ? { until, mr } : {}) });
 	}
 	return { text: rest, specs };
 }
@@ -94,7 +123,17 @@ export function saveFollowups(taskId: string, kind: Followup["kind"], actionId: 
 			skipped.push(s.key);
 			continue;
 		}
-		setKv(itemKey(taskId, s.key), { taskId, key: s.key, at: s.at!, about: s.about!, kind, actionId, created: at } satisfies Followup);
+		setKv(itemKey(taskId, s.key), {
+			taskId,
+			key: s.key,
+			at: s.at!,
+			about: s.about!,
+			kind,
+			actionId,
+			created: at,
+			until: s.until,
+			mr: s.mr,
+		} satisfies Followup);
 		log("约了复查", taskId, s.key, new Date(s.at! * 1000).toLocaleString("sv-SE"));
 	}
 	return skipped.length ? `这件事约的复查已经有 ${MAX_PENDING} 个，${skipped.join("、")} 没有记上` : "";
@@ -113,6 +152,25 @@ export function cancelFollowup(taskId: string, key: string) {
 export function cancelFollowups(taskId: string | null | undefined) {
 	if (!taskId) return;
 	for (const f of pendingFollowups(taskId)) deleteKv(itemKey(taskId, f.key));
+}
+
+/** 对方来了新消息：等回复的复查不用再等了（新消息会在这件事里接着处理），收掉 */
+export function cancelOnReply(taskId: string) {
+	for (const f of pendingFollowups(taskId)) if (f.until === "reply") deleteKv(itemKey(taskId, f.key));
+}
+
+/** 还在等 GitLab 事件、这一轮该去查的复查 */
+export const eventFollowups = (at = now()) =>
+	listKv<Followup>("fu:")
+		.map((x) => x.value)
+		.filter((f) => (f.until === "mr_merged" || f.until === "pipeline_done") && !f.met && f.at > at && at - (f.checked ?? 0) >= EVENT_CHECK);
+
+/** 查过一次：met 给了就是等到了，马上到期 */
+export function markChecked(f: Followup, met?: string, at = now()) {
+	const cur = getKv<Followup | null>(itemKey(f.taskId, f.key), null);
+	// 期间被改期或取消了：以现在的为准
+	if (!cur || cur.created !== f.created) return;
+	setKv(itemKey(f.taskId, f.key), met ? { ...cur, checked: at, met, at } : { ...cur, checked: at });
 }
 
 /** 有人来了新消息、Yi 动了这件事：自动复查的次数重新算 */

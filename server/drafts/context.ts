@@ -2,6 +2,7 @@
 import { BOT_OPEN_ID, OWNER_OPEN_ID } from "../config.ts";
 import { formatMessages, getMessage, listMessages } from "../lark/bot.ts";
 import type { Message } from "../lark/types.ts";
+import { fence } from "../fence.ts";
 import { log } from "../util.ts";
 
 // 对方常先发内容、再单独发一条 @ 提醒：@ 之前这段时间内同一个人发的消息算作这条消息的一部分
@@ -99,9 +100,9 @@ export async function gatherContext(
 }
 
 export function contextBlock(recent: string, related: string, text: string) {
-	const parts = [`会话最近的消息（仅供参考）：\n${recent || "（无）"}`];
-	if (related) parts.push(`和这条消息直接相关的前文（被回复的消息、所在话题、对方紧挨着发的消息）：\n${related}`);
-	parts.push(`需要回复的新消息：\n${text}`);
+	const parts = [`会话最近的消息（仅供参考）：\n${fence("会话最近的消息", recent) || "（无）"}`];
+	if (related) parts.push(`和这条消息直接相关的前文（被回复的消息、所在话题、对方紧挨着发的消息）：\n${fence("相关前文", related)}`);
+	parts.push(`需要回复的新消息：\n${fence("需要回复的新消息", text)}`);
 	if (onlyMentions(text))
 		parts.push("这条消息只有 @、没有正文：对方的意思在上面的前文里（多半是刚发的那几条），按前文判断要不要回、回什么，不要只当成打招呼。");
 	return parts.join("\n\n");

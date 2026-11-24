@@ -360,6 +360,8 @@ export const schedules = sqliteTable("schedules", {
 	times: text("times", { mode: "json" }).$type<number[]>(),
 	/** 发布工单巡检：派出的任务按巡检处理（见 dev_tasks.patrol） */
 	patrol: integer("patrol", { mode: "boolean" }).notNull().default(false),
+	/** 只出建议（server/suggestions.ts）：结论不私聊，交【建议】放进工作台，Yi 采纳了才开成一件事 */
+	suggest: integer("suggest", { mode: "boolean" }).notNull().default(false),
 	created: real("created").notNull(),
 	updated: real("updated").notNull(),
 });

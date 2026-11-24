@@ -221,7 +221,9 @@ export interface TaskView {
 	approvals: string[];
 	events: TaskEvent[];
 	/** agent 约好、还没到期的复查（server/followups.ts） */
-	followups?: Array<{ key: string; at: number; about: string }>;
+	followups?: Array<{ key: string; at: number; about: string; until?: "mr_merged" | "pipeline_done" | "reply" }>;
+	/** agent 挂着等你拍板的提问（server/asks.ts）：点选项或写回答，在原会话里接着做 */
+	ask?: { title: string; options: string[]; recommend?: number; about: string; at: number };
 }
 
 /** 待审批的写操作；command 是给人看的命令原文，learn 是「执行并以后放行」会记进规则的那条 */
@@ -241,6 +243,16 @@ export interface Issue {
 	key: string;
 	title: string;
 	detail: string;
+}
+
+export interface SuggestionView {
+	id: string;
+	title: string;
+	why: string;
+	link?: string;
+	/** 哪个定时任务提的 */
+	source: string;
+	created: number;
 }
 
 export interface State {
@@ -271,6 +283,8 @@ export interface State {
 	approvals: ApprovalView[];
 	/** Watchdog 发现、还没恢复的问题 */
 	issues: Issue[];
+	/** 只出建议的巡查交上来、还挂着的建议：采纳了开成一件事，忽略了 30 天内不再提 */
+	suggestions?: SuggestionView[];
 	/** Claude 订阅额度（经 magpie 响应头查到的）；没查到过为 null */
 	quota?: Quota | null;
 	auth: { authorized: boolean; refreshExpiresAt?: number; missingScopes?: string[] };
@@ -451,6 +465,8 @@ export interface Schedule {
 	until?: number | null;
 	/** 发布工单巡检建的定时任务 */
 	patrol?: boolean;
+	/** 只出建议：结论不私聊，建议放进工作台 */
+	suggest?: boolean;
 	/** 按时间点跑（unix 秒），这时 cron 只是说明文字 */
 	times?: number[] | null;
 }

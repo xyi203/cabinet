@@ -2,6 +2,7 @@
 // 开发任务：推送 / 放弃 / 停止；只读 agent（告警、咨询……）：完成 / 停止；都能在卡片里直接给 agent 发话。
 // 状态变了（推送中、已推送、完成、放弃）最新那张原地更新；新一轮的卡片发出后，上一张收起按钮。纯函数。
 import path from "node:path";
+import { type Ask, askElements } from "./asks.ts";
 import { PORT } from "./config.ts";
 import type { DevTask } from "./db/schema.ts";
 import { footnote } from "./drafts/card.ts";
@@ -66,7 +67,7 @@ function header(t: DevTask, round: Round, latest: boolean) {
 }
 
 /** latest：是不是这个任务最新的那张通知；只有最新的带按钮 */
-export function devCard(t: DevTask, round: Round, latest = true, notice = "", link = BOARD): object {
+export function devCard(t: DevTask, round: Round, latest = true, notice = "", link = BOARD, ask?: Ask): object {
 	const h = header(t, round, latest);
 	const elements: object[] = [];
 	if (notice) elements.push(note(notice, "red"));
@@ -75,6 +76,7 @@ export function devCard(t: DevTask, round: Round, latest = true, notice = "", li
 	const open = ["review", "failed", "running", "pushed"].includes(t.status);
 	if (latest && open) {
 		elements.push({ tag: "hr" });
+		if (ask && t.status !== "running") elements.push(...askElements(ask), { tag: "hr" });
 		if (t.status !== "pushing") {
 			elements.push({
 				tag: "form",

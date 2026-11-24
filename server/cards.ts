@@ -3,6 +3,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { OWNER_NAME, OWNER_OPEN_ID } from "./config.ts";
 import { ApprovalError, approvalCard, decideApproval, getApproval } from "./approvals.ts";
+import { answerAsk } from "./askrun.ts";
 import { closeTask, discardDev, messageDev, pushDev, renderDevCard, stopDev, syncDevCard } from "./dev.ts";
 import { onDraftCardAction } from "./drafts/actions.ts";
 import { parseCardAction } from "./drafts/card.ts";
@@ -80,6 +81,17 @@ async function approvalAction(a: string, id: string, form: Record<string, string
 	}
 }
 
+/** 点了【提问】的选项：收掉提问，在原会话里接着做；卡片随草稿或任务的状态更新 */
+async function askAction(msgId: string, taskId: string, choice: number) {
+	try {
+		const answer = await answerAsk(taskId, choice);
+		return reply("success", `已选「${answer}」，正在接着处理`, renderDevCard(msgId));
+	} catch (e) {
+		if (!(e instanceof DraftError)) log("回答提问失败", taskId, e);
+		return reply("error", reason(e));
+	}
+}
+
 export async function onCardAction(data: unknown) {
 	const ev = parseCardAction(data);
 	if (!ev) return;
@@ -89,5 +101,6 @@ export async function onCardAction(data: unknown) {
 	if (k === "dev" && t) return devAction(ev.messageId, ev.name, t, ev.form);
 	if (k === "fail" && t) return failureAction(ev.name, t);
 	if (k === "apv" && t) return approvalAction(ev.name, t, ev.form);
+	if (k === "ask" && t) return askAction(ev.messageId, t, Number((ev.value as { i?: unknown }).i));
 	return onDraftCardAction(data);
 }

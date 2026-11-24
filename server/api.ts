@@ -45,7 +45,10 @@ import { modelOptions } from "./agent/models.ts";
 import { closeTask, devDiff, discardDev, dispatch, getDevTask, listRepos, messageDev, pushDev, stopDev } from "./dev.ts";
 import { dismissTask, retryTask } from "./retry.ts";
 import { markDone } from "./done.ts";
+import { answerAsk } from "./askrun.ts";
 import { cancelFollowup } from "./followups.ts";
+import { decideSuggestion, getSuggestion } from "./suggestions.ts";
+import { ASSISTANT } from "./agent/router.ts";
 import { RULE_DEFAULTS, RuleError, routeRules, saveRouteRules } from "./rules.ts";
 import { dashboardState, sessionLog } from "./tasks.ts";
 import { listKv } from "./db/index.ts";
@@ -270,6 +273,40 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 		changed();
 		return send(res, 200, { ok: true });
 	}
+	// 巡查建议：采纳就开成一件事交给助手（按建议里写的 ask 做），忽略就记下来，同一个链接 30 天内不再提
+	const sgM = /^\/api\/suggestions\/(sg-[\w-]+)\/(accept|dismiss)$/.exec(p);
+	if (sgM) {
+		const s = getSuggestion(sgM[1]);
+		if (!s || s.status !== "open") return send(res, 409, { error: "这条建议已经处理过了" });
+		try {
+			if (sgM[2] === "dismiss") decideSuggestion(s.id, "dismissed");
+			else {
+				const request = [s.ask, `（来自「${s.source}」的建议：${s.title}。${s.why}${s.link ? ` 链接：${s.link}` : ""}）`].join("\n\n");
+				const task = await dispatch({ agent: ASSISTANT, request, title: s.title });
+				decideSuggestion(s.id, "accepted", task.id);
+			}
+			changed();
+			return send(res, 200, { ok: true });
+		} catch (e) {
+			return send(res, e instanceof DraftError ? 409 : 500, { error: String((e as Error).message).slice(0, 300) });
+		}
+	}
+	// 回答 agent 挂着的【提问】：选一个选项（choice）或写选项以外的回答（text），在原会话里接着做
+	const askM = /^\/api\/tasks\/(tsk-[\w-]+)\/ask$/.exec(p);
+	if (askM) {
+		const b = await readJson(req);
+		try {
+			const answer = await answerAsk(
+				askM[1],
+				typeof b?.choice === "number" ? b.choice : undefined,
+				typeof b?.text === "string" ? b.text : "",
+			);
+			changed();
+			return send(res, 200, { ok: true, answer });
+		} catch (e) {
+			return send(res, e instanceof DraftError ? 409 : 500, { error: String((e as Error).message).slice(0, 300) });
+		}
+	}
 	// 完成：这件事 Yi 已经在别处处理了，不管走到哪一步都直接标掉（server/done.ts）
 	const doneM = /^\/api\/tasks\/((?:q:)?[\w-]+)\/done$/.exec(decodeURIComponent(p));
 	if (doneM) {
@@ -340,6 +377,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 						// 模型、思考强度：不传不动，传空串或 null 回到默认
 						model: body.model === undefined ? undefined : body.model ? String(body.model) : null,
 						thinking: body.thinking === undefined ? undefined : body.thinking ? String(body.thinking) : null,
+						suggest: body.suggest === undefined ? undefined : Boolean(body.suggest),
 					}),
 				});
 			if (schedM[2] === "run") return send(res, 200, { ok: true, task: await runNow(schedM[1]) });

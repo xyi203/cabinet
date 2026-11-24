@@ -35,6 +35,8 @@ type Edit = Pick<Schedule, "name" | "agent" | "prompt"> & {
 	/** 空串 = 跟着助手的默认 */
 	model: string;
 	thinking: string;
+	/** 只出建议：结论不私聊，交建议放进工作台 */
+	suggest: boolean;
 };
 
 /** 秒 ↔ datetime-local 输入框的值（本地时间） */
@@ -51,6 +53,7 @@ const editOf = (s: Schedule): Edit => ({
 	fixed: s.times?.length ? s.cron : undefined,
 	model: s.model ?? "",
 	thinking: s.thinking ?? "",
+	suggest: Boolean(s.suggest),
 });
 
 /**
@@ -283,6 +286,11 @@ export function Schedules({
 						thinking={e.thinking}
 						onChange={(model, thinking) => setEdit({ ...e, model, thinking })}
 					/>
+					<label htmlFor="sedit-suggest">只出建议</label>
+					<label className="row-inline" title="不私聊结论：每次最多交 5 条建议放进工作台，你采纳了才开成一件事，忽略过的 30 天内不再提">
+						<input id="sedit-suggest" type="checkbox" checked={e.suggest} onChange={(x) => setEdit({ ...e, suggest: x.target.checked })} />
+						<span className="text-[12px] text-muted">不私聊，建议放进工作台</span>
+					</label>
 					<label htmlFor="sedit-prompt">提示词</label>
 					<textarea id="sedit-prompt" value={e.prompt} onChange={(x) => setEdit({ ...e, prompt: x.target.value })} />
 					<div className="oa">
@@ -305,6 +313,7 @@ export function Schedules({
 												until,
 												model: e.model,
 												thinking: e.thinking,
+												suggest: e.suggest,
 											}),
 										"已保存",
 									))

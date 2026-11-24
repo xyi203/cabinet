@@ -18,7 +18,9 @@ import { DraftError, getDraft } from "./drafts/store.ts";
 import { locks, sem } from "./agent/slots.ts";
 import { ASSISTANT, LEGACY_TIER, TASK_TIER, completeAny, loadAgents, routerModels, withTier } from "./agent/router.ts";
 import { exec, isStopping, log, now } from "./util.ts";
+import { type Ask, clearAsk, getAsk, saveAsk, takeAsk } from "./asks.ts";
 import { cancelFollowups, saveFollowups, takeFollowups } from "./followups.ts";
+import { saveSuggestions, takeSuggestions } from "./suggestions.ts";
 import { taskOfAction } from "./taskstore.ts";
 import { devLink } from "./boardlink.ts";
 
@@ -60,11 +62,17 @@ interface SentCard {
 const cardOf = (msgId: string) => getKv<SentCard | null>(`devcard:${msgId}`, null);
 const latestCard = (id: string) => getKv<string | null>(`devcard-latest:${id}`, null);
 
+/** 这个任务所在的事上挂着的【提问】（只认这个任务提的） */
+function devAsk(id: string): Ask | undefined {
+	const ask = getAsk(taskOfAction(id));
+	return ask?.kind === "dev" && ask.actionId === id ? ask : undefined;
+}
+
 /** 按任务当前状态重画一张通知卡片；只有最新的那张带按钮 */
 export function renderDevCard(msgId: string, notice = ""): object | undefined {
 	const sent = cardOf(msgId);
 	const t = sent && getDevTask(sent.id);
-	return t ? devCard(t, sent.round, latestCard(t.id) === msgId, notice, devLink(t.id)) : undefined;
+	return t ? devCard(t, sent.round, latestCard(t.id) === msgId, notice, devLink(t.id), devAsk(t.id)) : undefined;
 }
 
 export function syncDevCard(id: string, notice = "") {
@@ -414,13 +422,27 @@ async function runDevLocked(id: string, opinion?: string, from = "Yi") {
 			: usage;
 		// 【复查】是给 cabinet 的：从结论里拿掉，记成到期再接着这个会话跑
 		const fu = takeFollowups(raw);
-		const text = fu.error ? `${fu.text}\n\n（${fu.error}）` : fu.text;
+		// 【提问】也是给 cabinet 的：选项做成卡片和看板上的按钮，Yi 点了接着这个会话跑
+		const qa = takeAsk(fu.text);
+		// 【建议】（只出建议的定时任务）：放进工作台的建议列表，正文只剩一句交代
+		const sg = takeSuggestions(qa.text);
+		const added = sg.items.length ? saveSuggestions(sg.items, task.title, id) : 0;
+		const body =
+			sg.items.length && !sg.text.trim() ? `${NO_CHANGE}：提了 ${sg.items.length} 条建议（新的 ${added} 条），在工作台的建议里看` : sg.text;
+		const text = [body, fu.error && `（${fu.error}）`, qa.error && `（${qa.error}）`, sg.error && `（${sg.error}）`]
+			.filter(Boolean)
+			.join("\n\n");
+		const taskId = taskOfAction(id);
+		if (taskId) {
+			if (qa.ask) saveAsk(taskId, "dev", id, qa.ask);
+			else if (getAsk(taskId)?.actionId === id) clearAsk(taskId);
+		}
 		if (fu.specs.length) {
-			const taskId = taskOfAction(id);
 			const warn = taskId ? saveFollowups(taskId, "dev", id, fu.specs) : "这个任务挂不到工作台上的事，约的复查没记上";
 			if (warn) log(warn, id);
 		}
-		const quiet = quietRound(task, text);
+		// 问了 Yi 就不能悄悄归档；交了建议的（建议在工作台上看）直接归档、不私聊
+		const quiet = !qa.ask && (sg.items.length > 0 || quietRound(task, text));
 		// 报告跟着这一轮的结论走：这一轮没交就清掉，不留上一轮的
 		update(id, { status: quiet ? "done" : "review", summary: text, session: sessionId, usage: total, ui });
 		// 对话页的聊天 Yi 就在看板上看着，不私聊卡片
@@ -449,7 +471,7 @@ async function notify(id: string, what: string, body: string, failed = false) {
 	const round: Round = { what, body, failed };
 	let dm: string;
 	try {
-		dm = await sendCardToUserAsBot(OWNER_OPEN_ID, devCard(t, round, true, "", devLink(t.id)));
+		dm = await sendCardToUserAsBot(OWNER_OPEN_ID, devCard(t, round, true, "", devLink(t.id), devAsk(t.id)));
 	} catch (e) {
 		// 卡片被拒也不能漏掉通知：退回富文本
 		log("任务卡片发送失败，改发文字", id, e);
@@ -615,6 +637,7 @@ export async function discardDev(id: string) {
 	update(id, { status: "discarded" });
 	settle({ actionKind: "dev", actionId: id, routeId: t.routeId, outcome: "discarded", effect: isDev(t) ? "local" : "internal" });
 	cancelFollowups(taskOfAction(id));
+	clearAsk(taskOfAction(id));
 }
 
 export const devTasksList = () => db().select().from(schema.devTasks).all();
@@ -639,4 +662,5 @@ export async function closeTask(id: string) {
 	settle({ actionKind: "dev", actionId: id, routeId: t.routeId, outcome: "done", effect: "internal" });
 	// Yi 点了完成：这件事约好的复查不再跑
 	cancelFollowups(taskOfAction(id));
+	clearAsk(taskOfAction(id));
 }

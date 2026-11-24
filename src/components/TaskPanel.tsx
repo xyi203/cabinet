@@ -430,6 +430,11 @@ export function TaskPanel({
 						</div>
 					</Ev>
 				)}
+				{t.ask && (
+					<Ev at={t.ask.at}>
+						<AskBlock t={t} />
+					</Ev>
+				)}
 				{!!t.followups?.length && (
 					<Ev>
 						<Followups t={t} />
@@ -466,6 +471,54 @@ export function TaskPanel({
 	);
 }
 
+/** agent 挂着等你拍板的提问（server/asks.ts）：点一个选项或写别的回答，它在原会话里接着做 */
+function AskBlock({ t }: { t: TaskView }) {
+	const { busy, act } = useAct();
+	const [text, setText] = useState("");
+	const ask = t.ask!;
+	const answer = (body: { choice?: number; text?: string }) => act(`/api/tasks/${t.id}/ask`, body, "已回答，正在接着处理");
+	return (
+		<div className="out need">
+			<div className="oh">
+				<span>要你定</span>
+			</div>
+			<div className="ob">
+				<div>{ask.title}</div>
+				<div className="row-inline">
+					{ask.options.map((o, i) => (
+						<button
+							key={o}
+							className={`btn sm ${i === ask.recommend ? "primary" : "ghost"}`}
+							disabled={busy}
+							onClick={() => answer({ choice: i })}
+						>
+							{o}
+						</button>
+					))}
+				</div>
+				<div className="row-inline">
+					<input
+						className="flex-1"
+						value={text}
+						disabled={busy}
+						placeholder="都不合适就写你的回答"
+						aria-label="写别的回答"
+						onChange={(e) => setText(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" && text.trim() && !busy) void answer({ text });
+						}}
+					/>
+					<button className="btn ghost sm" disabled={busy || !text.trim()} onClick={() => answer({ text })}>
+						回答
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+const UNTIL_TEXT = { mr_merged: "等 MR 合并", pipeline_done: "等流水线跑完", reply: "等对方回复" } as const;
+
 /** agent 约好、还没到期的复查：到点它会在原会话里接着做；不需要了可以取消 */
 function Followups({ t }: { t: TaskView }) {
 	const { busy, act } = useAct();
@@ -477,7 +530,7 @@ function Followups({ t }: { t: TaskView }) {
 			<div className="ob">
 				{t.followups!.map((f) => (
 					<div key={f.key} className="row-inline">
-						<span className="num">{time(f.at)}</span>
+						<span className="num">{f.until ? `${UNTIL_TEXT[f.until]}，最晚 ${time(f.at)}` : time(f.at)}</span>
 						<span className="flex-1">{f.about}</span>
 						<button
 							className="btn ghost sm"

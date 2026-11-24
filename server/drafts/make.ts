@@ -22,6 +22,7 @@ import {
 	withTier,
 } from "../agent/router.ts";
 import { docContext } from "../doc.ts";
+import { fence } from "../fence.ts";
 import { meegoContext } from "../meego.ts";
 import {
 	decide,
@@ -578,10 +579,10 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			let ctx: string;
 			let earlier: Message[] = [];
 			if (chat.chat_mode === "meego" && source.meego) {
-				ctx = await meegoContext(source.meego, PATHS.images);
+				ctx = fence("飞书项目工作项和评论", await meegoContext(source.meego, PATHS.images));
 				source.context = ctx.slice(-2000);
 			} else if (chat.chat_mode === "doc" && source.doc) {
-				ctx = await docContext(source.doc);
+				ctx = fence("云文档评论串", await docContext(source.doc));
 				source.context = ctx.slice(-2000);
 			} else {
 				const got = await gatherContext(chat, msgs);
@@ -691,14 +692,14 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 			let hint: string;
 			if (chat.chat_mode === "meego" && source.meego) {
 				const mg = source.meego;
-				ctx = `${ctx}\n\n需要回复的新评论：\n${source.text}`;
+				ctx = `${ctx}\n\n需要回复的新评论：\n${fence("需要回复的新评论", source.text)}`;
 				where = `飞书项目「${source.chatName}」（${mg.url}）的评论里 @Yi`;
 				hint =
 					"这是飞书项目工作项下的评论，回复会以 Yi 的身份发成一条新评论，只能是文字，不要用【表情】【表情包】；" +
 					`可以用 meegle 只读命令查更多信息，例如 \`meegle workitem get --project-key ${mg.projectKey} --work-item-id ${mg.workItemId}\`。`;
 			} else if (chat.chat_mode === "doc" && source.doc) {
 				const doc = source.doc;
-				ctx = `${ctx}\n\n需要回复的新评论：\n${source.text}`;
+				ctx = `${ctx}\n\n需要回复的新评论：\n${fence("需要回复的新评论", source.text)}`;
 				where = `云文档「${source.chatName}」（${doc.url}）的评论里${doc.mention ? " @Yi" : "回复了 Yi 参与的评论串"}`;
 				hint =
 					`这是云文档里的评论，回复会以 Yi 的身份发${doc.whole ? "成一条新的全文评论" : "到同一个评论串"}，只能是文字，不要用【表情】【表情包】；` +
@@ -708,7 +709,7 @@ async function _makeDraft(chat: ChatRef, msgs: Message[], pendingKey: string, at
 				hint = stickerHint();
 			}
 			let extra = info.mrIid
-				? `\n\n要预审的 MR：项目 \`${info.mrProject}\`，iid \`${info.mrIid}\`，glab 的 -R 参数用 \`${glabRepo(info.mrProject!)}\`。\nMR 概要（glab mr view）：\n${await mrBrief(info)}`
+				? `\n\n要预审的 MR：项目 \`${info.mrProject}\`，iid \`${info.mrIid}\`，glab 的 -R 参数用 \`${glabRepo(info.mrProject!)}\`。\nMR 概要（glab mr view）：\n${fence("MR 概要", await mrBrief(info))}`
 				: "";
 			if (pick && pick.total > 1)
 				extra += `\n\n这条消息里点给 Yi 的 MR 有 ${pick.total} 个，每个单独一份草稿，这份只审上面这个，别的 MR 不用看、也不用在回复里提。`;

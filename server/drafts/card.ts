@@ -1,6 +1,7 @@
 // 草稿卡片（飞书卡片 JSON 2.0）：待确认时是一张表单，草稿可以在卡片里直接改了再发；
 // 处理完（发出、不发、完成、改写、Yi 亲自回复）原地更新成结果，按钮随之消失。纯函数，只读表情包目录。
 // 对方的原话用 plain_text 展示，不当 markdown 渲染：不让别人的消息在卡片里伪造出链接或格式。
+import { type Ask, askElements } from "../asks.ts";
 import { COMMON_EMOJI, EMOJI_ALIASES, PORT } from "../config.ts";
 import type { Draft } from "../db/schema.ts";
 import type { DraftMr, MrLedger } from "./mr.ts";
@@ -161,7 +162,8 @@ function mrActions(d: Draft, mr: DraftMr): object[] {
 }
 
 /** link：「在看板查看」指向哪里，调用方算好传进来（card.ts 不碰库） */
-export function draftCard(d: Draft, notice = "", mr?: DraftMr, link = BOARD): object {
+/** ask：这件事上 agent 挂着的【提问】，只在还没处理完的草稿上出按钮 */
+export function draftCard(d: Draft, notice = "", mr?: DraftMr, link = BOARD, ask?: Ask): object {
 	const state = STATE[d.status] ?? { text: d.status, template: "grey" };
 	const live = isLive(d.status);
 	const elements: object[] = [];
@@ -173,6 +175,7 @@ export function draftCard(d: Draft, notice = "", mr?: DraftMr, link = BOARD): ob
 	if (live && d.report) elements.push(panel("**评审报告**（只给你看）", [md(cut(d.report, LIMIT.report))]));
 	if (live && d.note) elements.push(text(`备注（只给你看）：${cut(d.note, LIMIT.note)}`, "grey", "notation"));
 	elements.push({ tag: "hr" });
+	if (live && ask) elements.push(...askElements(ask), { tag: "hr" });
 	if (mr) elements.push(...mrActions(d, mr));
 
 	if (!live) {
